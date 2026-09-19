@@ -17,6 +17,15 @@ refactor           running  -     42s      claude -p --output-format json 이 �
 $ aw wait refactor && aw result refactor --field result
 ```
 
+## 빠른 시작
+
+```sh
+aw run -n job -- claude -p --output-format json "이 저장소에 테스트를 추가해줘"
+aw logs job -f                      # 진행 보기 (Ctrl-C 로 빠져나와도 워커는 계속)
+aw wait job && aw result job --field result
+aw rm job
+```
+
 ## 왜 에이전트별 도구가 아닌가
 
 에이전트마다 다른 건 세 가지뿐입니다 — 프롬프트를 어떻게 넣는지, 인증을 어떻게 잡는지,
@@ -39,6 +48,11 @@ curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/aw -o ~/
 ```
 
 실행 파일 하나라서 이게 전부입니다. 셸 설정을 건드리지 않고, `source` 도 필요 없습니다.
+
+> 저장소가 **Private** 이면 위 raw URL 은 인증 없이 열리지 않습니다(404).
+> 그때는 아래 `git clone` 을 쓰거나, 이미 설치된 곳에서 파일 하나만 옮기세요.
+> `scp ~/.local/bin/aw 서버:~/.local/bin/aw`
+
 PATH 확인까지 해주는 설치 스크립트도 있습니다.
 
 ```sh
@@ -61,6 +75,21 @@ cd agent-worker
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
+| `aw version` / `aw help` | 버전 / 도움말 |
+
+`aw ls` 는 `aw list` 의 별칭입니다. `aw logs` 의 `-n` 기본값은 40줄입니다.
+
+`aw wait` 의 종료 코드는 스크립트에서 바로 쓸 수 있습니다.
+
+| 코드 | 뜻 |
+| --- | --- |
+| `0` | 기다린 워커가 전부 정상 종료 |
+| `1` | 하나 이상 실패했거나 프로세스가 사라짐(`lost`) |
+| `2` | `--timeout` 으로 지정한 시간을 넘김 |
+
+```sh
+if aw wait build test; then echo "둘 다 성공"; else echo "실패한 워커 있음"; aw list; fi
+```
 
 ### `run` 옵션
 
@@ -162,6 +191,20 @@ mytool 128000
 
 상태는 `running`(pid 살아 있음), `done`(코드 0), `failed`(0 아님), `stopped`(`aw stop`),
 `lost`(종료 코드 없이 프로세스가 사라짐)입니다.
+
+## 환경변수
+
+| 변수 | 기본값 | 쓰임 |
+| --- | --- | --- |
+| `AW_HOME` | `~/.local/share/agent-worker` | 워커 기록 위치 |
+| `AW_CONFIG` | `~/.config/agent-worker/contexts` | 컨텍스트 한도 설정 파일 |
+| `AW_PREFIX` | `~/.local/bin` | `install.sh` / `uninstall.sh` 의 설치 위치 |
+
+테스트나 임시 실험은 `AW_HOME` 만 바꾸면 평소 기록과 완전히 분리됩니다.
+
+```sh
+AW_HOME=/tmp/aw-test aw run -- echo 시험
+```
 
 ## 알아둘 점
 
