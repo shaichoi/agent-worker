@@ -122,7 +122,41 @@ if "$AW" rm tokeep >/dev/null 2>&1; then ng "실행 중인데 rm 이 성공함";
 "$AW" clean --all >/dev/null 2>&1
 if [ -d "$AW_HOME/workers/tokeep" ]; then ng "clean --all 이 안 지움"; else ok "clean --all 이 실행 중 워커까지 정리"; fi
 
-head_ "11. 다른 셸에서 호출"
+head_ "11. 컨텍스트 한도 경고"
+# 실제 에이전트 없이 같은 이름의 가짜 명령으로 시험합니다.
+STUB="$TMPROOT/stub"
+mkdir -p "$STUB"
+for n in devin claude; do printf '#!/bin/sh\nexit 0\n' > "$STUB/$n"; chmod +x "$STUB/$n"; done
+PATH="$STUB:$PATH"; export PATH
+
+# 한글 1.5MB ≈ 74만 토큰 (devin 한도 262K 초과)
+yes '가나다라마바사아자차카타파하 한국어 예시 문장입니다' | head -n 20000 > "$TMPROOT/big-ko.txt"
+# 영어 224KB ≈ 5.6만 토큰 (한도 안쪽)
+yes 'this is an english sample sentence for token estimation' | head -n 4000 > "$TMPROOT/small-en.txt"
+
+out=$("$AW" run -n ctx-big -f "$TMPROOT/big-ko.txt" -- devin -p 2>&1)
+case "$out" in *"컨텍스트 한도"*) ok "한도를 넘으면 경고" ;; *) ng "경고가 없음" ;; esac
+est=$(sed -n 's/^input_tokens_est=//p' "$AW_HOME/workers/ctx-big/meta")
+if [ "${est:-0}" -gt 262000 ]; then ok "추정 토큰 수를 meta 에 기록 ($est)"; else ng "추정값 이상: $est"; fi
+
+out=$("$AW" run -n ctx-small -f "$TMPROOT/small-en.txt" -- devin -p 2>&1)
+case "$out" in *"컨텍스트 한도"*) ng "한도 안쪽인데 경고함" ;; *) ok "한도 안쪽이면 조용함" ;; esac
+
+out=$("$AW" run -n ctx-claude -f "$TMPROOT/big-ko.txt" -- claude -p 2>&1)
+case "$out" in *"컨텍스트 한도"*) ng "claude(1M) 인데 경고함" ;; *) ok "에이전트별 한도를 구분함" ;; esac
+
+out=$("$AW" run -n ctx-off -f "$TMPROOT/big-ko.txt" --max-input-tokens 0 -- devin -p 2>&1)
+case "$out" in *"컨텍스트 한도"*) ng "--max-input-tokens 0 인데 경고함" ;; *) ok "--max-input-tokens 0 으로 끌 수 있음" ;; esac
+
+AW_CONFIG="$TMPROOT/contexts"; export AW_CONFIG
+printf 'claude 100\n' > "$AW_CONFIG"
+out=$("$AW" run -n ctx-override -f "$TMPROOT/small-en.txt" -- claude -p 2>&1)
+case "$out" in *"한도 100"*) ok "사용자 설정이 기본값을 덮어씀" ;; *) ng "설정 파일이 반영되지 않음" ;; esac
+unset AW_CONFIG
+case "$("$AW" contexts)" in *devin*262000*) ok "aw contexts 가 표를 보여줌" ;; *) ng "aw contexts 출력 이상" ;; esac
+"$AW" clean --all >/dev/null 2>&1
+
+head_ "12. 다른 셸에서 호출"
 for s in bash zsh; do
   command -v "$s" >/dev/null 2>&1 || continue
   out=$("$s" -c "AW_HOME='$AW_HOME' '$AW' run -n from-$s -- echo 안녕 >/dev/null 2>&1; AW_HOME='$AW_HOME' '$AW' wait from-$s >/dev/null 2>&1; AW_HOME='$AW_HOME' '$AW' result from-$s" 2>&1)

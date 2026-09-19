@@ -60,6 +60,7 @@ cd agent-worker
 | `aw wait <이름...> [--timeout N]` | 끝날 때까지 대기 (실패면 0이 아닌 코드) |
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
+| `aw contexts` | 에이전트별 컨텍스트 한도 표 |
 
 ### `run` 옵션
 
@@ -72,6 +73,7 @@ cd agent-worker
 | `-e, --env KEY=VAL` | 환경변수 (여러 번 가능) |
 | `--tag <문자열>` | 분류용 꼬리표 |
 | `--profile <이름>` | `CLAUDE_CONFIG_DIR`을 그 프로필로 (Claude Code 편의) |
+| `--max-input-tokens N` | 컨텍스트 경고 기준을 직접 지정 (`0`이면 끄기) |
 
 ## 쓰는 법
 
@@ -108,6 +110,43 @@ Claude Code 계정을 나눠 쓰는 경우 ([claude-profiles](https://github.com
 aw run -n job1 --profile work-sub -- claude -p "작업"
 ```
 
+## 컨텍스트 한도 경고
+
+`--stdin-file`로 넣는 입력이 에이전트의 컨텍스트 창에 비해 너무 크면 실행 전에 알려줍니다.
+막지는 않고 경고만 합니다.
+
+```
+$ aw run -f huge-spec.md -- devin -p
+경고: 입력이 약 740000 토큰으로 devin 의 컨텍스트 한도 262000 에 가깝습니다.
+  (바이트 기준 어림값입니다. 에이전트가 읽을 저장소 파일은 포함되지 않았습니다.)
+  나눠서 넣거나 --max-input-tokens 로 한도를 조정하세요.
+```
+
+기본 표는 `aw contexts`로 봅니다.
+
+| 명령 | 토큰 | 근거 |
+| --- | --- | --- |
+| `devin` | 262,000 | Devin 자체 모델 SWE-2 / SWE-1.7 이 262K (`devin models list` 확인) |
+| `claude` | 1,000,000 | Claude Opus 5 (`claude -p --output-format json` 의 `contextWindow`) |
+| `codex` | 400,000 | 참고값 |
+| `aider` | 200,000 | 참고값 |
+
+**Devin은 `--model`로 다른 모델을 고를 수 있고 그때는 1M입니다** (Claude Opus 5, Sonnet 5,
+GPT-5.6, Gemini 모두 1M). 그런 경우엔 `--max-input-tokens 1000000`으로 덮어쓰세요.
+
+값을 바꾸려면 `~/.config/agent-worker/contexts`에 `명령이름 토큰수`를 적습니다.
+같은 이름이 있으면 나중 줄이 이깁니다.
+
+```
+devin 1000000
+mytool 128000
+```
+
+두 가지는 분명히 해둡니다. **토큰 수는 바이트 기준 어림값입니다** — ASCII는 4바이트/토큰,
+한글 같은 비ASCII는 2바이트/토큰으로 잡아 안전한 쪽으로 계산합니다. 정확한 토크나이저가
+아닙니다. 그리고 **이 검사는 입력 파일만 봅니다** — 에이전트가 저장소에서 읽어 들이는 파일이
+보통 더 큰 비중이라, 경고가 없다고 안심할 일은 아닙니다.
+
 ## 워커 기록
 
 `~/.local/share/agent-worker/workers/<이름>/`에 남습니다. `AW_HOME`으로 바꿀 수 있습니다.
@@ -118,6 +157,7 @@ aw run -n job1 --profile work-sub -- claude -p "작업"
 | `cmd` | 실행한 인자 (한 줄에 하나) |
 | `out` / `err` | 표준 출력 / 표준 오류 |
 | `exit` | 종료 코드 (생기면 끝난 것) |
+| `input_tokens_est` / `context_limit` | 입력 크기 어림값과 적용된 한도 (meta 안) |
 | `run.sh` / `launch.sh` | 실제로 돌린 스크립트 (그대로 다시 실행 가능) |
 
 상태는 `running`(pid 살아 있음), `done`(코드 0), `failed`(0 아님), `stopped`(`aw stop`),

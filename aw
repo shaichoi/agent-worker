@@ -11,9 +11,10 @@
 
 set -eu
 
-AW_VERSION=0.1.0
+AW_VERSION=0.2.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
+AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
 
 die()  { printf '%s\n' "$*" >&2; exit 1; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -31,6 +32,7 @@ usage() {
     -e, --env KEY=VAL       환경변수 (여러 번 쓸 수 있음)
         --tag <문자열>      분류용 꼬리표
         --profile <이름>    CLAUDE_CONFIG_DIR 을 그 프로필로 (claude 편의)
+        --max-input-tokens N  입력이 이 값을 넘을 것 같으면 경고 (0 이면 끄기)
 
   list [--json]             워커 목록과 상태
   status <이름>             워커 하나의 상세
@@ -41,6 +43,7 @@ usage() {
   stop <이름...>            워커를 멈춥니다
   rm <이름...>              기록을 지웁니다 (worktree 도 함께)
   clean [--all]             끝난 워커를 한꺼번에 정리 (--all 은 실행 중도 멈춤)
+  contexts                  에이전트별 컨텍스트 한도 표를 보여줍니다
   version
 
 워커 기록: $AW_HOME/workers/<이름>/
@@ -132,11 +135,54 @@ json_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g'
 }
 
+# ---------------------------------------------------------------- 컨텍스트 한도
+
+# 에이전트별 기본 컨텍스트 한도(토큰). 사용자가 $AW_CONFIG 로 덮어쓸 수 있습니다.
+# 이 값은 도구의 동작을 바꾸지 않고 경고에만 씁니다.
+default_contexts() {
+  cat <<'CTX'
+# 명령이름 토큰수   (# 은 주석)
+# devin 자체 모델(SWE-2, SWE-1.7)은 262K 입니다.
+# --model 로 Claude/GPT/Gemini 를 고르면 1M 이므로 그때는 --max-input-tokens 로 덮어쓰세요.
+devin 262000
+claude 1000000
+codex 400000
+aider 200000
+CTX
+}
+
+context_limit_for() { # <명령 이름>
+  cmd=${1##*/}
+  { default_contexts; [ -f "$AW_CONFIG" ] && cat "$AW_CONFIG"; } \
+    | sed 's/#.*//' \
+    | awk -v c="$cmd" '$1 == c { v = $2 } END { if (v != "") print v }'
+}
+
+# 바이트 수로 토큰 수를 어림잡습니다. 정확한 토크나이저가 아니라 안전한 쪽으로 봅니다.
+# ASCII 는 4바이트/토큰, 한글 같은 비ASCII 는 2바이트/토큰으로 계산합니다.
+estimate_tokens() { # <파일>
+  total=$(wc -c < "$1" 2>/dev/null || printf 0)
+  non=$(tr -d '\000-\177' < "$1" 2>/dev/null | wc -c)
+  [ -n "$non" ] || non=0
+  ascii=$((total - non))
+  [ "$ascii" -lt 0 ] && ascii=0
+  printf '%s\n' $((ascii / 4 + non / 2))
+}
+
+cmd_contexts() {
+  say "에이전트별 컨텍스트 한도 (경고용 어림값, 토큰)"
+  say ""
+  { default_contexts; [ -f "$AW_CONFIG" ] && { say ""; say "# --- $AW_CONFIG ---"; cat "$AW_CONFIG"; }; }
+  say ""
+  say "바꾸려면: $AW_CONFIG 에 '명령이름 토큰수' 를 적으세요."
+  say "한 번만 덮어쓰려면: aw run --max-input-tokens N ..."
+}
+
 # ---------------------------------------------------------------- run
 
 cmd_run() {
   name=''; dir=''; worktree=''; stdin_file='/dev/null'; tag=''; profile=''
-  envs=''
+  envs=''; max_tokens=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --) shift; break ;;
@@ -147,6 +193,7 @@ cmd_run() {
       -e | --env)        envs="$envs $(shquote "${2:?--env 에 KEY=VAL 이 필요합니다}")"; shift 2 ;;
       --tag)             tag="${2:?--tag 에 값이 필요합니다}"; shift 2 ;;
       --profile)         profile="${2:?--profile 에 이름이 필요합니다}"; shift 2 ;;
+      --max-input-tokens) max_tokens="${2:?--max-input-tokens 에 숫자가 필요합니다}"; shift 2 ;;
       -*) die "알 수 없는 옵션: $1" ;;
       *)  break ;;
     esac
@@ -236,6 +283,22 @@ cmd_run() {
     [ -n "$wt" ]       && { printf 'worktree=%s\n' "$wt"; printf 'branch=%s\n' "$worktree"; }
     printf 'cmdline=%s\n' "$(printf '%s ' "$@" | sed 's/ $//' | tr '\n' ' ')"
   } > "$wd/meta"
+
+  # 입력이 컨텍스트 한도를 넘을 것 같으면 알려 줍니다. 막지는 않습니다.
+  if [ "$stdin_file" != /dev/null ]; then
+    limit=$max_tokens
+    [ -n "$limit" ] || limit=$(context_limit_for "$1")
+    if [ -n "$limit" ] && [ "$limit" -gt 0 ] 2>/dev/null; then
+      est=$(estimate_tokens "$stdin_file")
+      printf 'input_tokens_est=%s\n' "$est" >> "$wd/meta"
+      printf 'context_limit=%s\n' "$limit" >> "$wd/meta"
+      if [ "$est" -gt $((limit * 8 / 10)) ]; then
+        warn "경고: 입력이 약 ${est} 토큰으로 ${1##*/} 의 컨텍스트 한도 ${limit} 에 가깝습니다."
+        warn "  (바이트 기준 어림값입니다. 에이전트가 읽을 저장소 파일은 포함되지 않았습니다.)"
+        warn "  나눠서 넣거나 --max-input-tokens 로 한도를 조정하세요."
+      fi
+    fi
+  fi
 
   # 셸에서 떼어내 실행 (대화형 셸의 작업 목록에 남지 않게)
   if command -v setsid >/dev/null 2>&1; then
@@ -473,6 +536,7 @@ case "$sub" in
   stop)    cmd_stop "$@" ;;
   rm)      cmd_rm "$@" ;;
   clean)   cmd_clean "$@" ;;
+  contexts) cmd_contexts ;;
   version|--version|-v) say "aw $AW_VERSION" ;;
   help|--help|-h) usage ;;
   *) die "알 수 없는 명령: $sub   (aw help)" ;;
