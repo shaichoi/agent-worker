@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.2.0
+AW_VERSION=0.3.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -146,6 +146,7 @@ default_contexts() {
 # --model 로 Claude/GPT/Gemini 를 고르면 1M 이므로 그때는 --max-input-tokens 로 덮어쓰세요.
 devin 262000
 claude 1000000
+agy 1000000
 codex 400000
 aider 200000
 CTX

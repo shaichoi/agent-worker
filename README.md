@@ -149,7 +149,18 @@ aw run -n d1 -- devin -p "테스트를 추가해줘" --permission-mode accept-ed
 
 # Devin 으로 다른 모델 쓰기 (모델 목록은 devin models list)
 aw run -n g1 --max-input-tokens 1000000 -- devin -p "설계를 검토해줘" --model gemini-3-8-flash-high
+
+# Antigravity CLI (agy) — Gemini 계열. 헤드리스 지원이 가장 정돈돼 있습니다.
+aw run -n a1 -- agy -p "테스트를 추가해줘" --model gemini-3.8-flash-high --output-format json
+aw result a1 --field response
+
+# 사람이 없는 워커라면 승인 대기로 멈추지 않게 권한 모드를 정해 주세요.
+aw run -n a2 -- agy -p "리팩터링" --dangerously-skip-permissions --print-timeout 15m
 ```
+
+`agy` 는 `-p/--print/--prompt` 로 프롬프트를 받고 `--output-format text|json|stream-json`,
+`--model`, `--effort`, `--continue`, `--conversation <id>`, `--json-schema` 를 지원합니다.
+종료 코드는 `0` 성공, `1` 오류, `2` 스트리밍 입력 미지원입니다.
 
 Devin은 디렉터리마다 한 번 대화형으로 실행해 신뢰 등록을 해야 합니다.
 등록 전에는 `Refusing to run in an untrusted workspace` 로 바로 실패합니다.
@@ -163,6 +174,22 @@ Claude Code 계정을 나눠 쓰는 경우 ([claude-profiles](https://github.com
 ```sh
 aw run -n job1 --profile work-sub -- claude -p "작업"
 ```
+
+### 프롬프트가 클 때
+
+프롬프트를 명령 인자로 넘기는 방식(`agy -p "$(cat spec.md)"`)에는 **운영체제 한계**가 있습니다.
+리눅스는 인자 **하나**의 크기를 128KB(`MAX_ARG_STRLEN`, 32 × 페이지 크기)로 제한합니다.
+직접 재 보면 127KB 까지는 통과하고 128KB 부터 `argument list too long` 으로 실패합니다.
+이건 셸이 `aw` 를 실행하기도 전에 거부하는 것이라 `aw` 가 대신 처리해 줄 수 없습니다.
+
+| 프롬프트 크기 | 방법 |
+| --- | --- |
+| ~127KB 이하 | `-- agy -p "$(cat spec.md)"` 그대로 (특수문자까지 그대로 전달됩니다) |
+| 그보다 크면 | 파일을 그대로 두고 짧은 프롬프트로 가리키기: `-- agy -p "spec.md 의 지시를 따라라"` |
+| 표준 입력을 받는 에이전트 | `aw run -f spec.md -- <명령>` |
+
+큰 사양서는 파일로 두고 에이전트가 자기 도구로 읽게 하는 편이 토큰 면에서도 낫습니다.
+필요한 부분만 읽기 때문입니다.
 
 ## 컨텍스트 한도 경고
 
@@ -182,6 +209,7 @@ $ aw run -f huge-spec.md -- devin -p
 | --- | --- | --- |
 | `devin` | 262,000 | Devin 자체 모델 SWE-2 / SWE-1.7 이 262K (`devin models list` 확인) |
 | `claude` | 1,000,000 | Claude Opus 5 (`claude -p --output-format json` 의 `contextWindow`) |
+| `agy` | 1,000,000 | Antigravity CLI 기본 Gemini 계열 |
 | `codex` | 400,000 | 참고값 |
 | `aider` | 200,000 | 참고값 |
 
