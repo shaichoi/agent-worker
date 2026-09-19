@@ -19,6 +19,10 @@ $ aw wait refactor && aw result refactor --field result
 
 ## 빠른 시작
 
+도구 안에 필요한 내용이 다 들어 있습니다. README 없이 `aw help` 만 봐도 쓸 수 있고,
+에이전트별 호출법과 함정은 `aw help agents` 에 있습니다.
+
+
 ```sh
 aw run -n job -- claude -p --output-format json "이 저장소에 테스트를 추가해줘"
 aw logs job -f                      # 진행 보기 (Ctrl-C 로 빠져나와도 워커는 계속)
@@ -76,7 +80,8 @@ cd agent-worker
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
 | `aw defaults` | 에이전트별 기본 옵션 표 |
-| `aw version` / `aw help` | 버전 / 도움말 |
+| `aw version` | 버전 |
+| `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` |
 
 `aw ls` 는 `aw list` 의 별칭입니다. `aw logs` 의 `-n` 기본값은 40줄입니다.
 
@@ -431,6 +436,9 @@ AW_HOME=/tmp/aw-test aw run -- echo 시험
 ```sh
 ./tests/run-tests.sh
 ```
+
+도움말과 코드가 어긋나지 않는지도 검사합니다(주요 항목이 개요에 들어 있는지,
+개요가 60줄을 넘지 않는지, 모든 주제가 동작하는지).
 
 임시 `AW_HOME`에서 에이전트 없이 평범한 명령으로만 돌립니다. 수명 주기, 실패·중단,
 표준 입력, 인자·환경변수 보존, JSON 필드 추출, 이름 검증(경로 탈출 차단),

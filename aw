@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.4.0
+AW_VERSION=0.5.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -23,35 +23,109 @@ say()  { printf '%s\n' "$*"; }
 
 usage() {
   cat <<'USAGE'
-사용법: aw <명령> [옵션]
+aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니다.
 
-  run [옵션] -- <실행할 명령...>   워커를 백그라운드로 띄웁니다
-    -n, --name <이름>       워커 이름 (기본: 명령 이름 + 번호)
-    -d, --dir <경로>        실행 디렉터리 (기본: 현재 디렉터리)
-    -w, --worktree <브랜치> git worktree 를 만들어 거기서 실행
-    -f, --stdin-file <파일> 이 파일을 표준 입력으로 물립니다 (기본: /dev/null)
-    -e, --env KEY=VAL       환경변수 (여러 번 쓸 수 있음)
-        --tag <문자열>      분류용 꼬리표
-        --profile <이름>    CLAUDE_CONFIG_DIR 을 그 프로필로 (claude 편의)
-        --max-input-tokens N  입력이 이 값을 넘을 것 같으면 경고 (0 이면 끄기)
-        --no-defaults       에이전트별 기본 옵션을 붙이지 않음
+사용법
+  aw run [옵션] -- <실행할 명령...>    워커를 띄웁니다 (바로 반환)
+  aw list [--json]                     목록과 상태
+  aw wait <이름...> [--timeout N]      끝날 때까지 대기 (종료 코드로 성패)
+  aw result <이름> [--field KEY]       출력 전문, 또는 JSON 필드 하나
+  aw logs|errs <이름> [-f] [-n N]      표준 출력 / 표준 오류
+  aw status <이름>                     상세 정보
+  aw stop|rm <이름...>                 중단 / 기록 삭제
+  aw clean [--all]                     끝난 워커 일괄 정리
+  aw contexts | aw defaults            컨텍스트 한도표 / 기본 옵션표
+  aw version | aw help [주제]
 
-  list [--json]             워커 목록과 상태
-  status <이름>             워커 하나의 상세
-  logs <이름> [-f] [-n N]   표준 출력 보기 (-f 는 따라가기)
-  errs <이름> [-n N]        표준 오류 보기
-  result <이름> [--field K] 출력 전문 (--field 는 JSON 최상위 문자열 하나)
-  wait <이름...> [--timeout N]  끝날 때까지 기다립니다
-  stop <이름...>            워커를 멈춥니다
-  rm <이름...>              기록을 지웁니다 (worktree 도 함께)
-  clean [--all]             끝난 워커를 한꺼번에 정리 (--all 은 실행 중도 멈춤)
-  contexts                  에이전트별 컨텍스트 한도 표를 보여줍니다
-  defaults                  에이전트별 기본 옵션 표를 보여줍니다
-  version
+전형적인 흐름
+  aw run -n job -- claude -p --output-format json "작업 내용"
+  aw wait job && aw result job --field result
+  aw rm job
 
-워커 기록: $AW_HOME/workers/<이름>/
-  meta  cmd  out  err  exit  run.sh
+run 옵션
+  -n 이름     -d 디렉터리     -w 브랜치(worktree 격리)
+  -f 파일     표준 입력으로 물림 (기본 /dev/null 이라 멈추지 않음)
+  -e K=V      환경변수        --profile 이름   CLAUDE_CONFIG_DIR 지정
+  --tag 문자열                --max-input-tokens N   --no-defaults
+
+상태: running / done(0) / failed(≠0) / stopped(aw stop) / lost(코드 없이 사라짐)
+wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과
+
+자세히
+  aw help agents    에이전트별 호출법과 함정 (claude, agy, devin, codex)
+  aw help defaults  자동으로 붙는 권한 옵션
+  aw help files     워커 기록 파일 구조
+  aw help limits    프롬프트 크기와 컨텍스트 한도
 USAGE
+}
+
+help_topic() {
+  case "$1" in
+    agents) cat <<'T'
+에이전트별 호출법 (aw 는 명령을 그대로 넘깁니다)
+
+claude — Claude Code
+  aw run -n c1 -- claude -p --output-format json "작업"
+  aw result c1 --field result        # 성공 여부: --field is_error
+  계정 분리: aw run --profile work-sub -- claude -p "작업"
+
+agy — Antigravity CLI (Gemini)
+  aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='작업'
+  aw result a1 --field response      # 상태: --field status (SUCCESS)
+  함정: -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
+        -p='작업' 형태로 붙이면 플래그 순서와 무관합니다.
+        일반 텍스트는 stdin 으로 못 넣습니다 (-f 대신 인자로).
+  모델 목록: agy models
+
+devin
+  aw run -n d1 -- devin -p "작업" --model gemini-3-8-flash-high
+  함정: 프롬프트는 -p 바로 뒤에 와야 합니다.
+        디렉터리마다 devin 을 한 번 대화형 실행해 신뢰 등록이 필요합니다.
+  모델 목록: devin models list
+
+codex — OpenAI Codex CLI
+  aw run -n x1 -- codex exec --json "작업"
+  aw run -n x2 -f spec.md -- codex exec --json -    # stdin 을 - 로 받습니다
+  큰 프롬프트를 넣을 수 있는 유일한 경로입니다 (127KB 인자 제한 회피).
+
+GUI 도구(Antigravity IDE, Cursor)는 창만 열려서 워커로 쓸 수 없습니다.
+T
+      ;;
+    defaults) cmd_defaults ;;
+    files) printf '워커 기록: %s/<이름>/\n\n' "$AW_WORKERS"; cat <<'T'
+
+  meta      이름, 디렉터리, 시작 시각, worktree, 꼬리표, 토큰 추정치
+  cmd       실행한 인자 (한 줄에 하나)
+  out / err 표준 출력 / 표준 오류
+  exit      종료 코드 (이 파일이 생기면 끝난 것)
+  pid       프로세스 그룹 리더 (aw stop 이 이 그룹을 종료)
+  run.sh    실제로 돌린 스크립트 (그대로 다시 실행 가능)
+
+기계로 읽으려면: aw list --json
+환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS
+T
+      ;;
+    limits) cat <<'T'
+프롬프트 크기
+  리눅스는 인자 하나를 128KB 로 제한합니다 (MAX_ARG_STRLEN).
+  127KB 까지 통과하고 그 이상은 셸이 argument list too long 으로 거부합니다.
+  aw 가 실행되기 전에 걸리는 문제라 aw 가 대신 처리할 수 없습니다.
+
+  ~127KB      -- agy -p="$(cat spec.md)"
+  그 이상     파일을 두고 짧게 가리키기: -p='spec.md 의 지시를 따라라'
+  stdin 지원  aw run -f spec.md -- codex exec --json -
+
+컨텍스트 한도
+  -f 로 넣는 입력이 에이전트 한도의 80% 를 넘으면 경고합니다 (막지는 않음).
+  바이트 기준 어림값이고 저장소에서 읽는 파일은 세지 않습니다.
+  표는 aw contexts, 한 번만 바꾸려면 --max-input-tokens N (0 이면 끄기).
+T
+      ;;
+    '') usage ;;
+    *) warn "그런 도움말 주제가 없습니다: $1"
+       warn "쓸 수 있는 주제: agents, defaults, files, limits"
+       return 1 ;;
+  esac
 }
 
 # ---------------------------------------------------------------- 유틸
@@ -234,7 +308,8 @@ cmd_run() {
       --profile)         profile="${2:?--profile 에 이름이 필요합니다}"; shift 2 ;;
       --max-input-tokens) max_tokens="${2:?--max-input-tokens 에 숫자가 필요합니다}"; shift 2 ;;
       --no-defaults)     no_defaults=1; shift ;;
-      -*) die "알 수 없는 옵션: $1" ;;
+      -h | --help) usage; return 0 ;;
+      -*) die "알 수 없는 옵션: $1   (aw help)" ;;
       *)  break ;;
     esac
   done
@@ -605,6 +680,6 @@ case "$sub" in
   contexts) cmd_contexts ;;
   defaults) cmd_defaults ;;
   version|--version|-v) say "aw $AW_VERSION" ;;
-  help|--help|-h) usage ;;
+  help|--help|-h) help_topic "${1:-}" ;;
   *) die "알 수 없는 명령: $sub   (aw help)" ;;
 esac

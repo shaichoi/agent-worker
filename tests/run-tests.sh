@@ -188,7 +188,22 @@ unset AW_DEFAULTS
 case "$("$AW" defaults)" in *dangerously-skip-permissions*) ok "aw defaults 가 표를 보여줌" ;; *) ng "aw defaults 출력 이상" ;; esac
 "$AW" clean --all >/dev/null 2>&1
 
-head_ "13. 다른 셸에서 호출"
+head_ "13. 도움말"
+h=$("$AW" help)
+for want in "aw run" "aw wait" "wait 종료 코드" "running / done" "aw help agents"; do
+  case "$h" in *"$want"*) ok "개요에 '$want' 있음" ;; *) ng "개요에 '$want' 없음" ;; esac
+done
+lines=$(printf '%s\n' "$h" | wc -l)
+if [ "$lines" -lt 60 ]; then ok "개요가 짧음 (${lines}줄)"; else ng "개요가 너무 김 (${lines}줄)"; fi
+for topic in agents defaults files limits; do
+  if "$AW" help "$topic" >/dev/null 2>&1; then ok "aw help $topic"; else ng "aw help $topic 실패"; fi
+done
+case "$("$AW" help agents)" in *codex*agy*|*agy*codex*) ok "agents 주제가 에이전트들을 다룸" ;; *) ng "agents 주제 내용 부족" ;; esac
+if "$AW" help nosuchtopic >/dev/null 2>&1; then ng "없는 주제를 받아들임"; else ok "없는 주제는 0이 아닌 코드"; fi
+if "$AW" run --help >/dev/null 2>&1; then ok "aw run --help"; else ng "aw run --help 실패"; fi
+case "$("$AW" help files)" in *"$AW_HOME"*) ok "files 주제가 실제 경로를 보여줌" ;; *) ng "files 주제 경로 이상" ;; esac
+
+head_ "14. 다른 셸에서 호출"
 for s in bash zsh; do
   command -v "$s" >/dev/null 2>&1 || continue
   out=$("$s" -c "AW_HOME='$AW_HOME' '$AW' run -n from-$s -- echo 안녕 >/dev/null 2>&1; AW_HOME='$AW_HOME' '$AW' wait from-$s >/dev/null 2>&1; AW_HOME='$AW_HOME' '$AW' result from-$s" 2>&1)
