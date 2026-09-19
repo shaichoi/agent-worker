@@ -133,6 +133,31 @@ aw run -n featB -w feat/b -- claude -p "B 기능 구현"
 각 워커는 `<저장소>/.aw-worktrees/<이름>`에서 새 브랜치로 돌고, `aw rm`이 worktree까지 정리합니다.
 `aw`가 만든 worktree만 지우고 사용자가 만든 것은 건드리지 않습니다.
 
+### 에이전트별 호출 예시
+
+`aw`는 명령을 그대로 넘기므로 각 에이전트의 인자 규칙을 그대로 따릅니다.
+
+```sh
+# Claude Code — 결과를 JSON 으로 받아 필드만 뽑기
+aw run -n c1 -- claude -p --output-format json "테스트를 추가해줘"
+aw result c1 --field result
+
+# Devin — 프롬프트는 -p 바로 뒤에 와야 합니다.
+# -p 와 프롬프트 사이에 다른 옵션이 끼면
+# "the argument '--print' cannot be used with '[PATH]...'" 로 실패합니다.
+aw run -n d1 -- devin -p "테스트를 추가해줘" --permission-mode accept-edits
+
+# Devin 으로 다른 모델 쓰기 (모델 목록은 devin models list)
+aw run -n g1 --max-input-tokens 1000000 -- devin -p "설계를 검토해줘" --model gemini-3-8-flash-high
+```
+
+Devin은 디렉터리마다 한 번 대화형으로 실행해 신뢰 등록을 해야 합니다.
+등록 전에는 `Refusing to run in an untrusted workspace` 로 바로 실패합니다.
+
+**GUI 기반 도구(Antigravity IDE, Cursor 등)는 워커로 쓸 수 없습니다.** VS Code 계열의
+CLI는 창을 여는 용도라 헤드리스로 돌지 않습니다. 같은 모델을 쓰고 싶으면 그 모델을
+지원하는 CLI 에이전트를 쓰세요(예: Gemini 계열은 위처럼 `devin --model`).
+
 Claude Code 계정을 나눠 쓰는 경우 ([claude-profiles](https://github.com/shaichoi/claude-profiles)와 함께):
 
 ```sh
@@ -161,7 +186,11 @@ $ aw run -f huge-spec.md -- devin -p
 | `aider` | 200,000 | 참고값 |
 
 **Devin은 `--model`로 다른 모델을 고를 수 있고 그때는 1M입니다** (Claude Opus 5, Sonnet 5,
-GPT-5.6, Gemini 모두 1M). 그런 경우엔 `--max-input-tokens 1000000`으로 덮어쓰세요.
+GPT-5.6, Gemini 3.8 Flash 모두 1M). 그런 경우엔 `--max-input-tokens 1000000`으로 덮어쓰세요.
+
+```sh
+aw run --max-input-tokens 1000000 -- devin -p "..." --model gemini-3-8-flash-high
+```
 
 값을 바꾸려면 `~/.config/agent-worker/contexts`에 `명령이름 토큰수`를 적습니다.
 같은 이름이 있으면 나중 줄이 이깁니다.
