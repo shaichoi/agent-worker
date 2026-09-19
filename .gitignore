@@ -1,0 +1,6 @@
+# 편집기/OS 부산물
+*.swp
+.DS_Store
+
+# aw 가 만드는 worktree
+.aw-worktrees/
