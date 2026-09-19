@@ -75,6 +75,7 @@ cd agent-worker
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
+| `aw defaults` | 에이전트별 기본 옵션 표 |
 | `aw version` / `aw help` | 버전 / 도움말 |
 
 `aw ls` 는 `aw list` 의 별칭입니다. `aw logs` 의 `-n` 기본값은 40줄입니다.
@@ -103,6 +104,7 @@ if aw wait build test; then echo "둘 다 성공"; else echo "실패한 워커 �
 | `--tag <문자열>` | 분류용 꼬리표 |
 | `--profile <이름>` | `CLAUDE_CONFIG_DIR`을 그 프로필로 (Claude Code 편의) |
 | `--max-input-tokens N` | 컨텍스트 경고 기준을 직접 지정 (`0`이면 끄기) |
+| `--no-defaults` | 에이전트별 기본 옵션을 붙이지 않음 |
 
 ## 쓰는 법
 
@@ -133,46 +135,48 @@ aw run -n featB -w feat/b -- claude -p "B 기능 구현"
 각 워커는 `<저장소>/.aw-worktrees/<이름>`에서 새 브랜치로 돌고, `aw rm`이 worktree까지 정리합니다.
 `aw`가 만든 worktree만 지우고 사용자가 만든 것은 건드리지 않습니다.
 
-### 에이전트별 호출 예시
+## 에이전트 연동 (처음 설정)
 
-`aw`는 명령을 그대로 넘기므로 각 에이전트의 인자 규칙을 그대로 따릅니다.
+`aw`는 에이전트를 설치해 주지 않습니다. 각 CLI를 설치·로그인한 뒤 `aw`로 감싸 쓰면 됩니다.
+아래는 이 도구로 실제 돌려 본 네 가지입니다.
+
+| | 설치 | 인증 | 프롬프트 | JSON 결과 필드 |
+| --- | --- | --- | --- | --- |
+| **agy** (Antigravity) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | `agy` 최초 1회 → 브라우저 | `-p='...'` | `response`, `status` |
+| **claude** (Claude Code) | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude auth login` | `-p "..."` | `result`, `is_error` |
+| **devin** | 공식 설치 프로그램 | `devin auth login` | `-p "..."` (바로 뒤) | 텍스트 |
+| **codex** | `npm i -g @openai/codex` | ChatGPT 계정 또는 `CODEX_API_KEY` | `codex exec "..."` 또는 stdin `-` | JSONL(`--json`) |
+
+무인 실행에 필요한 권한 옵션은 `aw`가 **자동으로 붙입니다** (아래 "기본 옵션" 참고).
+
+### agy — Antigravity CLI (Gemini)
 
 ```sh
-# Claude Code — 결과를 JSON 으로 받아 필드만 뽑기
-aw run -n c1 -- claude -p --output-format json "테스트를 추가해줘"
-aw result c1 --field result
-
-# Devin — 프롬프트는 -p 바로 뒤에 와야 합니다.
-# -p 와 프롬프트 사이에 다른 옵션이 끼면
-# "the argument '--print' cannot be used with '[PATH]...'" 로 실패합니다.
-aw run -n d1 -- devin -p "테스트를 추가해줘" --permission-mode accept-edits
-
-# Devin 으로 다른 모델 쓰기 (모델 목록은 devin models list)
-aw run -n g1 --max-input-tokens 1000000 -- devin -p "설계를 검토해줘" --model gemini-3-8-flash-high
-
-# Antigravity CLI (agy) — Gemini 계열. 헤드리스 지원이 가장 정돈돼 있습니다.
-# -p 는 바로 다음 토큰을 프롬프트로 먹습니다. -p='...' 형태가 순서에 안전합니다.
-aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='테스트를 추가해줘'
-aw result a1 --field response
-
-# 사람이 없는 워커라면 승인 대기로 멈추지 않게 권한 모드를 정해 주세요.
-aw run -n a2 -- agy --dangerously-skip-permissions --print-timeout 15m -p='리팩터링'
+curl -fsSL https://antigravity.google/cli/install.sh | bash   # ~/.local/bin/agy
+agy                                                            # 최초 1회: 브라우저로 Google 로그인
+agy models                                                     # gemini-3.8-flash-high 등 확인
 ```
 
-**`agy -p` 의 함정**: `-p` 뒤에 오는 토큰이 무조건 프롬프트가 됩니다.
-`agy -p --output-format json` 처럼 쓰면 `--output-format` 이 프롬프트가 되고
-아래 오류가 납니다.
+설치 프로그램이 `~/.bashrc`와 `~/.bash_profile`에 PATH 줄을 덧붙입니다(zsh는 건드리지 않음).
+
+```sh
+aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='테스트를 추가해줘'
+aw wait a1 && aw result a1 --field response
+```
+
+**`-p` 의 함정**: `-p` 뒤에 오는 토큰이 무조건 프롬프트가 됩니다.
+`agy -p --output-format json` 처럼 쓰면 `--output-format` 이 프롬프트가 되고 이렇게 실패합니다.
 
 ```
 Error: -p took "--output-format" as its prompt, so the intended prompt was
 left as an argument and ignored.
 ```
 
-프롬프트를 `-p` 바로 뒤에 두거나, `-p='프롬프트'` 로 붙이세요.
-**일반 텍스트 프롬프트는 표준 입력으로 못 넣습니다** — stdin 은 `--input-format stream-json`
-(줄마다 NDJSON) 일 때만 읽습니다. 그래서 `aw` 의 `-f` 대신 인자로 넘기면 됩니다.
+프롬프트를 `-p` 바로 뒤에 두거나 `-p='프롬프트'` 로 붙이세요. **일반 텍스트 프롬프트는
+표준 입력으로 못 넣습니다** — stdin 은 `--input-format stream-json`(줄마다 NDJSON)일 때만
+읽습니다. 그래서 `aw` 의 `-f` 대신 인자로 넘깁니다.
 
-`--output-format json` 의 응답 형태 (실제 출력 확인):
+`--output-format json` 의 실제 응답:
 
 ```json
 {"conversation_id":"1553b767-...","status":"SUCCESS","response":"4\n",
@@ -190,21 +194,80 @@ left as an argument and ignored.
 지원 플래그: `-p/--print/--prompt`, `--output-format text|json|stream-json`,
 `--input-format text|stream-json`, `--model`, `--effort low|medium|high`,
 `--dangerously-skip-permissions`, `--print-timeout`, `--json-schema`,
-`--continue`, `--conversation <id>`. 종료 코드는 `0` 성공, `1` 오류,
-`2` 스트리밍 입력 미지원입니다. 모델 목록은 `agy models`.
+`--continue`, `--conversation <id>`. 종료 코드는 `0` 성공, `1` 오류, `2` 스트리밍 입력 미지원.
 
-Devin은 디렉터리마다 한 번 대화형으로 실행해 신뢰 등록을 해야 합니다.
-등록 전에는 `Refusing to run in an untrusted workspace` 로 바로 실패합니다.
-
-**GUI 기반 도구(Antigravity IDE, Cursor 등)는 워커로 쓸 수 없습니다.** VS Code 계열의
-CLI는 창을 여는 용도라 헤드리스로 돌지 않습니다. 같은 모델을 쓰고 싶으면 그 모델을
-지원하는 CLI 에이전트를 쓰세요(예: Gemini 계열은 위처럼 `devin --model`).
-
-Claude Code 계정을 나눠 쓰는 경우 ([claude-profiles](https://github.com/shaichoi/claude-profiles)와 함께):
+### claude — Claude Code
 
 ```sh
-aw run -n job1 --profile work-sub -- claude -p "작업"
+curl -fsSL https://claude.ai/install.sh | bash
+claude auth login
 ```
+
+```sh
+aw run -n c1 -- claude -p --output-format json "테스트를 추가해줘"
+aw wait c1 && aw result c1 --field result
+```
+
+계정이 여러 개면 [claude-profiles](https://github.com/shaichoi/claude-profiles)와 함께 씁니다.
+
+```sh
+aw run -n c2 --profile work-sub -- claude -p "작업"
+```
+
+### devin
+
+```sh
+devin auth status        # 로그인 확인
+devin models list        # 모델 목록
+```
+
+```sh
+aw run -n d1 -- devin -p "테스트를 추가해줘" --model gemini-3-8-flash-high
+```
+
+두 가지를 조심하세요.
+
+**프롬프트는 `-p` 바로 뒤에 와야 합니다.** 사이에 다른 옵션이 끼면 이렇게 실패합니다.
+
+```
+error: the argument '--print [<PROMPT>]' cannot be used with '[PATH]...'
+```
+
+**디렉터리마다 한 번 대화형으로 실행해 신뢰 등록**을 해야 합니다. 등록 전에는
+`Refusing to run in an untrusted workspace` 로 바로 실패합니다. 그 디렉터리에서
+`devin` 을 한 번 직접 실행하면 됩니다.
+
+`--model` 로 다른 모델을 쓰면 컨텍스트가 1M 이므로 한도 경고를 함께 조정하세요.
+
+```sh
+aw run -n g1 --max-input-tokens 1000000 -- devin -p "설계를 검토해줘" --model gemini-3-8-flash-high
+```
+
+### codex — OpenAI Codex CLI
+
+```sh
+npm install -g @openai/codex
+codex          # 최초 1회 로그인 (또는 CODEX_API_KEY 환경변수)
+```
+
+`codex exec`가 비대화형 모드이고, **프롬프트를 stdin 으로 받을 수 있습니다**(`-`).
+네 에이전트 중 유일하게 `aw`의 `-f`를 그대로 쓸 수 있어 127KB 인자 제한을 피합니다.
+
+```sh
+aw run -n x1 -- codex exec --json "테스트를 추가해줘"
+aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제없음
+```
+
+출력은 JSONL(줄마다 JSON 이벤트)이라 `--field` 대신 `aw result x1 | tail -1` 처럼 쓰세요.
+
+> 이 컴퓨터에 codex 는 설치돼 있지 않아 **문서 기준으로만** 적었습니다.
+> 나머지 셋은 실제로 돌려 확인했습니다.
+
+### 워커로 쓸 수 없는 것
+
+**GUI 기반 도구(Antigravity IDE, Cursor 등)는 안 됩니다.** VS Code 계열의 CLI 는 창을 여는
+용도라 헤드리스로 돌지 않습니다. 같은 모델을 쓰고 싶으면 그 모델을 지원하는 CLI 에이전트를
+쓰세요 — 예를 들어 Gemini 는 `agy` 나 `devin --model gemini-...` 로 돌립니다.
 
 ### 프롬프트가 클 때
 
@@ -221,6 +284,44 @@ aw run -n job1 --profile work-sub -- claude -p "작업"
 
 큰 사양서는 파일로 두고 에이전트가 자기 도구로 읽게 하는 편이 토큰 면에서도 낫습니다.
 필요한 부분만 읽기 때문입니다.
+
+## 기본 옵션 (권한 우회)
+
+무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다. 그래서 `aw`는 에이전트별로
+"사람 없이 돌 때" 필요한 옵션을 **명령 뒤에 자동으로 붙입니다.**
+
+```sh
+$ aw run -n a1 -- agy -p='리팩터링'
+워커 시작: a1
+  명령: agy -p=리팩터링 --dangerously-skip-permissions
+  (기본 옵션이 붙었습니다: --dangerously-skip-permissions — 끄려면 --no-defaults)
+```
+
+| 명령 | 붙는 옵션 |
+| --- | --- |
+| `agy` | `--dangerously-skip-permissions` |
+| `claude` | `--permission-mode bypassPermissions` |
+| `devin` | `--permission-mode dangerous` |
+| `codex` | `--sandbox workspace-write` |
+
+- 붙인 내용은 **항상 화면에 찍습니다.** 조용히 바뀌는 일은 없습니다
+- 같은 옵션을 직접 지정하면 덧붙이지 않습니다 (`--permission-mode acceptEdits` 를 주면 그대로)
+- 한 번만 끄려면 `--no-defaults`, 아예 끄려면 `AW_NO_DEFAULTS=1`
+- 표를 바꾸거나 새 에이전트를 추가하려면 `~/.config/agent-worker/defaults` 에
+  `명령이름 옵션...` 한 줄씩. `aw defaults` 로 현재 표를 봅니다
+
+```
+myagent --yolo --quiet
+agy --dangerously-skip-permissions --effort high
+```
+
+**이게 무슨 뜻인지는 분명히 알고 쓰세요.** 권한 우회는 그 에이전트가 승인 없이 파일을 고치고
+셸 명령을 실행한다는 뜻입니다. 사람이 안 보는 워커라서 켜는 것이므로, 중요한 작업 트리에서는
+`-w` 로 worktree 를 떼어 놓고 돌리길 권합니다.
+
+```sh
+aw run -n risky -w feat/experiment -- agy -p='대규모 리팩터링'
+```
 
 ## 컨텍스트 한도 경고
 
@@ -286,6 +387,8 @@ mytool 128000
 | --- | --- | --- |
 | `AW_HOME` | `~/.local/share/agent-worker` | 워커 기록 위치 |
 | `AW_CONFIG` | `~/.config/agent-worker/contexts` | 컨텍스트 한도 설정 파일 |
+| `AW_DEFAULTS` | `~/.config/agent-worker/defaults` | 에이전트별 기본 옵션 파일 |
+| `AW_NO_DEFAULTS` | (없음) | `1` 이면 기본 옵션을 붙이지 않음 |
 | `AW_PREFIX` | `~/.local/bin` | `install.sh` / `uninstall.sh` 의 설치 위치 |
 
 테스트나 임시 실험은 `AW_HOME` 만 바꾸면 평소 기록과 완전히 분리됩니다.

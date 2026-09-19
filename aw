@@ -11,10 +11,11 @@
 
 set -eu
 
-AW_VERSION=0.3.1
+AW_VERSION=0.4.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
+AW_DEFAULTS="${AW_DEFAULTS:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults}"
 
 die()  { printf '%s\n' "$*" >&2; exit 1; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -33,6 +34,7 @@ usage() {
         --tag <문자열>      분류용 꼬리표
         --profile <이름>    CLAUDE_CONFIG_DIR 을 그 프로필로 (claude 편의)
         --max-input-tokens N  입력이 이 값을 넘을 것 같으면 경고 (0 이면 끄기)
+        --no-defaults       에이전트별 기본 옵션을 붙이지 않음
 
   list [--json]             워커 목록과 상태
   status <이름>             워커 하나의 상세
@@ -44,6 +46,7 @@ usage() {
   rm <이름...>              기록을 지웁니다 (worktree 도 함께)
   clean [--all]             끝난 워커를 한꺼번에 정리 (--all 은 실행 중도 멈춤)
   contexts                  에이전트별 컨텍스트 한도 표를 보여줍니다
+  defaults                  에이전트별 기본 옵션 표를 보여줍니다
   version
 
 워커 기록: $AW_HOME/workers/<이름>/
@@ -135,6 +138,41 @@ json_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g'
 }
 
+# ---------------------------------------------------------------- 에이전트별 기본 옵션
+
+# 무인 워커는 승인 프롬프트가 뜨면 그대로 멈추거나 조용히 거부됩니다.
+# 그래서 에이전트별로 "사람 없이 돌 때" 필요한 옵션을 뒤에 붙여 줍니다.
+# 붙인 내용은 실행할 때 화면에 찍고, --no-defaults 로 끌 수 있습니다.
+# $AW_DEFAULTS 파일로 덮어쓰거나 새 에이전트를 추가할 수 있습니다.
+builtin_defaults() {
+  cat <<'DEF'
+# 명령이름  뒤에 붙일 옵션들
+agy --dangerously-skip-permissions
+claude --permission-mode bypassPermissions
+devin --permission-mode dangerous
+codex --sandbox workspace-write
+DEF
+}
+
+defaults_for() { # <명령 이름>
+  cmd=${1##*/}
+  { builtin_defaults; [ -f "$AW_DEFAULTS" ] && cat "$AW_DEFAULTS"; } \
+    | sed 's/#.*//' \
+    | awk -v c="$cmd" '$1 == c { $1 = ""; sub(/^ +/, ""); v = $0 } END { if (v != "") print v }'
+}
+
+cmd_defaults() {
+  say "에이전트별 기본 옵션 (명령 뒤에 붙습니다)"
+  say ""
+  { builtin_defaults; [ -f "$AW_DEFAULTS" ] && { say ""; say "# --- $AW_DEFAULTS ---"; cat "$AW_DEFAULTS"; }; }
+  say ""
+  say "바꾸려면: $AW_DEFAULTS 에 '명령이름 옵션...' 을 적으세요."
+  say "한 번만 끄려면: aw run --no-defaults ..."
+  say ""
+  say "권한 우회는 그 에이전트가 승인 없이 파일을 고치고 명령을 실행한다는 뜻입니다."
+  say "무인으로 돌릴 때는 -w 로 worktree 를 떼어 놓는 편을 권합니다."
+}
+
 # ---------------------------------------------------------------- 컨텍스트 한도
 
 # 에이전트별 기본 컨텍스트 한도(토큰). 사용자가 $AW_CONFIG 로 덮어쓸 수 있습니다.
@@ -183,7 +221,7 @@ cmd_contexts() {
 
 cmd_run() {
   name=''; dir=''; worktree=''; stdin_file='/dev/null'; tag=''; profile=''
-  envs=''; max_tokens=''
+  envs=''; max_tokens=''; no_defaults="${AW_NO_DEFAULTS:-0}"; added=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --) shift; break ;;
@@ -195,6 +233,7 @@ cmd_run() {
       --tag)             tag="${2:?--tag 에 값이 필요합니다}"; shift 2 ;;
       --profile)         profile="${2:?--profile 에 이름이 필요합니다}"; shift 2 ;;
       --max-input-tokens) max_tokens="${2:?--max-input-tokens 에 숫자가 필요합니다}"; shift 2 ;;
+      --no-defaults)     no_defaults=1; shift ;;
       -*) die "알 수 없는 옵션: $1" ;;
       *)  break ;;
     esac
@@ -246,6 +285,31 @@ cmd_run() {
       die "worktree 를 만들지 못했습니다. 브랜치가 이미 있는지 확인하세요: $worktree"
     fi
     dir="$wt"
+  fi
+
+  # 에이전트별 기본 옵션을 뒤에 붙입니다.
+  # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
+  if [ "$no_defaults" -ne 1 ]; then
+    added=$(defaults_for "$1")
+    if [ -n "$added" ]; then
+      # 첫 토큰(플래그 이름)을 사용자가 이미 줬으면 그 줄 전체를 건너뜁니다.
+      # --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
+      # 붙는 사고를 막습니다.
+      first=${added%% *}
+      for a in "$@"; do
+        case "$a" in "$first" | "$first"=*) added=''; break ;; esac
+      done
+    fi
+    if [ -n "$added" ]; then
+      # 공백으로 직접 쪼갭니다. 셸의 단어 분리에 기대지 않습니다
+      # (zsh 는 따옴표 없는 변수를 분리하지 않습니다).
+      rest=$added
+      while [ -n "$rest" ]; do
+        tok=${rest%% *}
+        case "$rest" in *' '*) rest=${rest#* } ;; *) rest='' ;; esac
+        [ -n "$tok" ] && set -- "$@" "$tok"
+      done
+    fi
   fi
 
   # 실행 스크립트 만들기 (인자를 따옴표로 보존)
@@ -319,6 +383,7 @@ cmd_run() {
   say "  디렉터리: $dir"
   [ -n "$wt" ] && say "  worktree: $wt  (브랜치 $worktree)"
   say "  명령: $(meta_get "$wd" cmdline)"
+  [ -n "$added" ] && [ "$no_defaults" -ne 1 ] && say "  (기본 옵션이 붙었습니다: $added — 끄려면 --no-defaults)"
   say "  보기: aw logs $name -f    기다리기: aw wait $name    결과: aw result $name"
 }
 
@@ -538,6 +603,7 @@ case "$sub" in
   rm)      cmd_rm "$@" ;;
   clean)   cmd_clean "$@" ;;
   contexts) cmd_contexts ;;
+  defaults) cmd_defaults ;;
   version|--version|-v) say "aw $AW_VERSION" ;;
   help|--help|-h) usage ;;
   *) die "알 수 없는 명령: $sub   (aw help)" ;;

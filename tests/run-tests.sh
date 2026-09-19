@@ -156,7 +156,39 @@ unset AW_CONFIG
 case "$("$AW" contexts)" in *devin*262000*) ok "aw contexts 가 표를 보여줌" ;; *) ng "aw contexts 출력 이상" ;; esac
 "$AW" clean --all >/dev/null 2>&1
 
-head_ "12. 다른 셸에서 호출"
+head_ "12. 에이전트별 기본 옵션"
+DSTUB="$TMPROOT/dstub"
+mkdir -p "$DSTUB"
+for n in agy claude myagent; do printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$DSTUB/$n"; chmod +x "$DSTUB/$n"; done
+PATH="$DSTUB:$PATH"; export PATH
+
+out=$("$AW" run -n def-agy -- agy -p=질문 2>&1)
+case "$out" in *"기본 옵션이 붙었습니다"*) ok "기본 옵션을 붙였다고 알려 줌" ;; *) ng "알림 없음" ;; esac
+"$AW" wait def-agy >/dev/null 2>&1
+check "agy 에 권한 우회가 붙음" "$(printf -- '-p=질문\n--dangerously-skip-permissions')" "$("$AW" result def-agy)"
+
+"$AW" run -n def-claude -- claude -p 질문 >/dev/null 2>&1
+"$AW" wait def-claude >/dev/null 2>&1
+check "값이 딸린 옵션도 온전히 붙음" "$(printf -- '-p\n질문\n--permission-mode\nbypassPermissions')" "$("$AW" result def-claude)"
+
+"$AW" run -n def-user -- claude -p 질문 --permission-mode acceptEdits >/dev/null 2>&1
+"$AW" wait def-user >/dev/null 2>&1
+check "사용자 지정이 있으면 덧붙이지 않음" "$(printf -- '-p\n질문\n--permission-mode\nacceptEdits')" "$("$AW" result def-user)"
+
+"$AW" run -n def-off --no-defaults -- agy -p=질문 >/dev/null 2>&1
+"$AW" wait def-off >/dev/null 2>&1
+check "--no-defaults 로 끌 수 있음" '-p=질문' "$("$AW" result def-off)"
+
+AW_DEFAULTS="$TMPROOT/defaults"; export AW_DEFAULTS
+printf 'myagent --yolo --quiet\n' > "$AW_DEFAULTS"
+"$AW" run -n def-custom -- myagent 작업 >/dev/null 2>&1
+"$AW" wait def-custom >/dev/null 2>&1
+check "사용자가 새 에이전트를 추가할 수 있음" "$(printf '작업\n--yolo\n--quiet')" "$("$AW" result def-custom)"
+unset AW_DEFAULTS
+case "$("$AW" defaults)" in *dangerously-skip-permissions*) ok "aw defaults 가 표를 보여줌" ;; *) ng "aw defaults 출력 이상" ;; esac
+"$AW" clean --all >/dev/null 2>&1
+
+head_ "13. 다른 셸에서 호출"
 for s in bash zsh; do
   command -v "$s" >/dev/null 2>&1 || continue
   out=$("$s" -c "AW_HOME='$AW_HOME' '$AW' run -n from-$s -- echo 안녕 >/dev/null 2>&1; AW_HOME='$AW_HOME' '$AW' wait from-$s >/dev/null 2>&1; AW_HOME='$AW_HOME' '$AW' result from-$s" 2>&1)
