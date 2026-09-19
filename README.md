@@ -151,16 +151,47 @@ aw run -n d1 -- devin -p "테스트를 추가해줘" --permission-mode accept-ed
 aw run -n g1 --max-input-tokens 1000000 -- devin -p "설계를 검토해줘" --model gemini-3-8-flash-high
 
 # Antigravity CLI (agy) — Gemini 계열. 헤드리스 지원이 가장 정돈돼 있습니다.
-aw run -n a1 -- agy -p "테스트를 추가해줘" --model gemini-3.8-flash-high --output-format json
+# -p 는 바로 다음 토큰을 프롬프트로 먹습니다. -p='...' 형태가 순서에 안전합니다.
+aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='테스트를 추가해줘'
 aw result a1 --field response
 
 # 사람이 없는 워커라면 승인 대기로 멈추지 않게 권한 모드를 정해 주세요.
-aw run -n a2 -- agy -p "리팩터링" --dangerously-skip-permissions --print-timeout 15m
+aw run -n a2 -- agy --dangerously-skip-permissions --print-timeout 15m -p='리팩터링'
 ```
 
-`agy` 는 `-p/--print/--prompt` 로 프롬프트를 받고 `--output-format text|json|stream-json`,
-`--model`, `--effort`, `--continue`, `--conversation <id>`, `--json-schema` 를 지원합니다.
-종료 코드는 `0` 성공, `1` 오류, `2` 스트리밍 입력 미지원입니다.
+**`agy -p` 의 함정**: `-p` 뒤에 오는 토큰이 무조건 프롬프트가 됩니다.
+`agy -p --output-format json` 처럼 쓰면 `--output-format` 이 프롬프트가 되고
+아래 오류가 납니다.
+
+```
+Error: -p took "--output-format" as its prompt, so the intended prompt was
+left as an argument and ignored.
+```
+
+프롬프트를 `-p` 바로 뒤에 두거나, `-p='프롬프트'` 로 붙이세요.
+**일반 텍스트 프롬프트는 표준 입력으로 못 넣습니다** — stdin 은 `--input-format stream-json`
+(줄마다 NDJSON) 일 때만 읽습니다. 그래서 `aw` 의 `-f` 대신 인자로 넘기면 됩니다.
+
+`--output-format json` 의 응답 형태 (실제 출력 확인):
+
+```json
+{"conversation_id":"1553b767-...","status":"SUCCESS","response":"4\n",
+ "duration_seconds":1.99,"num_turns":1,
+ "usage":{"input_tokens":11894,"output_tokens":161,"thinking_tokens":160,
+          "cache_read_tokens":0,"total_tokens":12055}}
+```
+
+| 꺼낼 값 | 명령 |
+| --- | --- |
+| 응답 본문 | `aw result <이름> --field response` |
+| 성공 여부 | `aw result <이름> --field status` (`SUCCESS`) |
+| 이어가기용 ID | `aw result <이름> --field conversation_id` → `agy --conversation <id>` |
+
+지원 플래그: `-p/--print/--prompt`, `--output-format text|json|stream-json`,
+`--input-format text|stream-json`, `--model`, `--effort low|medium|high`,
+`--dangerously-skip-permissions`, `--print-timeout`, `--json-schema`,
+`--continue`, `--conversation <id>`. 종료 코드는 `0` 성공, `1` 오류,
+`2` 스트리밍 입력 미지원입니다. 모델 목록은 `agy models`.
 
 Devin은 디렉터리마다 한 번 대화형으로 실행해 신뢰 등록을 해야 합니다.
 등록 전에는 `Refusing to run in an untrusted workspace` 로 바로 실패합니다.
@@ -184,8 +215,8 @@ aw run -n job1 --profile work-sub -- claude -p "작업"
 
 | 프롬프트 크기 | 방법 |
 | --- | --- |
-| ~127KB 이하 | `-- agy -p "$(cat spec.md)"` 그대로 (특수문자까지 그대로 전달됩니다) |
-| 그보다 크면 | 파일을 그대로 두고 짧은 프롬프트로 가리키기: `-- agy -p "spec.md 의 지시를 따라라"` |
+| ~127KB 이하 | `-- agy -p="$(cat spec.md)"` 그대로 (특수문자까지 그대로 전달됩니다) |
+| 그보다 크면 | 파일을 그대로 두고 짧은 프롬프트로 가리키기: `-- agy -p='spec.md 의 지시를 따라라'` |
 | 표준 입력을 받는 에이전트 | `aw run -f spec.md -- <명령>` |
 
 큰 사양서는 파일로 두고 에이전트가 자기 도구로 읽게 하는 편이 토큰 면에서도 낫습니다.
@@ -264,6 +295,10 @@ AW_HOME=/tmp/aw-test aw run -- echo 시험
 ```
 
 ## 알아둘 점
+
+**에이전트마다 고정 비용이 다릅니다.** 같은 "2+2" 질문으로 실측하면 Claude Code 는
+약 32K 토큰($0.11), Antigravity CLI(Gemini 3.8 Flash)는 약 12K 토큰이었습니다.
+가벼운 작업을 많이 돌릴수록 이 차이가 커집니다.
 
 **에이전트 워커는 고정 비용이 있습니다.** Claude Code로 측정해 보면 "2+3은?" 한 줄에도
 시스템 프롬프트와 컨텍스트 때문에 3만 토큰 가까이 듭니다. 워커는 **덩어리 작업**에 쓰는 게 맞고,
