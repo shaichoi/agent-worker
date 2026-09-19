@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.5.0
+AW_VERSION=0.6.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -34,7 +34,8 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw status <이름>                     상세 정보
   aw stop|rm <이름...>                 중단 / 기록 삭제
   aw clean [--all]                     끝난 워커 일괄 정리
-  aw contexts | aw defaults            컨텍스트 한도표 / 기본 옵션표
+  aw contexts                          컨텍스트 한도표
+  aw defaults [--init]                 기본 옵션표 / 권한 우회 켜기
   aw version | aw help [주제]
 
 전형적인 흐름
@@ -215,12 +216,19 @@ json_escape() {
 # ---------------------------------------------------------------- 에이전트별 기본 옵션
 
 # 무인 워커는 승인 프롬프트가 뜨면 그대로 멈추거나 조용히 거부됩니다.
-# 그래서 에이전트별로 "사람 없이 돌 때" 필요한 옵션을 뒤에 붙여 줍니다.
-# 붙인 내용은 실행할 때 화면에 찍고, --no-defaults 로 끌 수 있습니다.
-# $AW_DEFAULTS 파일로 덮어쓰거나 새 에이전트를 추가할 수 있습니다.
-builtin_defaults() {
+# 그래서 에이전트별로 "사람 없이 돌 때" 필요한 옵션을 뒤에 붙일 수 있습니다.
+#
+# 다만 이건 권한을 올리는 일이라 aw 가 마음대로 하지 않습니다.
+# $AW_DEFAULTS 파일이 있을 때만 적용합니다 (install.sh 가 설치 때 만들어 주고,
+# aw defaults --init 로도 만듭니다). 파일이 없으면 아무 옵션도 붙지 않습니다.
+# 붙인 내용은 실행할 때 화면에 찍고, --no-defaults 로 그때그때 끌 수 있습니다.
+
+# 권장값. 그대로 적용되지는 않고 --init 로 파일에 써야 효력이 생깁니다.
+recommended_defaults() {
   cat <<'DEF'
-# 명령이름  뒤에 붙일 옵션들
+# aw 가 명령 뒤에 붙일 옵션입니다. 한 줄에 '명령이름 옵션...' 형식입니다.
+# 이 옵션들은 에이전트의 승인 절차를 건너뜁니다. 지우면 그 에이전트는
+# 승인이 필요한 작업에서 멈추거나 조용히 거부됩니다.
 agy --dangerously-skip-permissions
 claude --permission-mode bypassPermissions
 devin --permission-mode dangerous
@@ -229,19 +237,47 @@ DEF
 }
 
 defaults_for() { # <명령 이름>
+  [ -f "$AW_DEFAULTS" ] || return 0
   cmd=${1##*/}
-  { builtin_defaults; [ -f "$AW_DEFAULTS" ] && cat "$AW_DEFAULTS"; } \
-    | sed 's/#.*//' \
+  sed 's/#.*//' "$AW_DEFAULTS" \
     | awk -v c="$cmd" '$1 == c { $1 = ""; sub(/^ +/, ""); v = $0 } END { if (v != "") print v }'
 }
 
+defaults_init() { # [--force]
+  if [ -f "$AW_DEFAULTS" ] && [ "${1:-}" != --force ]; then
+    say "이미 있습니다: $AW_DEFAULTS   (덮어쓰려면 aw defaults --init --force)"
+    return 0
+  fi
+  mkdir -p "$(dirname "$AW_DEFAULTS")" || return 1
+  recommended_defaults > "$AW_DEFAULTS" || return 1
+  say "기본 옵션을 켰습니다: $AW_DEFAULTS"
+  say "  이제 워커가 에이전트의 승인 절차를 건너뜁니다."
+  say "  끄려면 그 파일을 지우거나 해당 줄을 주석 처리하세요."
+  return 0
+}
+
 cmd_defaults() {
-  say "에이전트별 기본 옵션 (명령 뒤에 붙습니다)"
-  say ""
-  { builtin_defaults; [ -f "$AW_DEFAULTS" ] && { say ""; say "# --- $AW_DEFAULTS ---"; cat "$AW_DEFAULTS"; }; }
-  say ""
-  say "바꾸려면: $AW_DEFAULTS 에 '명령이름 옵션...' 을 적으세요."
-  say "한 번만 끄려면: aw run --no-defaults ..."
+  case "${1:-}" in
+    --init) defaults_init "${2:-}"; return $? ;;
+    '') ;;
+    *) warn "알 수 없는 옵션: $1   (쓸 수 있는 것: --init [--force])"; return 1 ;;
+  esac
+
+  if [ -f "$AW_DEFAULTS" ]; then
+    say "적용 중인 기본 옵션  ($AW_DEFAULTS)"
+    say ""
+    sed 's/^/  /' "$AW_DEFAULTS"
+    say ""
+    say "끄려면: 이 파일을 지우거나 해당 줄을 주석 처리하세요."
+    say "한 번만 끄려면: aw run --no-defaults ...   (또는 AW_NO_DEFAULTS=1)"
+  else
+    say "적용 중인 기본 옵션이 없습니다. 에이전트에 아무 옵션도 덧붙이지 않습니다."
+    say ""
+    say "무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다."
+    say "아래 권장값을 켜려면: aw defaults --init"
+    say ""
+    recommended_defaults | sed 's/^/  /'
+  fi
   say ""
   say "권한 우회는 그 에이전트가 승인 없이 파일을 고치고 명령을 실행한다는 뜻입니다."
   say "무인으로 돌릴 때는 -w 로 worktree 를 떼어 놓는 편을 권합니다."
@@ -678,7 +714,7 @@ case "$sub" in
   rm)      cmd_rm "$@" ;;
   clean)   cmd_clean "$@" ;;
   contexts) cmd_contexts ;;
-  defaults) cmd_defaults ;;
+  defaults) cmd_defaults "$@" ;;
   version|--version|-v) say "aw $AW_VERSION" ;;
   help|--help|-h) help_topic "${1:-}" ;;
   *) die "알 수 없는 명령: $sub   (aw help)" ;;

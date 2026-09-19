@@ -57,7 +57,8 @@ curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/aw -o ~/
 > 그때는 아래 `git clone` 을 쓰거나, 이미 설치된 곳에서 파일 하나만 옮기세요.
 > `scp ~/.local/bin/aw 서버:~/.local/bin/aw`
 
-PATH 확인까지 해주는 설치 스크립트도 있습니다.
+PATH 확인과 권한 옵션 설정까지 해주는 설치 스크립트도 있습니다
+(`--no-defaults` 를 주면 권한 옵션은 켜지 않습니다).
 
 ```sh
 git clone git@github.com:shaichoi/agent-worker.git
@@ -79,7 +80,7 @@ cd agent-worker
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
-| `aw defaults` | 에이전트별 기본 옵션 표 |
+| `aw defaults [--init]` | 기본 옵션 확인 / 권장값으로 켜기 |
 | `aw version` | 버전 |
 | `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` |
 
@@ -292,8 +293,19 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 
 ## 기본 옵션 (권한 우회)
 
-무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다. 그래서 `aw`는 에이전트별로
-"사람 없이 돌 때" 필요한 옵션을 **명령 뒤에 자동으로 붙입니다.**
+무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다. 그래서 에이전트별로
+"사람 없이 돌 때" 필요한 옵션을 **명령 뒤에 자동으로 붙일 수 있습니다.**
+
+이건 권한을 올리는 일이라 `aw` 가 제멋대로 하지 않습니다. **설정 파일이 있을 때만**
+적용합니다. `install.sh` 가 설치할 때 그 파일을 만들어 주므로 안내대로 설치했다면
+아래 표가 바로 적용됩니다. 원하지 않으면 `./install.sh --no-defaults` 로 설치하거나
+나중에 파일을 지우면 됩니다.
+
+```sh
+aw defaults              # 지금 적용 중인 것 확인
+aw defaults --init       # 권장값으로 켜기
+rm ~/.config/agent-worker/defaults   # 끄기
+```
 
 ```sh
 $ aw run -n a1 -- agy -p='리팩터링'
@@ -309,11 +321,13 @@ $ aw run -n a1 -- agy -p='리팩터링'
 | `devin` | `--permission-mode dangerous` |
 | `codex` | `--sandbox workspace-write` |
 
-- 붙인 내용은 **항상 화면에 찍습니다.** 조용히 바뀌는 일은 없습니다
+- **설정 파일이 없으면 아무것도 붙지 않습니다.** 파일을 받아 바로 실행한 사람에게
+  권한이 조용히 올라가는 일은 없습니다
+- 붙인 내용은 **항상 화면에 찍습니다**
 - 같은 옵션을 직접 지정하면 덧붙이지 않습니다 (`--permission-mode acceptEdits` 를 주면 그대로)
-- 한 번만 끄려면 `--no-defaults`, 아예 끄려면 `AW_NO_DEFAULTS=1`
+- 한 번만 끄려면 `--no-defaults`, 그 셸에서 끄려면 `AW_NO_DEFAULTS=1`
 - 표를 바꾸거나 새 에이전트를 추가하려면 `~/.config/agent-worker/defaults` 에
-  `명령이름 옵션...` 한 줄씩. `aw defaults` 로 현재 표를 봅니다
+  `명령이름 옵션...` 한 줄씩. `aw defaults --init --force` 로 권장값으로 되돌립니다
 
 ```
 myagent --yolo --quiet

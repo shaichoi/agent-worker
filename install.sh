@@ -9,12 +9,14 @@ set -eu
 RAW_URL="${AW_RAW_URL:-https://raw.githubusercontent.com/shaichoi/agent-worker/main/aw}"
 PREFIX="${AW_PREFIX:-$HOME/.local/bin}"
 DRY_RUN=0
+WITH_DEFAULTS=1
 
 usage() {
   cat <<'USAGE'
 사용법: ./install.sh [옵션]
 
   --prefix DIR   설치 위치 (기본: ~/.local/bin)
+  --no-defaults  무인 실행용 권한 옵션을 켜지 않음 (아래 설명 참고)
   --dry-run      무엇을 할지 보여주기만 함
   -h, --help     이 도움말
 
@@ -26,6 +28,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --prefix)   PREFIX="${2:?--prefix 에 경로가 필요합니다}"; shift 2 ;;
     --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
+    --no-defaults) WITH_DEFAULTS=0; shift ;;
     --dry-run)  DRY_RUN=1; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) printf '알 수 없는 옵션: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -68,7 +71,17 @@ if [ "$DRY_RUN" -eq 0 ]; then
 fi
 [ -n "$TMP" ] && rm -f "$TMP"
 
-say "== 3. PATH 확인"
+say "== 3. 무인 실행용 권한 옵션"
+if [ "$WITH_DEFAULTS" -eq 0 ]; then
+  say "  건너뜀 (--no-defaults). 나중에 켜려면: aw defaults --init"
+elif [ "$DRY_RUN" -eq 1 ]; then
+  say "  aw defaults --init 을 실행할 예정 (끄려면 --no-defaults)"
+else
+  "$PREFIX/aw" defaults --init | sed 's/^/  /'
+  say "  이 설정을 원하지 않으면 그 파일을 지우면 됩니다."
+fi
+
+say "== 4. PATH 확인"
 case ":$PATH:" in
   *":$PREFIX:"*) say "  $PREFIX 는 이미 PATH 에 있습니다." ;;
   *)
@@ -84,5 +97,7 @@ cat <<DONE
   aw list
   aw wait <이름> && aw result <이름> --field result
 
+도움말: aw help          에이전트별 호출법: aw help agents
+권한 옵션 확인/끄기: aw defaults
 제거: ./uninstall.sh   (워커 기록은 남습니다)
 DONE

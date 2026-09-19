@@ -46,6 +46,11 @@ else
   say "  $PREFIX/aw 없음"
 fi
 
+say "== 설정 파일"
+for f in "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults" "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts"; do
+  [ -f "$f" ] && say "  남김: $f   (지우려면 rm \"$f\")"
+done
+
 say "== 워커 기록"
 case "$AW_HOME" in
   "$HOME" | "$HOME/" | / | '') warn "  위험한 경로라 건드리지 않습니다: $AW_HOME"; PURGE=0 ;;

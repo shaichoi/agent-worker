@@ -156,11 +156,28 @@ unset AW_CONFIG
 case "$("$AW" contexts)" in *devin*262000*) ok "aw contexts 가 표를 보여줌" ;; *) ng "aw contexts 출력 이상" ;; esac
 "$AW" clean --all >/dev/null 2>&1
 
-head_ "12. 에이전트별 기본 옵션"
+head_ "12. 에이전트별 기본 옵션 (옵트인)"
 DSTUB="$TMPROOT/dstub"
 mkdir -p "$DSTUB"
 for n in agy claude myagent; do printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$DSTUB/$n"; chmod +x "$DSTUB/$n"; done
 PATH="$DSTUB:$PATH"; export PATH
+AW_DEFAULTS="$TMPROOT/defaults"; export AW_DEFAULTS
+rm -f "$AW_DEFAULTS"
+
+# 설정 파일이 없으면 아무 옵션도 붙지 않아야 합니다 (조용한 권한 상승 방지)
+"$AW" run -n def-none -- agy -p=질문 >/dev/null 2>&1
+"$AW" wait def-none >/dev/null 2>&1
+check "설정 파일이 없으면 덧붙이지 않음" '-p=질문' "$("$AW" result def-none)"
+case "$("$AW" defaults)" in *"적용 중인 기본 옵션이 없습니다"*) ok "꺼져 있음을 알려 줌" ;; *) ng "꺼짐 안내 없음" ;; esac
+
+# --init 로 켜기
+"$AW" defaults --init >/dev/null 2>&1
+if [ -f "$AW_DEFAULTS" ]; then ok "defaults --init 이 파일을 만듦"; else ng "파일이 안 생김"; fi
+printf 'myagent --keep\n' >> "$AW_DEFAULTS"
+"$AW" defaults --init >/dev/null 2>&1
+if grep -q 'myagent --keep' "$AW_DEFAULTS"; then ok "--init 이 기존 파일을 덮어쓰지 않음"; else ng "기존 설정을 날림"; fi
+"$AW" defaults --init --force >/dev/null 2>&1
+if grep -q 'myagent --keep' "$AW_DEFAULTS"; then ng "--force 인데 안 덮어씀"; else ok "--init --force 는 덮어씀"; fi
 
 out=$("$AW" run -n def-agy -- agy -p=질문 2>&1)
 case "$out" in *"기본 옵션이 붙었습니다"*) ok "기본 옵션을 붙였다고 알려 줌" ;; *) ng "알림 없음" ;; esac
@@ -179,14 +196,22 @@ check "사용자 지정이 있으면 덧붙이지 않음" "$(printf -- '-p\n질�
 "$AW" wait def-off >/dev/null 2>&1
 check "--no-defaults 로 끌 수 있음" '-p=질문' "$("$AW" result def-off)"
 
-AW_DEFAULTS="$TMPROOT/defaults"; export AW_DEFAULTS
-printf 'myagent --yolo --quiet\n' > "$AW_DEFAULTS"
+printf 'myagent --yolo --quiet\n' >> "$AW_DEFAULTS"
 "$AW" run -n def-custom -- myagent 작업 >/dev/null 2>&1
 "$AW" wait def-custom >/dev/null 2>&1
 check "사용자가 새 에이전트를 추가할 수 있음" "$(printf '작업\n--yolo\n--quiet')" "$("$AW" result def-custom)"
-unset AW_DEFAULTS
-case "$("$AW" defaults)" in *dangerously-skip-permissions*) ok "aw defaults 가 표를 보여줌" ;; *) ng "aw defaults 출력 이상" ;; esac
+case "$("$AW" defaults)" in *dangerously-skip-permissions*) ok "aw defaults 가 적용 중인 표를 보여줌" ;; *) ng "aw defaults 출력 이상" ;; esac
 "$AW" clean --all >/dev/null 2>&1
+
+# 설치 스크립트가 켜 주는지 / --no-defaults 로 건너뛰는지
+IH="$TMPROOT/insthome"
+rm -rf "$IH"; mkdir -p "$IH"
+(cd "$SRC_DIR" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh >/dev/null 2>&1)
+if [ -f "$IH/.config/agent-worker/defaults" ]; then ok "install.sh 가 기본 옵션을 켜 줌"; else ng "install.sh 가 켜지 않음"; fi
+rm -rf "$IH"; mkdir -p "$IH"
+(cd "$SRC_DIR" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh --no-defaults >/dev/null 2>&1)
+if [ -f "$IH/.config/agent-worker/defaults" ]; then ng "--no-defaults 인데 켜 버림"; else ok "install.sh --no-defaults 는 켜지 않음"; fi
+unset AW_DEFAULTS
 
 head_ "13. 도움말"
 h=$("$AW" help)
