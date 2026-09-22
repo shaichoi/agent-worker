@@ -136,6 +136,13 @@ shquote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+# 환경변수는 'export ...' 줄을 통째로 쌓습니다. 예전엔 공백으로 이어 붙인 뒤
+# 셸의 단어 분리로 되꺼냈는데, 값에 공백이 있으면 줄이 쪼개져 조용히 깨졌습니다.
+add_env() { # <KEY=VAL>
+  envs="${envs}export $(shquote "$1")
+"
+}
+
 valid_name() {
   case "$1" in
     '' | . | .. | .* | *[!A-Za-z0-9._-]*) return 1 ;;
@@ -339,7 +346,7 @@ cmd_run() {
       -d | --dir)        dir="${2:?--dir 에 값이 필요합니다}"; shift 2 ;;
       -w | --worktree)   worktree="${2:?--worktree 에 브랜치 이름이 필요합니다}"; shift 2 ;;
       -f | --stdin-file) stdin_file="${2:?--stdin-file 에 파일이 필요합니다}"; shift 2 ;;
-      -e | --env)        envs="$envs $(shquote "${2:?--env 에 KEY=VAL 이 필요합니다}")"; shift 2 ;;
+      -e | --env)        add_env "${2:?--env 에 KEY=VAL 이 필요합니다}"; shift 2 ;;
       --tag)             tag="${2:?--tag 에 값이 필요합니다}"; shift 2 ;;
       --profile)         profile="${2:?--profile 에 이름이 필요합니다}"; shift 2 ;;
       --max-input-tokens) max_tokens="${2:?--max-input-tokens 에 숫자가 필요합니다}"; shift 2 ;;
@@ -377,7 +384,7 @@ cmd_run() {
   if [ -n "$profile" ]; then
     case "$profile" in
       default) ;;
-      *) envs="$envs $(shquote "CLAUDE_CONFIG_DIR=${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}/$profile")" ;;
+      *) add_env "CLAUDE_CONFIG_DIR=${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}/$profile" ;;
     esac
   fi
 
@@ -428,7 +435,7 @@ cmd_run() {
     printf '%s\n' '#!/bin/sh'
     printf '%s\n' '# aw 가 자동으로 만든 실행 스크립트입니다.'
     printf 'cd %s || { printf "127\\n" > %s/exit; exit 127; }\n' "$(shquote "$dir")" "$(shquote "$wd")"
-    for e in $envs; do printf 'export %s\n' "$e"; done
+    printf '%s' "$envs"
     printf 'printf "%%s\\n" "$$" > %s/pid\n' "$(shquote "$wd")"
     printf '%s' 'exec'
     for a in "$@"; do printf ' %s' "$(shquote "$a")"; done

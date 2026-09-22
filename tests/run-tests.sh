@@ -75,6 +75,20 @@ check "특수문자가 그대로 전달됨" '따옴표 '"'"' 큰 " 달러 $HOME 
 "$AW" run -n envtest -e AW_TEST_VAR=값 -- sh -c 'echo "$AW_TEST_VAR"' >/dev/null 2>&1
 "$AW" wait envtest >/dev/null 2>&1
 check "--env 전달" 값 "$("$AW" result envtest)"
+# 값에 공백이 있으면 예전엔 export 줄이 쪼개져 조용히 깨졌습니다.
+"$AW" run -n env-space -e 'AW_TEST_VAR=여러 낱말 값' -- sh -c 'echo "$AW_TEST_VAR"' >/dev/null 2>&1
+"$AW" wait env-space >/dev/null 2>&1
+check "--env 값에 공백이 있어도 온전함" '여러 낱말 값' "$("$AW" result env-space)"
+"$AW" run -n env-quote -e "AW_TEST_VAR=작은'따옴표 \"큰\" \$HOME" -- sh -c 'echo "$AW_TEST_VAR"' >/dev/null 2>&1
+"$AW" wait env-quote >/dev/null 2>&1
+check "--env 값의 따옴표와 \$ 가 그대로" "작은'따옴표 \"큰\" \$HOME" "$("$AW" result env-quote)"
+"$AW" run -n env-many -e 'A=첫 값' -e 'B=둘째 값' -- sh -c 'echo "[$A][$B]"' >/dev/null 2>&1
+"$AW" wait env-many >/dev/null 2>&1
+check "--env 를 여러 번 줘도 각각 온전함" '[첫 값][둘째 값]' "$("$AW" result env-many)"
+# --profile 도 같은 자리에 쌓이므로 경로에 공백이 있으면 함께 깨졌습니다.
+CLAUDE_PROFILE_ROOT='/tmp/공백 있는 경로' "$AW" run -n prof-space2 --profile work -- sh -c 'echo "$CLAUDE_CONFIG_DIR"' >/dev/null 2>&1
+"$AW" wait prof-space2 >/dev/null 2>&1
+check "--profile 경로에 공백이 있어도 온전함" '/tmp/공백 있는 경로/work' "$("$AW" result prof-space2)"
 
 head_ "6. JSON 출력과 필드 추출"
 json='{"is_error":false,"result":"여러 줄\n\"인용\" 포함","session_id":"abc-123"}'
