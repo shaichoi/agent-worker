@@ -251,10 +251,16 @@ error: the argument '--print [<PROMPT>]' cannot be used with '[PATH]...'
 `aw list` 에는 `done` 으로 보이지만 실제로 한 일은 없습니다. 무인 실행에서는 `-p` 가
 필수입니다.
 
-**디렉터리마다 한 번 대화형으로 실행해 신뢰 등록**을 해야 합니다. 등록 전에 `-p` 로
-돌리면 `Refusing to run in an untrusted workspace` 와 함께 **종료 코드 1** 로 실패하니
-`aw wait` 가 잡아냅니다. 그 디렉터리에서 `devin` 을 한 번 직접 실행하면 등록됩니다.
-검사를 건너뛰려면 `--respect-workspace-trust false`, 설정 진단은 `devin doctor`.
+**작업 공간 신뢰 검사를 통과해야 합니다.** 신뢰 등록이 안 된 디렉터리에서 `-p` 로
+돌리면 `Refusing to run in an untrusted workspace` 와 함께 **종료 코드 1** 로 실패합니다.
+`aw wait` 가 잡아내니 조용히 넘어가지는 않습니다.
+
+기본 옵션을 켜 두면 `--respect-workspace-trust false` 가 자동으로 붙어 통과합니다.
+`-w` 로 worktree 를 쓸 거라면 사실상 필수입니다 — worktree 는 `aw run` 이 실행하는
+순간 새로 만드는 경로라, "미리 한 번 대화형으로 실행해 신뢰 등록" 자체가 불가능합니다.
+
+기본 옵션을 안 쓴다면 그 디렉터리에서 `devin` 을 한 번 직접 실행해 등록하세요.
+설정 진단은 `devin doctor`.
 
 **표준 입력은 받지 않습니다.** 파일로 프롬프트를 넣으려면 `aw` 의 `-f` 가 아니라
 devin 자신의 `--prompt-file` 을 쓰세요.
@@ -346,13 +352,16 @@ $ aw run -n a1 -- agy -p='리팩터링'
 | --- | --- |
 | `agy` | `--dangerously-skip-permissions` |
 | `claude` | `--permission-mode bypassPermissions` |
-| `devin` | `--permission-mode dangerous` |
+| `devin` | `--permission-mode dangerous --respect-workspace-trust false` |
 | `codex` | `--sandbox workspace-write` |
 
 - **설정 파일이 없으면 아무것도 붙지 않습니다.** 파일을 받아 바로 실행한 사람에게
   권한이 조용히 올라가는 일은 없습니다
 - 붙인 내용은 **항상 화면에 찍습니다**
 - 같은 옵션을 직접 지정하면 덧붙이지 않습니다 (`--permission-mode acceptEdits` 를 주면 그대로)
+- **판단은 줄 단위입니다.** 그 줄의 첫 옵션을 직접 넘기면 줄 전체가 빠집니다. 그래서
+  `devin` 에 `--permission-mode` 를 직접 주면 `--respect-workspace-trust false` 도 함께
+  빠져 worktree 에서 실패합니다. 그때는 둘 다 직접 넘기세요
 - 한 번만 끄려면 `--no-defaults`, 그 셸에서 끄려면 `AW_NO_DEFAULTS=1`
 - 표를 바꾸거나 새 에이전트를 추가하려면 `~/.config/agent-worker/defaults` 에
   `명령이름 옵션...` 한 줄씩. `aw defaults --init --force` 로 권장값으로 되돌립니다

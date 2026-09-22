@@ -208,7 +208,7 @@ case "$("$AW" contexts)" in *devin*262000*) ok "aw contexts 가 표를 보여줌
 head_ "12. 에이전트별 기본 옵션 (옵트인)"
 DSTUB="$TMPROOT/dstub"
 mkdir -p "$DSTUB"
-for n in agy claude myagent; do printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$DSTUB/$n"; chmod +x "$DSTUB/$n"; done
+for n in agy claude devin myagent; do printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$DSTUB/$n"; chmod +x "$DSTUB/$n"; done
 PATH="$DSTUB:$PATH"; export PATH
 AW_DEFAULTS="$TMPROOT/defaults"; export AW_DEFAULTS
 rm -f "$AW_DEFAULTS"
@@ -236,6 +236,15 @@ check "agy 에 권한 우회가 붙음" "$(printf -- '-p=질문\n--dangerously-s
 "$AW" run -n def-claude -- claude -p 질문 >/dev/null 2>&1
 "$AW" wait def-claude >/dev/null 2>&1
 check "값이 딸린 옵션도 온전히 붙음" "$(printf -- '-p\n질문\n--permission-mode\nbypassPermissions')" "$("$AW" result def-claude)"
+# devin 은 승인 우회와 작업 공간 신뢰 검사 끄기를 한 줄에 같이 둡니다.
+# -w 가 만드는 worktree 는 실행 시점에 생기는 경로라 미리 신뢰 등록을 할 수 없습니다.
+"$AW" run -n def-devin -- devin -p 질문 >/dev/null 2>&1
+"$AW" wait def-devin >/dev/null 2>&1
+check "devin 에 신뢰 검사 끄기까지 붙음" "$(printf -- '-p\n질문\n--permission-mode\ndangerous\n--respect-workspace-trust\nfalse')" "$("$AW" result def-devin)"
+# 줄 단위 판단이라, 그 줄의 첫 옵션을 직접 주면 줄 전체가 빠집니다 (문서화된 함정).
+"$AW" run -n def-devin-own -- devin -p 질문 --permission-mode smart >/dev/null 2>&1
+"$AW" wait def-devin-own >/dev/null 2>&1
+check "첫 옵션을 직접 주면 그 줄이 통째로 빠짐" "$(printf -- '-p\n질문\n--permission-mode\nsmart')" "$("$AW" result def-devin-own)"
 
 "$AW" run -n def-user -- claude -p 질문 --permission-mode acceptEdits >/dev/null 2>&1
 "$AW" wait def-user >/dev/null 2>&1
@@ -250,6 +259,7 @@ printf 'myagent --yolo --quiet\n' >> "$AW_DEFAULTS"
 "$AW" wait def-custom >/dev/null 2>&1
 check "사용자가 새 에이전트를 추가할 수 있음" "$(printf '작업\n--yolo\n--quiet')" "$("$AW" result def-custom)"
 case "$("$AW" defaults)" in *dangerously-skip-permissions*) ok "aw defaults 가 적용 중인 표를 보여줌" ;; *) ng "aw defaults 출력 이상" ;; esac
+case "$(cat "$AW_DEFAULTS")" in *"--respect-workspace-trust false"*) ok "권장값에 devin 신뢰 검사 끄기가 들어 있음" ;; *) ng "권장값에 신뢰 검사 옵션 없음" ;; esac
 "$AW" clean --all >/dev/null 2>&1
 
 # 설치 스크립트가 켜 주는지 / --no-defaults 로 건너뛰는지

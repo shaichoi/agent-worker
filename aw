@@ -86,9 +86,11 @@ devin
   함정: 프롬프트는 -p 바로 뒤에 와야 합니다.
         stdin 은 안 받습니다. 파일은 --prompt-file 로 넣습니다.
         -p 없이 돌리면 대화형으로 들어가 아무것도 안 하고 0 으로 끝납니다.
-        디렉터리마다 devin 을 한 번 대화형 실행해 신뢰 등록이 필요합니다.
-        신뢰 안 된 곳에서 -p 는 코드 1 로 실패합니다 (건너뛰려면
-        --respect-workspace-trust false). 진단: devin doctor
+        신뢰 안 된 디렉터리에서 -p 는 코드 1 로 실패합니다. 기본 옵션을
+        켜 두면 --respect-workspace-trust false 가 자동으로 붙어 통과합니다
+        (aw defaults). -w 로 만드는 worktree 는 실행할 때 새로 생기는
+        경로라 미리 신뢰 등록을 할 수 없어, 사실상 이 옵션이 필요합니다.
+        진단: devin doctor
   모델 목록: devin models list
 
 codex — OpenAI Codex CLI
@@ -250,6 +252,7 @@ json_escape() {
 
 # 무인 워커는 승인 프롬프트가 뜨면 그대로 멈추거나 조용히 거부됩니다.
 # 그래서 에이전트별로 "사람 없이 돌 때" 필요한 옵션을 뒤에 붙일 수 있습니다.
+# devin 의 작업 공간 신뢰 검사처럼 사람이 있어야만 통과되는 관문도 여기서 다룹니다.
 #
 # 다만 이건 권한을 올리는 일이라 aw 가 마음대로 하지 않습니다.
 # $AW_DEFAULTS 파일이 있을 때만 적용합니다 (install.sh 가 설치 때 만들어 주고,
@@ -262,9 +265,13 @@ recommended_defaults() {
 # aw 가 명령 뒤에 붙일 옵션입니다. 한 줄에 '명령이름 옵션...' 형식입니다.
 # 이 옵션들은 에이전트의 승인 절차를 건너뜁니다. 지우면 그 에이전트는
 # 승인이 필요한 작업에서 멈추거나 조용히 거부됩니다.
+#
+# 한 명령에 여러 줄을 적으면 마지막 줄만 씁니다. 또 그 줄의 첫 옵션을
+# 직접 넘기면 그 줄 전체를 건너뜁니다. 그러니 한 줄에 여러 옵션이 있으면
+# 전부 같이 붙거나 전부 같이 빠집니다.
 agy --dangerously-skip-permissions
 claude --permission-mode bypassPermissions
-devin --permission-mode dangerous
+devin --permission-mode dangerous --respect-workspace-trust false
 codex --sandbox workspace-write
 DEF
 }
@@ -314,6 +321,10 @@ cmd_defaults() {
   say ""
   say "권한 우회는 그 에이전트가 승인 없이 파일을 고치고 명령을 실행한다는 뜻입니다."
   say "무인으로 돌릴 때는 -w 로 worktree 를 떼어 놓는 편을 권합니다."
+  say ""
+  say "devin 줄의 --respect-workspace-trust false 는 작업 공간 신뢰 검사를 끕니다."
+  say "-w 가 만드는 worktree 는 실행 시점에 새로 생기는 경로라 미리 신뢰 등록을"
+  say "해 둘 수 없습니다. 이 옵션이 없으면 devin 은 거기서 코드 1 로 실패합니다."
 }
 
 # ---------------------------------------------------------------- 컨텍스트 한도
