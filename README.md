@@ -178,9 +178,16 @@ Error: -p took "--output-format" as its prompt, so the intended prompt was
 left as an argument and ignored.
 ```
 
-프롬프트를 `-p` 바로 뒤에 두거나 `-p='프롬프트'` 로 붙이세요. **일반 텍스트 프롬프트는
-표준 입력으로 못 넣습니다** — stdin 은 `--input-format stream-json`(줄마다 NDJSON)일 때만
-읽습니다. 그래서 `aw` 의 `-f` 대신 인자로 넘깁니다.
+프롬프트를 `-p` 바로 뒤에 두거나 `-p='프롬프트'` 로 붙이세요.
+
+**`-p` 를 빼면 표준 입력을 읽습니다.** 그래서 `aw` 의 `-f` 를 그대로 쓸 수 있고, 인자
+크기 제한(127KB)도 피합니다. 379KB 파일로 확인했습니다.
+
+```sh
+aw run -n a2 -f spec.md -- agy --output-format json --model gemini-3.8-flash-high
+```
+
+`-p` 와 표준 입력을 같이 주면 `-p` 가 이기고 표준 입력은 무시됩니다.
 
 `--output-format json` 의 실제 응답:
 
@@ -231,7 +238,7 @@ devin models list        # 모델 목록
 aw run -n d1 -- devin -p "테스트를 추가해줘" --model gemini-3-8-flash-high
 ```
 
-두 가지를 조심하세요.
+세 가지를 조심하세요.
 
 **프롬프트는 `-p` 바로 뒤에 와야 합니다.** 사이에 다른 옵션이 끼면 이렇게 실패합니다.
 
@@ -239,9 +246,22 @@ aw run -n d1 -- devin -p "테스트를 추가해줘" --model gemini-3-8-flash-hi
 error: the argument '--print [<PROMPT>]' cannot be used with '[PATH]...'
 ```
 
-**디렉터리마다 한 번 대화형으로 실행해 신뢰 등록**을 해야 합니다. 등록 전에는
-`Refusing to run in an untrusted workspace` 로 바로 실패합니다. 그 디렉터리에서
-`devin` 을 한 번 직접 실행하면 됩니다.
+**`-p` 를 빼먹으면 조용히 아무 일도 안 합니다.** `-p` 없이 돌리면 대화형 세션으로
+들어가는데, 워커의 표준 입력은 `/dev/null` 이라 곧바로 **종료 코드 0** 으로 끝납니다.
+`aw list` 에는 `done` 으로 보이지만 실제로 한 일은 없습니다. 무인 실행에서는 `-p` 가
+필수입니다.
+
+**디렉터리마다 한 번 대화형으로 실행해 신뢰 등록**을 해야 합니다. 등록 전에 `-p` 로
+돌리면 `Refusing to run in an untrusted workspace` 와 함께 **종료 코드 1** 로 실패하니
+`aw wait` 가 잡아냅니다. 그 디렉터리에서 `devin` 을 한 번 직접 실행하면 등록됩니다.
+검사를 건너뛰려면 `--respect-workspace-trust false`, 설정 진단은 `devin doctor`.
+
+**표준 입력은 받지 않습니다.** 파일로 프롬프트를 넣으려면 `aw` 의 `-f` 가 아니라
+devin 자신의 `--prompt-file` 을 쓰세요.
+
+```sh
+aw run -n d2 -- devin -p --prompt-file spec.md --model gemini-3-8-flash-high
+```
 
 `--model` 로 다른 모델을 쓰면 컨텍스트가 1M 이므로 한도 경고를 함께 조정하세요.
 
@@ -257,7 +277,7 @@ codex          # 최초 1회 로그인 (또는 CODEX_API_KEY 환경변수)
 ```
 
 `codex exec`가 비대화형 모드이고, **프롬프트를 stdin 으로 받을 수 있습니다**(`-`).
-네 에이전트 중 유일하게 `aw`의 `-f`를 그대로 쓸 수 있어 127KB 인자 제한을 피합니다.
+`claude`, `agy` 와 마찬가지로 `aw` 의 `-f` 를 그대로 쓸 수 있습니다.
 
 ```sh
 aw run -n x1 -- codex exec --json "테스트를 추가해줘"
@@ -266,8 +286,7 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 
 출력은 JSONL(줄마다 JSON 이벤트)이라 `--field` 대신 `aw result x1 | tail -1` 처럼 쓰세요.
 
-> 이 컴퓨터에 codex 는 설치돼 있지 않아 **문서 기준으로만** 적었습니다.
-> 나머지 셋은 실제로 돌려 확인했습니다.
+> 네 에이전트 모두 실제로 돌려 확인했습니다 (379KB 파일 입력 포함).
 
 ### 워커로 쓸 수 없는 것
 
@@ -285,8 +304,17 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 | 프롬프트 크기 | 방법 |
 | --- | --- |
 | ~127KB 이하 | `-- agy -p="$(cat spec.md)"` 그대로 (특수문자까지 그대로 전달됩니다) |
-| 그보다 크면 | 파일을 그대로 두고 짧은 프롬프트로 가리키기: `-- agy -p='spec.md 의 지시를 따라라'` |
-| 표준 입력을 받는 에이전트 | `aw run -f spec.md -- <명령>` |
+| 그보다 크면 | 아래 파일 입력을 쓰세요. 크기 제한이 없습니다. |
+
+파일로 프롬프트를 넣는 법은 에이전트마다 다릅니다. 셋은 표준 입력(`-f`)을 받고,
+`devin` 만 자기 옵션을 씁니다.
+
+| 에이전트 | 명령 |
+| --- | --- |
+| `claude` | `aw run -f spec.md -- claude -p --output-format json` (프롬프트 인자 생략) |
+| `agy` | `aw run -f spec.md -- agy --output-format json --model ...` (`-p` 빼기) |
+| `codex` | `aw run -f spec.md -- codex exec --json -` |
+| `devin` | `aw run -- devin -p --prompt-file spec.md --model ...` (표준 입력 안 받음) |
 
 큰 사양서는 파일로 두고 에이전트가 자기 도구로 읽게 하는 편이 토큰 면에서도 낫습니다.
 필요한 부분만 읽기 때문입니다.

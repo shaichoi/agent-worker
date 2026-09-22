@@ -67,27 +67,33 @@ help_topic() {
 
 claude — Claude Code
   aw run -n c1 -- claude -p --output-format json "작업"
+  aw run -n c2 -f spec.md -- claude -p --output-format json   # 프롬프트 인자 생략
   aw result c1 --field result        # 성공 여부: --field is_error
   계정 분리: aw run --profile work-sub -- claude -p "작업"
 
 agy — Antigravity CLI (Gemini)
   aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='작업'
+  aw run -n a2 -f spec.md -- agy --output-format json --model ...   # -p 를 빼야 함
   aw result a1 --field response      # 상태: --field status (SUCCESS)
   함정: -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
         -p='작업' 형태로 붙이면 플래그 순서와 무관합니다.
-        일반 텍스트는 stdin 으로 못 넣습니다 (-f 대신 인자로).
+        -p 와 stdin 을 같이 주면 -p 가 이기고 stdin 은 무시됩니다.
   모델 목록: agy models
 
 devin
   aw run -n d1 -- devin -p "작업" --model gemini-3-8-flash-high
+  aw run -n d2 -- devin -p --prompt-file spec.md --model ...   # -f 가 아니라 이것
   함정: 프롬프트는 -p 바로 뒤에 와야 합니다.
+        stdin 은 안 받습니다. 파일은 --prompt-file 로 넣습니다.
+        -p 없이 돌리면 대화형으로 들어가 아무것도 안 하고 0 으로 끝납니다.
         디렉터리마다 devin 을 한 번 대화형 실행해 신뢰 등록이 필요합니다.
+        신뢰 안 된 곳에서 -p 는 코드 1 로 실패합니다 (건너뛰려면
+        --respect-workspace-trust false). 진단: devin doctor
   모델 목록: devin models list
 
 codex — OpenAI Codex CLI
   aw run -n x1 -- codex exec --json "작업"
   aw run -n x2 -f spec.md -- codex exec --json -    # stdin 을 - 로 받습니다
-  큰 프롬프트를 넣을 수 있는 유일한 경로입니다 (127KB 인자 제한 회피).
 
 GUI 도구(Antigravity IDE, Cursor)는 창만 열려서 워커로 쓸 수 없습니다.
 T
@@ -114,8 +120,13 @@ T
   aw 가 실행되기 전에 걸리는 문제라 aw 가 대신 처리할 수 없습니다.
 
   ~127KB      -- agy -p="$(cat spec.md)"
-  그 이상     파일을 두고 짧게 가리키기: -p='spec.md 의 지시를 따라라'
-  stdin 지원  aw run -f spec.md -- codex exec --json -
+  그 이상     아래 파일 입력을 쓰세요. 인자 제한에 걸리지 않습니다.
+
+파일로 프롬프트 넣기 (크기 제한 없음)
+  claude   aw run -f spec.md -- claude -p --output-format json
+  agy      aw run -f spec.md -- agy --output-format json --model ...   (-p 빼기)
+  codex    aw run -f spec.md -- codex exec --json -
+  devin    aw run -- devin -p --prompt-file spec.md --model ...   (stdin 안 받음)
 
 컨텍스트 한도
   -f 로 넣는 입력이 에이전트 한도의 80% 를 넘으면 경고합니다 (막지는 않음).

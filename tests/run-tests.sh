@@ -276,6 +276,12 @@ case "$("$AW" help agents)" in *codex*agy*|*agy*codex*) ok "agents 주제가 에
 if "$AW" help nosuchtopic >/dev/null 2>&1; then ng "없는 주제를 받아들임"; else ok "없는 주제는 0이 아닌 코드"; fi
 if "$AW" run --help >/dev/null 2>&1; then ok "aw run --help"; else ng "aw run --help 실패"; fi
 case "$("$AW" help files)" in *"$AW_HOME"*) ok "files 주제가 실제 경로를 보여줌" ;; *) ng "files 주제 경로 이상" ;; esac
+# 파일로 프롬프트 넣는 법은 에이전트마다 다릅니다. 넷 다 적혀 있어야 합니다.
+lim=$("$AW" help limits)
+for want in claude agy codex devin; do
+  case "$lim" in *"$want"*) ok "limits 주제에 $want 파일 입력법 있음" ;; *) ng "limits 주제에 $want 없음" ;; esac
+done
+case "$lim" in *--prompt-file*) ok "devin 은 -f 가 아니라 --prompt-file 이라고 적힘" ;; *) ng "devin 의 --prompt-file 언급 없음" ;; esac
 
 head_ "14. 다른 셸에서 호출"
 for s in bash zsh; do
