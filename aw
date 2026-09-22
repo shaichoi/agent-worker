@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.6.0
+AW_VERSION=0.6.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -99,7 +99,8 @@ T
   cmd       실행한 인자 (한 줄에 하나)
   out / err 표준 출력 / 표준 오류
   exit      종료 코드 (이 파일이 생기면 끝난 것)
-  pid       프로세스 그룹 리더 (aw stop 이 이 그룹을 종료)
+  pid       실행 중인 명령의 pid
+  pgid      프로세스 그룹 (aw stop 이 이 그룹째 종료. setsid 가 있을 때만)
   run.sh    실제로 돌린 스크립트 (그대로 다시 실행 가능)
 
 기계로 읽으려면: aw list --json
@@ -174,6 +175,20 @@ elapsed_str() { # <초>
 }
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
+
+# 워커는 setsid 로 띄우면 자기 프로세스 그룹을 가집니다. 그때는 그룹째 다뤄야
+# 에이전트가 띄운 하위 프로세스(테스트 러너 등)가 고아로 남지 않습니다.
+sig_worker() { # <시그널> <pgid(빈값 가능)> <pid>
+  if [ -n "$2" ] && kill -"$1" "-$2" 2>/dev/null; then return 0; fi
+  kill -"$1" "$3" 2>/dev/null || true
+}
+
+# 그룹이 비었다고 끝난 건 아닙니다. 명령이 스스로 새 그룹으로 빠져나가면
+# (setsid 를 부르거나 데몬화하면) 그룹은 비고 명령만 남습니다. 둘 다 봅니다.
+worker_alive() { # <pgid(빈값 가능)> <pid>
+  [ -n "$1" ] && kill -0 "-$1" 2>/dev/null && return 0
+  pid_alive "$2"
+}
 
 # running | done | failed | stopped | lost
 state_of() { # <워커디렉터리>
@@ -430,6 +445,10 @@ cmd_run() {
     fi
   fi
 
+  # setsid 가 있으면 워커를 새 프로세스 그룹의 리더로 띄울 수 있습니다.
+  leader=0
+  command -v setsid >/dev/null 2>&1 && leader=1
+
   # 실행 스크립트 만들기 (인자를 따옴표로 보존)
   {
     printf '%s\n' '#!/bin/sh'
@@ -445,6 +464,9 @@ cmd_run() {
   # exec 는 종료 코드를 남길 수 없으므로 한 겹 더 감쌉니다.
   {
     printf '%s\n' '#!/bin/sh'
+    # setsid 로 띄우면 이 스크립트가 세션/그룹 리더라 $$ 가 곧 PGID 입니다.
+    # nohup 폴백은 새 그룹을 만들지 않으므로(= aw 자신의 그룹) 남기지 않습니다.
+    [ "$leader" -eq 1 ] && printf 'printf "%%s\\n" "$$" > %s/pgid\n' "$(shquote "$wd")"
     printf 'sh %s\n' "$(shquote "$wd/launch.sh")"
     printf 'code=$?\n'
     printf 'printf "%%s\\n" "$code" > %s/exit.tmp\n' "$(shquote "$wd")"
@@ -484,7 +506,7 @@ cmd_run() {
   fi
 
   # 셸에서 떼어내 실행 (대화형 셸의 작업 목록에 남지 않게)
-  if command -v setsid >/dev/null 2>&1; then
+  if [ "$leader" -eq 1 ]; then
     ( setsid sh "$wd/run.sh" </dev/null >/dev/null 2>&1 & )
   else
     ( nohup sh "$wd/run.sh" </dev/null >/dev/null 2>&1 & )
@@ -648,11 +670,12 @@ cmd_stop() {
     d=$(wdir "$n")
     if [ -f "$d/exit" ]; then say "$n: 이미 끝났습니다."; continue; fi
     p=$(cat "$d/pid" 2>/dev/null || printf '')
-    if [ -z "$p" ]; then say "$n: 프로세스를 찾을 수 없습니다."; continue; fi
-    kill -TERM "-$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null || true
+    g=$(cat "$d/pgid" 2>/dev/null || printf '')
+    if [ -z "$p" ] && [ -z "$g" ]; then say "$n: 프로세스를 찾을 수 없습니다."; continue; fi
+    sig_worker TERM "$g" "$p"
     i=0
-    while [ "$i" -lt 10 ] && pid_alive "$p"; do i=$((i + 1)); sleep 0.3 2>/dev/null || sleep 1; done
-    pid_alive "$p" && { kill -KILL "-$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null || true; }
+    while [ "$i" -lt 10 ] && worker_alive "$g" "$p"; do i=$((i + 1)); sleep 0.3 2>/dev/null || sleep 1; done
+    worker_alive "$g" "$p" && sig_worker KILL "$g" "$p"
     printf 'stopped=1\n' >> "$d/meta"
     [ -f "$d/exit" ] || printf '143\n' > "$d/exit"
     [ -f "$d/finished" ] || now > "$d/finished"

@@ -59,6 +59,41 @@ check "stop 후 상태 stopped" stopped "$state"
 pid=$(cat "$AW_HOME/workers/longjob/pid" 2>/dev/null)
 if kill -0 "$pid" 2>/dev/null; then ng "stop 했는데 프로세스가 살아 있음"; else ok "프로세스가 실제로 죽음"; fi
 
+# stop 은 프로세스 그룹째 끊어야 합니다. 에이전트가 띄운 하위 프로세스(테스트
+# 러너 등)가 고아로 남으면 워커는 사라졌는데 일은 계속 도는 상태가 됩니다.
+# pgid 에 기대지 않고, 실제로 띄운 자식 pid 가 죽었는지로 확인합니다.
+"$AW" run -n withkids -- sh -c 'sleep 313 & sleep 313 & wait' >/dev/null 2>&1
+sleep 1
+wpid=$(cat "$AW_HOME/workers/withkids/pid" 2>/dev/null || printf '')
+kids=$(ps -eo pid=,ppid= | awk -v p="$wpid" '$2==p {print $1}')
+nkids=$(printf '%s\n' "$kids" | grep -c '[0-9]')
+if [ "$nkids" -ge 2 ]; then ok "하위 프로세스가 실제로 떠 있음 ($nkids)"; else ng "하위 프로세스가 안 떴음 ($nkids)"; fi
+"$AW" stop withkids >/dev/null 2>&1
+sleep 1
+alive=0
+for k in $kids; do kill -0 "$k" 2>/dev/null && alive=$((alive+1)); done
+check "stop 이 하위 프로세스까지 정리 (고아 없음)" 0 "$alive"
+state=$("$AW" list --json | sed -n 's/.*"name":"withkids","state":"\([a-z]*\)".*/\1/p')
+check "하위 프로세스까지 죽여도 상태는 stopped" stopped "$state"
+if command -v setsid >/dev/null 2>&1; then
+  gpid=$(cat "$AW_HOME/workers/withkids/pgid" 2>/dev/null || printf '')
+  if [ -n "$gpid" ]; then ok "setsid 로 띄우면 pgid 를 남김"; else ng "pgid 파일이 없음"; fi
+
+  # 명령이 스스로 새 그룹으로 빠져나가면 워커 그룹은 비어 버립니다.
+  # 그룹만 보고 "끝났다" 판정하면 명령이 살아남은 채 stopped 로 기록됩니다.
+  "$AW" run -n breakout -- setsid sh -c 'sleep 300' >/dev/null 2>&1
+  sleep 1
+  bpid=$(cat "$AW_HOME/workers/breakout/pid" 2>/dev/null || printf '')
+  "$AW" stop breakout >/dev/null 2>&1
+  sleep 1
+  if [ -n "$bpid" ] && kill -0 "$bpid" 2>/dev/null; then
+    ng "명령이 제 그룹으로 빠져나가면 stop 이 놓침"
+    kill -KILL "$bpid" 2>/dev/null || true
+  else
+    ok "제 그룹으로 빠져나간 명령도 stop 이 정리"
+  fi
+fi
+
 head_ "4. 표준 입력"
 "$AW" run -n stdin-default -- cat >/dev/null 2>&1
 "$AW" wait stdin-default --timeout 15 >/dev/null 2>&1
