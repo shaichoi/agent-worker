@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.8.0
+AW_VERSION=0.8.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -1058,16 +1058,19 @@ skill_readers() { # <스킬 폴더>
 
 skill_put() { # <스킬 폴더>
   sp_dest="$1/agent-worker"
-  case "$(skill_state "$sp_dest/SKILL.md")" in
+  sp_state=$(skill_state "$sp_dest/SKILL.md")
+  case "$sp_state" in
     '남의 것') warn "  건너뜀: $(tilde "$sp_dest")  (같은 이름의 다른 스킬이 있습니다)"; return 0 ;;
     '최신')    say "  이미 최신: $(tilde "$sp_dest")"; return 0 ;;
   esac
-  if [ "$sk_dry" -eq 1 ]; then say "  넣을 곳: $(tilde "$sp_dest")/SKILL.md"; return 0; fi
+  sp_verb='넣음'; sp_plan='넣을 곳'
+  [ "$sp_state" = '옛 버전' ] && { sp_verb='새 버전으로 바꿈'; sp_plan='새 버전으로 바꿀 곳'; }
+  if [ "$sk_dry" -eq 1 ]; then say "  $sp_plan: $(tilde "$sp_dest")/SKILL.md"; return 0; fi
   mkdir -p "$sp_dest" || die "폴더를 만들 수 없습니다: $sp_dest"
   skill_text > "$sp_dest/SKILL.md.new" || die "스킬을 쓸 수 없습니다: $sp_dest"
   chmod 644 "$sp_dest/SKILL.md.new"
   mv "$sp_dest/SKILL.md.new" "$sp_dest/SKILL.md"
-  say "  넣음: $(tilde "$sp_dest")/SKILL.md"
+  say "  $sp_verb: $(tilde "$sp_dest")/SKILL.md"
   sk_changed=1
 }
 
@@ -1087,10 +1090,12 @@ skill_del() { # <스킬 폴더>
 
 # 인자로 받은 에이전트 이름을 검사해 sk_names 에 담고 --dry-run 을 챙깁니다.
 skill_args() {
-  sk_dry=0; sk_names=''
+  sk_dry=0; sk_ask=0; sk_quiet=0; sk_names=''
   for sa in "$@"; do
     case "$sa" in
       --dry-run) sk_dry=1 ;;
+      -q | --quiet) sk_quiet=1 ;;
+      --ask) sk_ask=1 ;;
       -*) die "알 수 없는 옵션: $sa" ;;
       *) skill_root "$sa" >/dev/null \
            || die "스킬을 모르는 에이전트입니다: $sa   (쓸 수 있는 것: $(skill_agent_list))"
@@ -1126,9 +1131,28 @@ skill_status() {
     say "  devin 은 ~/.agents 와 ~/.claude 를 둘 다 읽어 이 스킬이 두 번 보입니다 (충돌은 없음)."
   fi
   say ""
-  say "  넣기: aw skill install [에이전트...]   (이름을 빼면 이 컴퓨터에 있는 에이전트 전부)"
+  say "  넣기: aw skill install [에이전트...]   (이름을 빼면 이 컴퓨터에 있는 에이전트 전부, --ask 면 하나씩 물음)"
+  say "  갱신: aw skill update                  (이미 넣은 스킬만 이 aw 의 내용으로)"
   say "  빼기: aw skill remove [에이전트...]    (이름을 빼면 aw 가 넣은 것 전부)"
   say "  내용: aw skill show"
+}
+
+# 새로 넣을 때만 묻습니다 (기본 아니오). 이미 넣은 우리 스킬(옛 버전)은 사용자가 전에
+# 고른 것이므로 묻지 않고 새 버전으로 바꿉니다.
+skill_ask_put() { # <스킬 폴더>
+  if [ "$(skill_state "$1/agent-worker/SKILL.md")" = '없음' ]; then
+    sq_who=$(skill_readers "$1")
+    if ! ask "  ${sq_who:-$(tilde "$1")} 에 스킬을 넣을까요? ($(tilde "$1")/agent-worker)" n; then
+      say "  넣지 않음: $(tilde "$1")/agent-worker"
+      return 0
+    fi
+  fi
+  skill_put "$1"
+}
+
+skill_refresh() { # <스킬 폴더>
+  [ "$(skill_state "$1/agent-worker/SKILL.md")" = '옛 버전' ] && skill_put "$1"
+  return 0
 }
 
 skill_install() {
@@ -1142,8 +1166,24 @@ skill_install() {
     fi
   fi
   sk_changed=0
-  skill_each_root skill_put
+  if [ "$sk_ask" -eq 1 ] && [ "$sk_dry" -eq 0 ]; then
+    [ -t 0 ] || die "--ask 는 터미널에서만 물어볼 수 있습니다. 에이전트 이름을 주거나 aw setup 을 쓰세요."
+    skill_each_root skill_ask_put
+  else
+    skill_each_root skill_put
+  fi
   [ "$sk_changed" -eq 1 ] && say "  에이전트를 새로 시작하면 agent-worker 스킬이 보입니다."
+  return 0
+}
+
+# 이미 넣은 우리 스킬만 이 aw 의 내용으로 바꿉니다. 새로 넣지는 않습니다.
+skill_update() {
+  skill_args "$@"
+  [ -n "$sk_names" ] || sk_names=$(skill_agent_list)
+  sk_changed=0
+  skill_each_root skill_refresh
+  [ "$sk_changed" -eq 1 ] || [ "$sk_dry" -eq 1 ] || [ "$sk_quiet" -eq 1 ] \
+    || say "  바꿀 스킬이 없습니다 (넣은 것이 없거나 모두 최신)."
   return 0
 }
 
@@ -1161,8 +1201,9 @@ cmd_skill() {
     '' | status) skill_status ;;
     show) skill_text ;;
     install | add) shift; skill_install "$@" ;;
+    update) shift; skill_update "$@" ;;
     remove | rm) shift; skill_remove "$@" ;;
-    -h | --help) say "사용법: aw skill [status | show | install [에이전트...] | remove [에이전트...]] [--dry-run]"
+    -h | --help) say "사용법: aw skill [status | show | install [에이전트...] [--ask] | update | remove [에이전트...]] [--dry-run]"
                  say "에이전트: $(skill_agent_list)" ;;
     *) die "알 수 없는 하위 명령: $1   (aw skill --help)" ;;
   esac
@@ -1228,12 +1269,13 @@ cmd_setup() {
     st_seen="$st_seen|$st_r|"
     st_s=$(skill_state "$st_r/agent-worker/SKILL.md")
     say "  $(padw 14 "$(skill_readers "$st_r")")$(padw 9 "$st_s")$(tilde "$st_r/agent-worker")"
+    # 새로 넣는 건 기본 아니오, 이미 넣은 것을 새 버전으로 바꾸는 건 기본 예입니다.
     case "$st_s" in
       '없음' | '옛 버전')
         st_need=1
-        st_q='넣을까요?'
-        [ "$st_s" = '옛 버전' ] && st_q='최신으로 바꿀까요?'
-        if [ "$st_tty" -eq 1 ] && ask "    $st_q" y; then skill_put "$st_r" | sed 's/^/  /'; fi ;;
+        st_q='넣을까요?'; st_def=n
+        [ "$st_s" = '옛 버전' ] && { st_q='최신으로 바꿀까요?'; st_def=y; }
+        if [ "$st_tty" -eq 1 ] && ask "    $st_q" "$st_def"; then skill_put "$st_r" | sed 's/^/  /'; fi ;;
     esac
   done
   if [ "$st_any" -eq 0 ]; then

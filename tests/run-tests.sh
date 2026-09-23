@@ -474,19 +474,41 @@ if [ -f "$IH/.agents/skills/agent-worker/references/mine.md" ]; then ok "사용�
 awh skill remove >/dev/null 2>&1
 if [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then ok "aw skill remove 는 남의 스킬을 남김"; else ng "남의 스킬을 지움"; fi
 
-# install.sh / uninstall.sh 는 aw skill 을 씀
+# aw skill update: 이미 넣은 것만 새 버전으로, 새로 넣지는 않음
+fresh; mkdir -p "$IH/.claude"; fake agy
+awh skill install claude >/dev/null 2>&1
+printf '추가된 줄\n' >> "$IH/.claude/skills/agent-worker/SKILL.md"
+awh skill update >/dev/null 2>&1
+check "update 가 옛 버전을 최신으로" 최신 "$(state_of_agent claude)"
+check "update 는 없는 곳에 새로 넣지 않음" 없음 "$(state_of_agent agy)"
+if awh skill install --ask < /dev/null >/dev/null 2>&1; then ng "터미널이 아닌데 --ask 가 통과"; else ok "--ask 는 터미널이 아니면 거절"; fi
+
+# install.sh: 스킬은 묻고 넣음. 터미널이 없으면 새로 넣지 않고, 이미 넣은 것만 갱신
 inst() { # [install.sh 옵션...]
   (cd "$SRC_DIR" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
      PATH="$IH/fakebin:/usr/bin:/bin" sh ./install.sh "$@" >/dev/null 2>&1)
 }
 fresh; mkdir -p "$IH/.claude"; fake agy
 inst
+if [ -e "$IH/.claude/skills" ] || [ -e "$IH/.gemini" ]; then ng "터미널이 아닌데 묻지 않고 스킬을 넣음"; else ok "install.sh 는 터미널이 아니면 스킬을 새로 넣지 않음"; fi
+if [ -x "$IH/bin/aw" ]; then ok "스킬을 안 넣어도 aw 는 설치됨"; else ng "aw 가 설치되지 않음"; fi
+inst --skill
 if [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ] && [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ]; then
-  ok "install.sh 가 있는 에이전트마다 스킬을 넣음"
-else ng "install.sh 가 스킬을 빠뜨림"; fi
-fresh; mkdir -p "$IH/.claude"
+  ok "install.sh --skill 은 있는 에이전트마다 넣음"
+else ng "install.sh --skill 이 빠뜨림"; fi
+fresh; mkdir -p "$IH/.claude"; fake agy
+inst --skill=agy
+if [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ] && [ ! -e "$IH/.claude/skills" ]; then
+  ok "install.sh --skill=agy 는 agy 에만 넣음"
+else ng "install.sh --skill=agy 가 고른 대로 안 넣음"; fi
+printf '추가된 줄\n' >> "$IH/.gemini/config/skills/agent-worker/SKILL.md"
+inst
+check "다시 설치하면 이미 넣은 스킬은 묻지 않고 새 버전으로" 최신 "$(state_of_agent agy)"
+if [ -e "$IH/.claude/skills" ]; then ng "다시 설치하며 안 고른 claude 에 넣음"; else ok "다시 설치해도 안 고른 곳엔 넣지 않음"; fi
+fresh; mkdir -p "$IH/.claude/skills/agent-worker"
+awh skill install claude >/dev/null 2>&1; printf '추가된 줄\n' >> "$IH/.claude/skills/agent-worker/SKILL.md"
 inst --no-skill
-if [ -e "$IH/.claude/skills" ]; then ng "--no-skill 인데 넣어 버림"; else ok "install.sh --no-skill 은 넣지 않음"; fi
+check "install.sh --no-skill 은 옛 버전도 건드리지 않음" "옛 버전" "$(state_of_agent claude)"
 fresh; mkdir -p "$IH/.claude"
 inst --dry-run
 if [ -e "$IH/.claude/skills" ] || [ -e "$IH/bin/aw" ] || [ -e "$IH/.local/share/agent-worker" ]; then
@@ -494,7 +516,7 @@ if [ -e "$IH/.claude/skills" ] || [ -e "$IH/bin/aw" ] || [ -e "$IH/.local/share/
 else ok "install.sh --dry-run 은 아무것도 만들지 않음"; fi
 fresh; mkdir -p "$IH/.claude" "$IH/.gemini/config/skills/agent-worker"; fake codex
 printf -- '---\nname: agent-worker\ndescription: 남의 것\n---\n' > "$IH/.gemini/config/skills/agent-worker/SKILL.md"
-inst
+inst --skill
 (env HOME="$IH" AW_PREFIX="$IH/bin" AW_HOME="$IH/awhome" PATH="/usr/bin:/bin" sh "$SRC_DIR/uninstall.sh" >/dev/null 2>&1)
 if [ -e "$IH/.claude/skills/agent-worker" ] || [ -e "$IH/.agents/skills/agent-worker" ]; then
   ng "uninstall.sh 가 우리 스킬을 남김"
@@ -504,19 +526,29 @@ if [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ]; then ok "uninstall.
 # 스킬을 못 넣어도(쓰기 권한 없음) aw 설치는 끝까지 가야 합니다. root 는 권한을 무시해 건너뜁니다.
 if [ "$(id -u)" -ne 0 ]; then
   fresh; mkdir -p "$IH/.claude"; chmod 555 "$IH/.claude"
-  inst; rc=$?
+  inst --skill; rc=$?
   chmod 755 "$IH/.claude"
   if [ "$rc" -eq 0 ] && [ -x "$IH/bin/aw" ]; then ok "스킬을 못 넣어도 aw 설치는 끝까지 감"; else ng "스킬 실패가 설치를 깨뜨림 (코드 $rc)"; fi
 fi
 
 # curl ... | sh 경로: 옆에 aw 가 없으면 받아오고, 스킬은 그 aw 안에 들어 있음 (file:// 로 흉내)
 if command -v curl >/dev/null 2>&1; then
+  pipe_inst() { # [install.sh 옵션...]
+    (cd "$IH/empty" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
+       PATH="$IH/fakebin:/usr/bin:/bin" AW_RAW_URL="file://$AW" sh -s -- "$@" < "$SRC_DIR/install.sh" >/dev/null 2>&1)
+  }
   fresh; mkdir -p "$IH/empty" "$IH/.claude"
-  (cd "$IH/empty" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
-     PATH="$IH/fakebin:/usr/bin:/bin" AW_RAW_URL="file://$AW" sh < "$SRC_DIR/install.sh" >/dev/null 2>&1)
-  if [ -x "$IH/bin/aw" ] && [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then
-    ok "파이프 설치도 aw 와 스킬을 함께 넣음"
-  else ng "파이프 설치에서 빠진 것이 있음"; fi
+  pipe_inst
+  if [ -x "$IH/bin/aw" ] && [ ! -e "$IH/.claude/skills" ]; then ok "파이프 설치는 aw 만 넣고 스킬은 묻지 않고 넣지 않음"; else ng "파이프 설치 결과가 이상함"; fi
+  pipe_inst --skill
+  if [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then ok "파이프 설치도 --skill 이면 스킬을 넣음"; else ng "파이프 설치 --skill 이 안 넣음"; fi
+  if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
+    # 파이프로 받은 스크립트도 터미널(/dev/tty)로 물어봄: claude 는 y, agy 는 그냥 Enter (기본 아니오)
+    fresh; mkdir -p "$IH/empty" "$IH/.claude"; fake agy
+    printf 'y\n\n' | script -qec "cd '$IH/empty' && env -u AW_DEFAULTS HOME='$IH' XDG_CONFIG_HOME='$IH/.config' AW_PREFIX='$IH/bin' PATH='$IH/fakebin:/usr/bin:/bin' AW_RAW_URL='file://$AW' sh < '$SRC_DIR/install.sh'" /dev/null >/dev/null 2>&1
+    if [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then ok "파이프 설치에서 y 로 고른 곳엔 넣음"; else ng "y 라 했는데 안 넣음"; fi
+    if [ -e "$IH/.gemini" ]; then ng "Enter(기본 아니오)인데 넣음"; else ok "그냥 Enter 면 넣지 않음 (기본 아니오)"; fi
+  fi
 else
   echo "  (curl 없음: 파이프 설치 시험 생략)"
 fi
@@ -537,7 +569,12 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
   fresh; fake codex
   printf 'y\n\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' '$AW' setup" /dev/null >/dev/null 2>&1
   if [ -f "$IH/defaults" ]; then ok "권한 옵션은 y 면 켬"; else ng "y 라 했는데 권한 옵션을 안 켬"; fi
-  if [ -f "$IH/.agents/skills/agent-worker/SKILL.md" ]; then ok "스킬은 그냥 Enter 면 넣음 (기본 예)"; else ng "Enter 인데 스킬을 안 넣음"; fi
+  if [ -e "$IH/.agents" ]; then ng "Enter(기본 아니오)인데 스킬을 넣음"; else ok "새 스킬은 그냥 Enter 면 넣지 않음 (기본 아니오)"; fi
+  # 이미 넣은 스킬을 새 버전으로 바꾸는 건 기본 예
+  fresh; fake codex
+  awh skill install >/dev/null 2>&1; printf '추가된 줄\n' >> "$IH/.agents/skills/agent-worker/SKILL.md"
+  printf '\n\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' '$AW' setup" /dev/null >/dev/null 2>&1
+  check "옛 버전은 그냥 Enter 면 최신으로 (기본 예)" 최신 "$(state_of_agent codex)"
 else
   echo "  (script 없음: 대화형 점검 시험 생략)"
 fi

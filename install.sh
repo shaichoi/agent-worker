@@ -2,7 +2,7 @@
 # aw 설치 — 실행 파일 하나를 PATH 에 놓습니다.
 #
 # 셸 설정 파일을 건드리지 않습니다. rc 등록도, source 도 필요 없습니다.
-# 에이전트들이 aw 를 쓸 수 있게 스킬(SKILL.md)도 각자의 스킬 폴더에 넣습니다.
+# 에이전트들이 aw 를 쓸 수 있게 하는 스킬(SKILL.md)은 묻고 넣습니다 (기본 아니오).
 # 여러 번 실행해도 안전합니다.
 
 set -eu
@@ -11,7 +11,8 @@ RAW_URL="${AW_RAW_URL:-https://raw.githubusercontent.com/shaichoi/agent-worker/m
 PREFIX="${AW_PREFIX:-$HOME/.local/bin}"
 DRY_RUN=0
 WITH_DEFAULTS=1
-WITH_SKILL=1
+SKILL_MODE=ask     # ask | all | list | none
+SKILL_NAMES=''
 
 usage() {
   cat <<'USAGE'
@@ -19,12 +20,15 @@ usage() {
 
   --prefix DIR   설치 위치 (기본: ~/.local/bin)
   --no-defaults  무인 실행용 권한 옵션을 켜지 않음 (아래 설명 참고)
-  --no-skill     에이전트용 스킬을 넣지 않음
+  --skill        찾은 에이전트 전부에 스킬을 묻지 않고 넣음
+  --skill=A,B    고른 에이전트에만 넣음 (claude, codex, devin, agy, hermes)
+  --no-skill     스킬은 아예 건드리지 않음
   --dry-run      무엇을 할지 보여주기만 함
   -h, --help     이 도움말
 
-스킬은 이 컴퓨터에 있는 에이전트(claude, codex, devin, agy, hermes)의 스킬
-폴더에 넣습니다. 나중에 보거나 바꾸려면 aw skill, 설치 전반 점검은 aw setup.
+스킬은 옵션이 없으면 터미널에서 에이전트마다 묻고 넣습니다 (기본 아니오).
+터미널이 없으면(스크립트, CI) 새로 넣지 않습니다. 이미 넣어 둔 스킬은 새 버전으로
+바꿉니다. 나중에 보거나 바꾸려면 aw skill, 설치 전반 점검은 aw setup.
 
 워커 기록(~/.local/share/agent-worker)은 설치·제거와 무관하게 유지됩니다.
 USAGE
@@ -35,7 +39,9 @@ while [ $# -gt 0 ]; do
     --prefix)   PREFIX="${2:?--prefix 에 경로가 필요합니다}"; shift 2 ;;
     --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
     --no-defaults) WITH_DEFAULTS=0; shift ;;
-    --no-skill) WITH_SKILL=0; shift ;;
+    --skill)    SKILL_MODE=all; shift ;;
+    --skill=*)  SKILL_MODE=list; SKILL_NAMES=$(printf '%s' "${1#--skill=}" | tr ',' ' '); shift ;;
+    --no-skill) SKILL_MODE=none; shift ;;
     --dry-run)  DRY_RUN=1; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) printf '알 수 없는 옵션: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -94,17 +100,37 @@ fi
 
 say "== 4. 에이전트 스킬"
 # 스킬 내용은 aw 안에 있습니다. 어느 에이전트가 어느 폴더를 읽는지도 aw 가 압니다 (aw skill).
-if [ "$WITH_SKILL" -eq 0 ]; then
-  say "  건너뜀 (--no-skill). 나중에 넣으려면: aw skill install"
-elif [ "$DRY_RUN" -eq 1 ]; then
-  # aw 는 시작할 때 워커 기록 폴더를 만듭니다. dry-run 에서는 임시 폴더로 돌립니다.
-  DRY_HOME=$(mktemp -d "${TMPDIR:-/tmp}/aw-dry.XXXXXX")
-  AW_HOME="$DRY_HOME" sh "$SRC" skill install --dry-run
-  rm -rf "$DRY_HOME"
-else
-  # 스킬은 덤입니다. 못 넣어도 aw 설치는 끝까지 갑니다.
-  "$PREFIX/aw" skill install || warn "  스킬을 넣지 못했습니다. 나중에: aw skill install"
-fi
+# 스킬은 에이전트가 읽는 지시문이라 묻지 않고 넣지 않습니다. 스킬은 덤이라 실패해도 설치는 끝까지 갑니다.
+skill_cmd() { # <aw skill 인자...>
+  if [ "$DRY_RUN" -eq 1 ]; then
+    # aw 는 시작할 때 워커 기록 폴더를 만듭니다. dry-run 에서는 임시 폴더로 돌립니다.
+    DRY_HOME=$(mktemp -d "${TMPDIR:-/tmp}/aw-dry.XXXXXX")
+    AW_HOME="$DRY_HOME" sh "$SRC" skill "$@" --dry-run
+    rm -rf "$DRY_HOME"
+  else
+    "$PREFIX/aw" skill "$@"
+  fi
+}
+# curl ... | sh 로 돌면 표준 입력은 이 스크립트라서, 물을 때는 /dev/tty 로 받습니다.
+can_ask() { [ -t 1 ] && (: < /dev/tty) 2>/dev/null; }
+case "$SKILL_MODE" in
+  none)
+    say "  건너뜀 (--no-skill). 나중에 넣으려면: aw skill install" ;;
+  all | list)
+    # shellcheck disable=SC2086  # 이름 목록은 일부러 쪼갭니다
+    skill_cmd install $SKILL_NAMES || warn "  스킬을 넣지 못했습니다. 나중에: aw skill install" ;;
+  ask)
+    skill_cmd update --quiet || warn "  스킬을 바꾸지 못했습니다. 나중에: aw skill update"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      say "  (실제 설치 때는 새로 넣을 곳마다 묻습니다)"
+      skill_cmd install || true
+    elif can_ask; then
+      skill_cmd install --ask < /dev/tty || warn "  스킬을 넣지 못했습니다. 나중에: aw skill install"
+    else
+      say "  새로 넣지 않았습니다 (터미널이 아니라 물어볼 수 없음)."
+      say "  넣으려면: aw skill install [에이전트...]   또는 설치 때 --skill"
+    fi ;;
+esac
 
 say "== 5. PATH 확인"
 case ":$PATH:" in
