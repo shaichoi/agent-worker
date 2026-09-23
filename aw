@@ -103,7 +103,7 @@ T
     defaults) cmd_defaults ;;
     files) printf '워커 기록: %s/<이름>/\n\n' "$AW_WORKERS"; cat <<'T'
 
-  meta      이름, 디렉터리, 시작 시각, worktree, 꼬리표, 토큰 추정치
+  meta      이름, 디렉터리, 시작 시각, worktree, 꼬리표, 토큰 추정치, 세션 ID
   cmd       실행한 인자 (한 줄에 하나)
   out / err 표준 출력 / 표준 오류
   exit      종료 코드 (이 파일이 생기면 끝난 것)
@@ -246,6 +246,29 @@ json_str() { # <키>  (JSON 은 표준 입력)
 # 우리가 만드는 JSON 에 넣을 값 이스케이프
 json_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g'
+}
+
+# ---------------------------------------------------------------- 세션 이어하기
+
+# 에이전트들은 대화를 이어갈 수 있게 세션 ID 를 내놓습니다. 이름만 제각각입니다.
+# 끝난 워커의 출력에서 한 번 찾아 meta 에 적어 두고, 다음부터는 그걸 씁니다.
+# 텍스트만 내놓는 에이전트(devin)는 찾을 게 없고, 그건 빈 값으로 둡니다.
+session_keys() { printf '%s\n' session_id conversation_id thread_id; }
+
+session_of() { # <워커디렉터리>
+  d=$1
+  sess=$(meta_get "$d" session)
+  if [ -z "$sess" ] && [ -f "$d/exit" ] && [ -s "$d/out" ]; then
+    for k in $(session_keys); do
+      sess=$(json_str "$k" < "$d/out")
+      if [ -n "$sess" ]; then
+        printf 'session=%s\n' "$sess" >> "$d/meta"
+        break
+      fi
+    done
+  fi
+  printf '%s' "$sess"
+  return 0
 }
 
 # ---------------------------------------------------------------- 에이전트별 기본 옵션
@@ -569,9 +592,10 @@ cmd_list() {
       code=$(cat "$d/exit" 2>/dev/null || printf '')
       [ "$first" -eq 1 ] || printf ',\n'
       first=0
-      printf '  {"name":"%s","state":"%s","exit":"%s","started":%s,"finished":"%s","dir":"%s","cmd":"%s"}' \
+      printf '  {"name":"%s","state":"%s","exit":"%s","started":%s,"finished":"%s","dir":"%s","session":"%s","cmd":"%s"}' \
         "$(json_escape "$(meta_get "$d" name)")" "$st" "$code" "$started" "$fin" \
-        "$(json_escape "$(meta_get "$d" dir)")" "$(json_escape "$(meta_get "$d" cmdline)")"
+        "$(json_escape "$(meta_get "$d" dir)")" "$(json_escape "$(session_of "$d")")" \
+        "$(json_escape "$(meta_get "$d" cmdline)")"
     done
     printf '\n]\n'
     return 0
@@ -608,6 +632,8 @@ cmd_status() {
   [ -n "$(meta_get "$d" worktree)" ] && say "  worktree : $(meta_get "$d" worktree)  (브랜치 $(meta_get "$d" branch))"
   [ -n "$(meta_get "$d" profile)" ]  && say "  프로필   : $(meta_get "$d" profile)"
   [ -n "$(meta_get "$d" tag)" ]      && say "  꼬리표   : $(meta_get "$d" tag)"
+  sess=$(session_of "$d")
+  [ -n "$sess" ] && say "  세션     : $sess"
   say "  경과     : $(elapsed_str $((fin - started)))"
   say "  출력     : $d/out  ($(wc -c < "$d/out" 2>/dev/null || printf 0) bytes)"
   say "  오류     : $d/err  ($(wc -c < "$d/err" 2>/dev/null || printf 0) bytes)"

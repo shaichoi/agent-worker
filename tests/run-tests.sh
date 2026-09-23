@@ -300,5 +300,28 @@ for s in bash zsh; do
   check "$s 에서 호출" 안녕 "$out"
 done
 
+head_ "15. 세션 ID 기록"
+RSTUB="$TMPROOT/rstub"
+mkdir -p "$RSTUB"
+printf '#!/bin/sh\nprintf "{\\"session_id\\":\\"SID1\\",\\"result\\":\\"ok\\"}\\n"\n' > "$RSTUB/claude"
+printf '#!/bin/sh\nprintf "{\\"conversation_id\\":\\"CID1\\"}\\n"\n' > "$RSTUB/agy"
+printf '#!/bin/sh\nprintf "{\\"thread_id\\":\\"TID1\\"}\\n"\n' > "$RSTUB/codex"
+printf '#!/bin/sh\necho 텍스트만\n' > "$RSTUB/devin"
+chmod +x "$RSTUB"/*
+PATH="$RSTUB:$PATH"; export PATH
+"$AW" clean --all >/dev/null 2>&1
+for a in claude:SID1 agy:CID1 codex:TID1; do
+  n=${a%%:*}; want=${a#*:}
+  "$AW" run -n "sess-$n" -- "$n" >/dev/null 2>&1
+  "$AW" wait "sess-$n" >/dev/null 2>&1
+  case "$("$AW" status "sess-$n")" in *"$want"*) ok "$n 의 세션 ID 를 찾음 ($want)" ;; *) ng "$n 의 세션 ID 를 못 찾음" ;; esac
+  check "$n: 한 번 찾으면 meta 에 적어 둠" "$want" "$(sed -n 's/^session=//p' "$AW_HOME/workers/sess-$n/meta")"
+done
+case "$("$AW" list --json)" in *'"session":"SID1"'*) ok "list --json 에 session 필드" ;; *) ng "list --json 에 session 없음" ;; esac
+"$AW" run -n sess-devin -- devin >/dev/null 2>&1
+"$AW" wait sess-devin >/dev/null 2>&1
+check "텍스트만 내놓으면 빈 값" "" "$(sed -n 's/^session=//p' "$AW_HOME/workers/sess-devin/meta")"
+"$AW" clean --all >/dev/null 2>&1
+
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
