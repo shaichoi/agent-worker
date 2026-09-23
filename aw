@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.6.1
+AW_VERSION=0.6.2
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
