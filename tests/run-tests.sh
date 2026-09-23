@@ -120,6 +120,10 @@ check "--env 값의 따옴표와 \$ 가 그대로" "작은'따옴표 \"큰\" \$H
 "$AW" run -n env-many -e 'A=첫 값' -e 'B=둘째 값' -- sh -c 'echo "[$A][$B]"' >/dev/null 2>&1
 "$AW" wait env-many >/dev/null 2>&1
 check "--env 를 여러 번 줘도 각각 온전함" '[첫 값][둘째 값]' "$("$AW" result env-many)"
+# 워커 안의 에이전트가 자기가 워커인지 알 수 있어야 스킬이 중첩을 막을 수 있습니다.
+AW_WORKER='' "$AW" run -n env-worker -- sh -c 'echo "$AW_WORKER"' >/dev/null 2>&1
+"$AW" wait env-worker >/dev/null 2>&1
+check "워커 안에서 AW_WORKER 가 워커 이름" env-worker "$("$AW" result env-worker)"
 # --profile 도 같은 자리에 쌓이므로 경로에 공백이 있으면 함께 깨졌습니다.
 CLAUDE_PROFILE_ROOT='/tmp/공백 있는 경로' "$AW" run -n prof-space2 --profile work -- sh -c 'echo "$CLAUDE_CONFIG_DIR"' >/dev/null 2>&1
 "$AW" wait prof-space2 >/dev/null 2>&1
@@ -400,6 +404,143 @@ if "$AW" resume r-claude >/dev/null 2>&1; then ng "프롬프트 없이 이어함
 if "$AW" resume --help >/dev/null 2>&1; then ok "aw resume --help"; else ng "aw resume --help 실패"; fi
 "$AW" clean --all >/dev/null 2>&1
 unset AW_DEFAULTS
+
+head_ "16. 에이전트 스킬 (aw skill)"
+SK="$SRC_DIR/skills/agent-worker/SKILL.md"
+check "저장소의 SKILL.md 가 aw skill show 와 같음 (다르면: ./aw skill show > skills/agent-worker/SKILL.md)" \
+  "$("$AW" skill show)" "$(cat "$SK")"
+# agentskills.io 규격: name 은 폴더 이름과 같고, description 은 1~1024 자
+fm=$(awk 'NR == 1 && $0 == "---" { on = 1; next } on && $0 == "---" { exit } on' "$SK")
+check "SKILL.md name 이 폴더 이름과 같음" agent-worker "$(printf '%s\n' "$fm" | sed -n 's/^name: //p')"
+desc=$(printf '%s\n' "$fm" | sed -n 's/^description: //p')
+# 글자 수는 로캘과 무관하게 셉니다: UTF-8 이어지는 바이트(0x80~0xBF)를 빼고 셈
+dlen=$(printf '%s' "$desc" | LC_ALL=C tr -d '\200-\277' | wc -c | tr -d ' ')
+if [ "$dlen" -ge 1 ] && [ "$dlen" -le 1024 ]; then ok "description 길이 $dlen 자 (1~1024)"; else ng "description 길이 $dlen 자"; fi
+check "스킬의 version 이 aw 와 같음" "$(sed -n 's/^AW_VERSION=//p' "$AW")" \
+  "$(printf '%s\n' "$fm" | sed -n 's/^  version: "\(.*\)"$/\1/p')"
+if [ "$(wc -l < "$SK")" -lt 500 ]; then ok "SKILL.md 가 500 줄 미만"; else ng "SKILL.md 가 너무 김"; fi
+# 스킬이 넘겨주는 도움말 주제가 실제로 있어야 합니다
+for topic in $(grep -o '`aw help [a-z]*`' "$SK" | sed 's/`aw help \(.*\)`/\1/' | sort -u); do
+  if "$AW" help "$topic" >/dev/null 2>&1; then ok "스킬이 가리키는 aw help $topic 이 있음"; else ng "스킬이 가리키는 aw help $topic 이 없음"; fi
+done
+
+# 에이전트가 있는지는 CLI(PATH) 나 설정 폴더로 봅니다. 실제 PATH 의 에이전트가 끼지 않게
+# 가짜 bin 과 최소 PATH 로 돌립니다.
+IH="$TMPROOT/skillhome"
+fresh() { rm -rf "$IH"; mkdir -p "$IH/fakebin"; }
+fake() { for f in "$@"; do printf '#!/bin/sh\n' > "$IH/fakebin/$f"; chmod +x "$IH/fakebin/$f"; done; }
+awh() { env HOME="$IH" PATH="$IH/fakebin:/usr/bin:/bin" "$AW" "$@"; }
+state_of_agent() { awh skill | awk -v a="$1" '$1 == a { print $3 ($4 == "버전" || $4 == "것" ? " " $4 : "") }'; }
+
+fresh; mkdir -p "$IH/.claude"; fake codex
+awh skill install >/dev/null 2>&1
+check "설치된 claude(설정 폴더)에 넣음" "$("$AW" skill show)" "$(cat "$IH/.claude/skills/agent-worker/SKILL.md" 2>/dev/null)"
+if [ -f "$IH/.agents/skills/agent-worker/SKILL.md" ]; then ok "설치된 codex(CLI)에는 ~/.agents 에 넣음"; else ng "~/.agents 에 없음"; fi
+if [ -e "$IH/.gemini" ] || [ -e "$IH/.hermes" ]; then ng "없는 에이전트 폴더를 만들어 버림"; else ok "없는 에이전트(agy, hermes)는 건드리지 않음"; fi
+if [ -e "$IH/.codex/skills/agent-worker" ]; then ng "~/.codex/skills 에도 넣어 Codex 에 두 번 보임"; else ok "~/.codex/skills 에는 넣지 않음 (중복 방지)"; fi
+check "상태표: claude 최신" 최신 "$(state_of_agent claude)"
+check "상태표: agy 없음" 없음 "$(state_of_agent agy)"
+check "권한이 644" 644 "$(stat -c %a "$IH/.claude/skills/agent-worker/SKILL.md" 2>/dev/null || stat -f %Lp "$IH/.claude/skills/agent-worker/SKILL.md")"
+
+fresh; fake codex devin
+n=$(awh skill install 2>&1 | grep -c 'agents/skills')
+check "codex 와 devin 이 같은 폴더를 쓰면 한 번만 넣음" 1 "$n"
+awh skill install agy >/dev/null 2>&1
+if [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ]; then ok "이름으로 고르면 없는 에이전트(agy)에도 넣음"; else ng "aw skill install agy 가 안 넣음"; fi
+if awh skill install nobody >/dev/null 2>&1; then ng "모르는 에이전트를 받아들임"; else ok "모르는 에이전트는 거절"; fi
+
+printf '추가된 줄\n' >> "$IH/.agents/skills/agent-worker/SKILL.md"
+check "고쳐진 우리 스킬은 옛 버전" "옛 버전" "$(state_of_agent codex)"
+awh skill install >/dev/null 2>&1
+check "다시 넣으면 최신으로" 최신 "$(state_of_agent codex)"
+
+fresh; fake codex
+awh skill install --dry-run >/dev/null 2>&1
+if [ -e "$IH/.agents" ]; then ng "--dry-run 인데 넣어 버림"; else ok "aw skill install --dry-run 은 쓰지 않음"; fi
+fresh
+out=$(awh skill install 2>&1)
+case "$out" in *"찾은 에이전트가 없습니다"*) ok "에이전트가 없으면 알리고 아무것도 안 함" ;; *) ng "에이전트가 없는데: $out" ;; esac
+
+# 같은 이름의 남의 스킬은 덮어쓰지도, 빼지도 않음
+fresh; fake codex; mkdir -p "$IH/.claude/skills/agent-worker"
+printf -- '---\nname: agent-worker\ndescription: 남의 것\n---\n' > "$IH/.claude/skills/agent-worker/SKILL.md"
+awh skill install >/dev/null 2>&1
+check "남의 스킬은 덮어쓰지 않음" "description: 남의 것" "$(sed -n 3p "$IH/.claude/skills/agent-worker/SKILL.md")"
+check "상태표: 남의 것" "남의 것" "$(state_of_agent claude)"
+mkdir -p "$IH/.agents/skills/agent-worker/references"; : > "$IH/.agents/skills/agent-worker/references/mine.md"
+awh skill remove codex >/dev/null 2>&1
+if [ -e "$IH/.agents/skills/agent-worker/SKILL.md" ]; then ng "aw skill remove codex 가 안 뺌"; else ok "aw skill remove 가 우리 스킬을 뺌"; fi
+if [ -f "$IH/.agents/skills/agent-worker/references/mine.md" ]; then ok "사용자가 둔 다른 파일은 남김"; else ng "사용자 파일까지 지움"; fi
+awh skill remove >/dev/null 2>&1
+if [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then ok "aw skill remove 는 남의 스킬을 남김"; else ng "남의 스킬을 지움"; fi
+
+# install.sh / uninstall.sh 는 aw skill 을 씀
+inst() { # [install.sh 옵션...]
+  (cd "$SRC_DIR" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
+     PATH="$IH/fakebin:/usr/bin:/bin" sh ./install.sh "$@" >/dev/null 2>&1)
+}
+fresh; mkdir -p "$IH/.claude"; fake agy
+inst
+if [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ] && [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ]; then
+  ok "install.sh 가 있는 에이전트마다 스킬을 넣음"
+else ng "install.sh 가 스킬을 빠뜨림"; fi
+fresh; mkdir -p "$IH/.claude"
+inst --no-skill
+if [ -e "$IH/.claude/skills" ]; then ng "--no-skill 인데 넣어 버림"; else ok "install.sh --no-skill 은 넣지 않음"; fi
+fresh; mkdir -p "$IH/.claude"
+inst --dry-run
+if [ -e "$IH/.claude/skills" ] || [ -e "$IH/bin/aw" ] || [ -e "$IH/.local/share/agent-worker" ]; then
+  ng "install.sh --dry-run 이 무언가를 만듦"
+else ok "install.sh --dry-run 은 아무것도 만들지 않음"; fi
+fresh; mkdir -p "$IH/.claude" "$IH/.gemini/config/skills/agent-worker"; fake codex
+printf -- '---\nname: agent-worker\ndescription: 남의 것\n---\n' > "$IH/.gemini/config/skills/agent-worker/SKILL.md"
+inst
+(env HOME="$IH" AW_PREFIX="$IH/bin" AW_HOME="$IH/awhome" PATH="/usr/bin:/bin" sh "$SRC_DIR/uninstall.sh" >/dev/null 2>&1)
+if [ -e "$IH/.claude/skills/agent-worker" ] || [ -e "$IH/.agents/skills/agent-worker" ]; then
+  ng "uninstall.sh 가 우리 스킬을 남김"
+else ok "uninstall.sh 가 우리 스킬을 지움"; fi
+if [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ]; then ok "uninstall.sh 는 남의 스킬을 남김"; else ng "uninstall.sh 가 남의 스킬을 지움"; fi
+
+# 스킬을 못 넣어도(쓰기 권한 없음) aw 설치는 끝까지 가야 합니다. root 는 권한을 무시해 건너뜁니다.
+if [ "$(id -u)" -ne 0 ]; then
+  fresh; mkdir -p "$IH/.claude"; chmod 555 "$IH/.claude"
+  inst; rc=$?
+  chmod 755 "$IH/.claude"
+  if [ "$rc" -eq 0 ] && [ -x "$IH/bin/aw" ]; then ok "스킬을 못 넣어도 aw 설치는 끝까지 감"; else ng "스킬 실패가 설치를 깨뜨림 (코드 $rc)"; fi
+fi
+
+# curl ... | sh 경로: 옆에 aw 가 없으면 받아오고, 스킬은 그 aw 안에 들어 있음 (file:// 로 흉내)
+if command -v curl >/dev/null 2>&1; then
+  fresh; mkdir -p "$IH/empty" "$IH/.claude"
+  (cd "$IH/empty" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
+     PATH="$IH/fakebin:/usr/bin:/bin" AW_RAW_URL="file://$AW" sh < "$SRC_DIR/install.sh" >/dev/null 2>&1)
+  if [ -x "$IH/bin/aw" ] && [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then
+    ok "파이프 설치도 aw 와 스킬을 함께 넣음"
+  else ng "파이프 설치에서 빠진 것이 있음"; fi
+else
+  echo "  (curl 없음: 파이프 설치 시험 생략)"
+fi
+
+head_ "17. 설치 점검 (aw setup)"
+fresh; fake codex
+out=$(env HOME="$IH" PATH="$IH/fakebin:/usr/bin:/bin" AW_DEFAULTS="$IH/defaults" "$AW" setup < /dev/null 2>&1)
+for want in "[1/4] 권한 옵션" "[2/4] 에이전트 CLI" "[3/4] 에이전트 스킬" "[4/4] PATH" "아무것도 바꾸지 않습니다"; do
+  case "$out" in *"$want"*) ok "점검 출력에 '$want'" ;; *) ng "점검 출력에 '$want' 없음" ;; esac
+done
+if [ -e "$IH/defaults" ] || [ -e "$IH/.agents" ]; then ng "터미널이 아닌데 무언가를 바꿈"; else ok "터미널이 아니면 아무것도 바꾸지 않음"; fi
+if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
+  # 가상 터미널로 답을 넣습니다: 권한 옵션은 n, 스킬은 y
+  fresh; fake codex
+  printf 'n\ny\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' '$AW' setup" /dev/null >/dev/null 2>&1
+  if [ -e "$IH/defaults" ]; then ng "n 이라 했는데 권한 옵션을 켬"; else ok "권한 옵션은 n 이면 켜지 않음"; fi
+  if [ -f "$IH/.agents/skills/agent-worker/SKILL.md" ]; then ok "스킬은 y 면 넣음"; else ng "y 라 했는데 스킬을 안 넣음"; fi
+  fresh; fake codex
+  printf 'y\n\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' '$AW' setup" /dev/null >/dev/null 2>&1
+  if [ -f "$IH/defaults" ]; then ok "권한 옵션은 y 면 켬"; else ng "y 라 했는데 권한 옵션을 안 켬"; fi
+  if [ -f "$IH/.agents/skills/agent-worker/SKILL.md" ]; then ok "스킬은 그냥 Enter 면 넣음 (기본 예)"; else ng "Enter 인데 스킬을 안 넣음"; fi
+else
+  echo "  (script 없음: 대화형 점검 시험 생략)"
+fi
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

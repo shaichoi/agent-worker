@@ -48,22 +48,29 @@ aw rm job
 ## 설치
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/aw -o ~/.local/bin/aw && chmod +x ~/.local/bin/aw
+curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/install.sh | sh
 ```
 
-실행 파일 하나라서 이게 전부입니다. 셸 설정을 건드리지 않고, `source` 도 필요 없습니다.
+실행 파일을 `~/.local/bin` 에 놓고, 무인 실행용 권한 옵션을 켜고, 에이전트들이 `aw` 를 쓸 수 있게
+[스킬](#에이전트가-aw-를-쓰게-하기-스킬)을 넣고, PATH 를 확인합니다. 셸 설정은 건드리지 않습니다.
+다시 돌리면 최신으로 덮어씁니다(권한 옵션 파일은 그대로 둡니다).
+`--no-defaults` 는 권한 옵션을, `--no-skill` 은 스킬을 건너뜁니다.
+설치한 뒤 무엇이 갖춰졌는지는 `aw setup` 으로 점검합니다.
+
+실행 파일 하나만 원하면 이것으로 충분합니다. `source` 도 필요 없습니다.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/aw -o ~/.local/bin/aw && chmod +x ~/.local/bin/aw
+```
 
 > 저장소가 **Private** 이면 위 raw URL 은 인증 없이 열리지 않습니다(404).
 > 그때는 아래 `git clone` 을 쓰거나, 이미 설치된 곳에서 파일 하나만 옮기세요.
 > `scp ~/.local/bin/aw 서버:~/.local/bin/aw`
 
-PATH 확인과 권한 옵션 설정까지 해주는 설치 스크립트도 있습니다
-(`--no-defaults` 를 주면 권한 옵션은 켜지 않습니다).
-
 ```sh
 git clone git@github.com:shaichoi/agent-worker.git
 cd agent-worker
-./install.sh
+./install.sh            # 설치 옵션: ./install.sh --help
 ```
 
 ## 명령
@@ -82,6 +89,8 @@ cd agent-worker
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
 | `aw defaults [--init]` | 기본 옵션 확인 / 권장값으로 켜기 |
+| `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
+| `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
 | `aw version` | 버전 |
 | `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` |
 
@@ -291,7 +300,7 @@ aw run -n x1 -- codex exec --json "테스트를 추가해줘"
 aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제없음
 ```
 
-출력은 JSONL(줄마다 JSON 이벤트)이라 `--field` 대신 `aw result x1 | tail -1` 처럼 쓰세요.
+출력은 JSONL(줄마다 JSON 이벤트)입니다. `aw result x1 --field text` 가 마지막 메시지(최종 답)를 꺼냅니다.
 
 > 네 에이전트 모두 실제로 돌려 확인했습니다 (379KB 파일 입력 포함).
 
@@ -360,6 +369,93 @@ aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
 
 큰 사양서는 파일로 두고 에이전트가 자기 도구로 읽게 하는 편이 토큰 면에서도 낫습니다.
 필요한 부분만 읽기 때문입니다.
+
+## 에이전트가 aw 를 쓰게 하기 (스킬)
+
+[`skills/agent-worker/SKILL.md`](skills/agent-worker/SKILL.md) 는 [Agent Skills](https://agentskills.io/specification)
+표준 형식의 스킬입니다. 설치해 두면 Claude Code, Codex, Hermes 같은 에이전트가 "codex 한테 리뷰시켜",
+"gemini 로 두 번째 의견 받아 줘" 같은 요청에 스스로 `aw` 로 워커를 띄우고, 기다리고, 결과를 가져옵니다.
+에이전트별 호출법, 파일을 고치는 작업은 `-w` 로 떼어 놓기, 워커 출력은 지시가 아니라 데이터로 다루기,
+몇 시간짜리 작업을 셸 도구의 시간 제한(Claude Code 는 기본 120초)에 걸리지 않고 맡기는 법 같은
+규칙이 들어 있고, 자세한 건 `aw help` 로 넘깁니다.
+
+`install.sh` 가 이 컴퓨터에 있는 에이전트마다 넣어 줍니다. 나중에 보거나 바꾸려면 `aw skill` 을 씁니다.
+
+```
+$ aw skill
+에이전트 스킬: agent-worker (aw 0.8.0)
+
+  에이전트  설치  상태     위치
+  claude    있음  최신     ~/.claude/skills/agent-worker
+  codex     있음  최신     ~/.agents/skills/agent-worker
+  devin     있음  최신     ~/.agents/skills/agent-worker
+  agy       있음  없음     ~/.gemini/config/skills/agent-worker
+  hermes    없음  없음     ~/.hermes/skills/agent-worker
+
+$ aw skill install agy          # 하나만 넣기 (이름을 빼면 있는 에이전트 전부)
+$ aw skill remove codex         # 빼기 (이름을 빼면 aw 가 넣은 것 전부)
+$ aw skill show                 # 내용 보기
+```
+
+상태는 `최신` / `옛 버전`(aw 를 올린 뒤 다시 안 넣음) / `없음` / `남의 것`(같은 이름의 다른 스킬) 입니다.
+에이전트가 있는지는 CLI 가 PATH 에 있거나 설정 폴더가 있는지로 봅니다.
+
+처음 설정이나 새 에이전트를 깐 뒤에는 **`aw setup`** 이 편합니다. 권한 옵션, 에이전트 CLI, 스킬, PATH 를
+차례로 점검하고, 터미널에서 돌리면 빠진 것마다 물어봅니다(권한 옵션은 기본 `아니오`, 스킬은 기본 `예`).
+터미널이 아니면 점검만 하고 아무것도 바꾸지 않습니다. 없는 에이전트 CLI 는 설치하지 않고 설치 명령만 알려 줍니다.
+
+```
+$ aw setup
+[1/4] 권한 옵션
+  켜져 있음: ~/.config/agent-worker/defaults   (내용: aw defaults)
+[2/4] 에이전트 CLI
+  claude    있음  ~/.local/bin/claude
+  hermes    없음  설치: https://hermes-agent.nousresearch.com 의 설치 안내
+  ...
+[3/4] 에이전트 스킬
+  agy           없음     ~/.gemini/config/skills/agent-worker
+    넣을까요? [Y/n]
+```
+
+에이전트마다 스킬을 읽는 폴더가 달라 각각 복사합니다.
+
+| 에이전트 | 넣는 곳 | 확인 |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/` | 실측 (2.1.280). `~/.agents/skills` 는 읽지 않음 |
+| Codex | `~/.agents/skills/` | 실측 (codex-cli 0.145). `~/.codex/skills` 도 읽어서, 두 번 보이지 않게 거기엔 안 넣음 |
+| Devin | `~/.agents/skills/` (Codex 와 같은 곳) | 실측 (3000.11). `~/.claude/skills` 도 읽어서 Claude Code 도 있으면 두 번 보임 (충돌은 없음) |
+| agy | `~/.gemini/config/skills/` | 실측 (1.2.9). `~/.agents/skills` 는 읽지 않음 |
+| Hermes | `~/.hermes/skills/` | 문서 기준. 저장소에서 바로 받을 수도 있음: `hermes skills install shaichoi/agent-worker/skills/agent-worker` |
+
+- 같은 이름의 다른 스킬이 이미 있으면 덮어쓰지 않습니다. `aw skill remove` 와 `./uninstall.sh` 는 `aw` 가 넣은 것만 지웁니다.
+- 새로 넣은 스킬은 에이전트를 새로 시작해야 보입니다.
+- 스킬 내용은 `aw` 안에 들어 있어서 인터넷 없이 넣을 수 있고, 늘 그 `aw` 의 버전과 맞습니다.
+  저장소의 `SKILL.md` 는 `aw skill show` 로 만든 것입니다. 고칠 때는 `aw` 의 `skill_text` 를 고치고
+  `./aw skill show > skills/agent-worker/SKILL.md` 로 다시 만듭니다(테스트가 둘이 같은지 봅니다).
+
+**Codex 는 샌드박스가 걸립니다.** Codex 의 기본 `workspace-write` 샌드박스에서는 작업 폴더 밖에 쓸 수 없고
+네트워크도 막혀서, `aw` 가 워커 기록(`~/.local/share/agent-worker`)을 못 남기고 띄운 에이전트도 API 에
+닿지 못합니다(실측: `Read-only file system`). 스킬은 Codex 에게 `aw` 명령을 샌드박스 밖에서 돌리도록
+승인을 요청하라고 알려 줍니다.
+
+- **대화형 Codex**(평소 쓰는 화면)는 `aw` 명령마다 이유를 붙여 승인 창을 띄우고, 승인하면 샌드박스 밖에서
+  돌아 끝까지 됩니다(실측: agy 워커를 띄워 답을 받아 옴). 승인 창의
+  **"Yes, and don't ask again for commands that start with `aw` (p)"** 를 고르면 그 뒤로는 묻지 않습니다
+  (이 선택을 Codex 가 어디에, 얼마나 오래 기억하는지는 확인하지 않았습니다).
+- **비대화형 `codex exec`** 는 승인할 사람이 없어 `aw` 를 쓸 수 없습니다. 샌드박스 때문이라고 알리고 멈춥니다(실측).
+- 승인 창 대신 미리 허용해 두려면 Codex 의 [규칙](https://developers.openai.com/codex/rules)을 쓸 수 있습니다(문서 기준).
+  그러면 Codex 가 승인 없이 `aw` 로 아무 명령이나 샌드박스 밖에서 돌릴 수 있게 된다는 점을 감안하세요.
+
+  ```
+  # ~/.codex/rules/default.rules
+  prefix_rule(pattern=["aw"], decision="allow")
+  ```
+
+반대로 `aw` 로 띄운 Codex 워커(`codex exec`, 기본 옵션 `--sandbox workspace-write`)는 그 안에서 `aw` 를
+돌릴 수 없어서, 워커가 워커를 또 띄우지 못합니다.
+
+**워커가 워커를 낳지 않게** 워커 안에는 환경변수 `AW_WORKER`(그 워커 이름)가 들어 있습니다. 스킬은 이게 있으면
+프롬프트가 분명히 요구하지 않는 한 워커를 더 띄우지 않도록 합니다.
 
 ## 기본 옵션 (권한 우회)
 
@@ -482,6 +578,7 @@ mytool 128000
 | `AW_DEFAULTS` | `~/.config/agent-worker/defaults` | 에이전트별 기본 옵션 파일 |
 | `AW_NO_DEFAULTS` | (없음) | `1` 이면 기본 옵션을 붙이지 않음 |
 | `AW_PREFIX` | `~/.local/bin` | `install.sh` / `uninstall.sh` 의 설치 위치 |
+| `AW_WORKER` | (워커 안에서만) | `aw` 가 워커에 넣어 주는 그 워커 이름. 중첩 확인용 |
 
 테스트나 임시 실험은 `AW_HOME` 만 바꾸면 평소 기록과 완전히 분리됩니다.
 
@@ -517,7 +614,7 @@ AW_HOME=/tmp/aw-test aw run -- echo 시험
 ./uninstall.sh
 ```
 
-실행 파일만 지우고 워커 기록은 남깁니다. 기록까지 지우려면 `--purge`를 주세요
+실행 파일과 `aw` 가 넣은 스킬만 지우고 워커 기록은 남깁니다. 기록까지 지우려면 `--purge`를 주세요
 (무엇이 지워지는지 먼저 보여주고 `yes` 입력을 받습니다).
 
 ## 검증

@@ -1,7 +1,7 @@
 #!/bin/sh
 # aw 제거
 #
-# 기본은 실행 파일만 지웁니다. 워커 기록(출력, 종료 코드)은 남깁니다.
+# 기본은 실행 파일과 에이전트 스킬만 지웁니다. 워커 기록(출력, 종료 코드)은 남깁니다.
 
 set -eu
 
@@ -45,6 +45,26 @@ if [ -f "$PREFIX/aw" ]; then
 else
   say "  $PREFIX/aw 없음"
 fi
+
+say "== 에이전트 스킬"
+# aw skill 이 넣는 곳들입니다 (aw 를 먼저 지웠어도 치울 수 있게 여기 따로 적어 둡니다).
+# ~/.codex/skills 는 손으로 넣었을 수 있어 같이 봅니다.
+# 표식(homepage 줄)이 있는 우리 스킬만 지웁니다.
+SKILL_MARK='homepage: https://github.com/shaichoi/agent-worker'
+found_skill=0
+for root in "$HOME/.agents" "$HOME/.claude" "$HOME/.gemini/config" "$HOME/.hermes" "$HOME/.codex"; do
+  dest="$root/skills/agent-worker"
+  [ -f "$dest/SKILL.md" ] || continue
+  found_skill=1
+  if grep -qF "$SKILL_MARK" "$dest/SKILL.md"; then
+    say "  삭제: $dest/SKILL.md"
+    # 사용자가 그 폴더에 따로 둔 파일이 있을 수 있어 SKILL.md 만 지우고 빈 폴더만 치웁니다.
+    [ "$DRY_RUN" -eq 0 ] && { rm -f "$dest/SKILL.md"; rmdir "$dest" 2>/dev/null || true; }
+  else
+    say "  남김: $dest  (aw 가 넣은 스킬이 아닙니다)"
+  fi
+done
+[ "$found_skill" -eq 1 ] || say "  설치된 스킬 없음"
 
 say "== 설정 파일"
 for f in "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults" "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts"; do
