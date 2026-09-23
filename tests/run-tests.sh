@@ -75,6 +75,19 @@ for k in $kids; do kill -0 "$k" 2>/dev/null && alive=$((alive+1)); done
 check "stop 이 하위 프로세스까지 정리 (고아 없음)" 0 "$alive"
 state=$("$AW" list --json | sed -n 's/.*"name":"withkids","state":"\([a-z]*\)".*/\1/p')
 check "하위 프로세스까지 죽여도 상태는 stopped" stopped "$state"
+# 에이전트는 도구 명령을 새 세션으로 떼어 띄웁니다 (실측: claude, codex). 그룹째 끊어도
+# 남으므로, 부모-자식으로 찾은 하위 프로세스도 끊어야 합니다.
+if command -v setsid >/dev/null 2>&1; then
+  "$AW" run -n newsess -- sh -c 'setsid sleep 317 & wait' >/dev/null 2>&1
+  sleep 1
+  sp=$(ps -eo pid=,args= | awk '$2 == "sleep" && $3 == "317" { print $1 }')
+  if [ -n "$sp" ]; then ok "새 세션으로 뜬 하위 프로세스가 있음"; else ng "새 세션 하위 프로세스가 안 떴음"; fi
+  "$AW" stop newsess >/dev/null 2>&1
+  sleep 1
+  alive=0; for k in $sp; do kill -0 "$k" 2>/dev/null && alive=1; done
+  check "stop 이 새 세션으로 빠져나간 하위 프로세스도 끊음" 0 "$alive"
+  for k in $sp; do kill -KILL "$k" 2>/dev/null; done
+fi
 if command -v setsid >/dev/null 2>&1; then
   gpid=$(cat "$AW_HOME/workers/withkids/pgid" 2>/dev/null || printf '')
   if [ -n "$gpid" ]; then ok "setsid 로 띄우면 pgid 를 남김"; else ng "pgid 파일이 없음"; fi
@@ -135,6 +148,11 @@ json='{"is_error":false,"result":"여러 줄\n\"인용\" 포함","session_id":"a
 "$AW" wait jsonout >/dev/null 2>&1
 check "--field 로 문자열 필드 추출" "$(printf '여러 줄\n"인용" 포함')" "$("$AW" result jsonout --field result)"
 check "--field session_id" abc-123 "$("$AW" result jsonout --field session_id)"
+check "--field 는 따옴표 없는 값도 (false)" false "$("$AW" result jsonout --field is_error)"
+"$AW" run -n jsonnum -- printf '%s' '{"num_turns":3,"cost":0.25,"x":null}' >/dev/null 2>&1
+"$AW" wait jsonnum >/dev/null 2>&1
+check "--field 숫자" 3 "$("$AW" result jsonnum --field num_turns)"
+check "--field 소수" 0.25 "$("$AW" result jsonnum --field cost)"
 if "$AW" list --json | tail -1 | grep -q '^\]$'; then ok "list --json 이 올바르게 닫힘"; else ng "list --json 형식 오류"; fi
 
 head_ "7. 이름 검증"
@@ -578,6 +596,140 @@ if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>
 else
   echo "  (script 없음: 대화형 점검 시험 생략)"
 fi
+
+head_ "18. 진행 상황 (aw peek / aw watch)"
+has() { case "$2" in *"$3"*) ok "$1" ;; *) ng "$1 (출력: $(printf '%s' "$2" | head -12 | tr '\n' '|'))" ;; esac; }
+hasnt() { case "$2" in *"$3"*) ng "$1" ;; *) ok "$1" ;; esac; }
+
+# 에이전트는 명령을 따로 떼어 띄웁니다. 프로세스 그룹이 아니라 부모-자식으로 따라가야 보입니다.
+"$AW" run -n pk-tree -- sh -c 'sh -c "sleep 7; true"; true' >/dev/null 2>&1
+sleep 1
+out=$("$AW" peek pk-tree)
+has "지금 도는 하위 명령이 보임" "$out" "지금 실행 중: sleep 7"
+if command -v bash >/dev/null 2>&1; then
+  "$AW" run -n pk-mcp -- bash -c '(exec -a "node kordoc mcp" sleep 7) & sleep 6; wait' >/dev/null 2>&1
+  sleep 1
+  out=$("$AW" peek pk-mcp)
+  has "MCP 도우미를 걸러도 진짜 명령은 보임" "$out" "sleep 6"
+  hasnt "MCP 도우미는 지금 실행 중에서 뺌" "$out" "kordoc mcp"
+fi
+
+# 출력 형식 셋: 내용으로 알아보고 사람이 읽을 줄로 풉니다
+cl='{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"테스트를 돌려 보겠습니다."},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"npm test -- auth","description":"테스트"}}]}}'
+"$AW" run -n pk-claude -- sh -c 'printf "%s\n" "$1" "$1"; sleep 5; true' sh "$cl" >/dev/null 2>&1
+cx='{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/usr/bin/zsh -lc '"'"'pytest -q'"'"'","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/r/src/a.py","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"고쳤습니다"}}'
+"$AW" run -n pk-codex -- sh -c 'printf "%s\n" "$1"; sleep 5; true' sh "$cx" >/dev/null 2>&1
+ag='{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"go test ./..."}}}}'
+"$AW" run -n pk-agy -- sh -c 'printf "%s\n" "$1"; sleep 5; true' sh "$ag" >/dev/null 2>&1
+sleep 1
+out=$("$AW" peek pk-claude)
+has "claude: 도구 호출" "$out" "npm test -- auth"
+has "claude: 말" "$out" "테스트를 돌려 보겠습니다."
+check "claude: 같은 호출(같은 id)은 한 번만" 1 "$(printf '%s\n' "$out" | grep -c 'npm test')"
+out=$("$AW" peek pk-codex)
+has "codex: 명령 (셸 감싸기를 벗김)" "$out" "명령     pytest -q"
+has "codex: 바뀐 파일" "$out" "/r/src/a.py"
+has "codex: 말" "$out" "고쳤습니다"
+out=$("$AW" peek pk-agy)
+has "agy: 도구 단계" "$out" "run_command go test ./..."
+
+# claude 를 json 으로 띄우면 출력이 끝날 때까지 비어 있습니다. 도는 동안 claude 가
+# sessions/<pid>.json 에 적는 세션 ID 로 대화 기록을 찾아 읽습니다.
+fresh
+cat > "$IH/fakebin/claude" <<'FAKE'
+#!/bin/sh
+mkdir -p "$HOME/.claude/sessions" "$HOME/.claude/projects/-work"
+printf '{"pid":%s,"sessionId":"sess-123","cwd":"/work"}\n' "$$" > "$HOME/.claude/sessions/$$.json"
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"src/login.ts"}}]}}' \
+  > "$HOME/.claude/projects/-work/sess-123.jsonl"
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Read","input":{"file_path":"다른세션.ts"}}]}}' \
+  > "$HOME/.claude/projects/-work/other-session.jsonl"
+sleep 5
+rm -f "$HOME/.claude/sessions/$$.json"
+printf '%s\n' '{"type":"result","result":"끝","session_id":"sess-123"}'
+FAKE
+chmod +x "$IH/fakebin/claude"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n pk-cj --no-defaults -- claude -p --output-format json "로그인 고쳐줘" >/dev/null 2>&1
+sleep 2
+out=$(env HOME="$IH" "$AW" peek pk-cj)
+has "claude json: 대화 기록에서 활동을 읽음" "$out" "claude 대화 기록에서"
+has "claude json: 그 워커의 기록 (pid 로 찾음)" "$out" "src/login.ts"
+hasnt "claude json: 다른 세션 기록은 안 읽음" "$out" "다른세션.ts"
+"$AW" wait pk-cj --timeout 20 >/dev/null 2>&1
+out=$(env HOME="$IH" "$AW" peek pk-cj)
+has "끝난 claude json 도 meta 의 세션 ID 로 기록을 찾음" "$out" "src/login.ts"
+has "끝난 워커는 최종 답을 보여 줌" "$out" "답          : 끝"
+hasnt "끝난 워커의 JSON 을 날것으로 보이지 않음" "$out" '"type":"result"'
+
+# 모르는 형식은 마지막 줄 그대로, 긴 줄은 UTF-8 글자를 자르지 않고 줄임
+long=$(printf '가나다라마바사아자차카타파하%.0s' 1 2 3 4 5 6 7 8 9 10 11 12)
+"$AW" run -n pk-text -- sh -c 'echo "빌드 1단계"; echo "$1"; echo "빌드 2단계"; sleep 5; true' sh "$long" >/dev/null 2>&1
+sleep 1
+out=$("$AW" peek pk-text)
+has "텍스트 출력은 마지막 줄들을 그대로" "$out" "빌드 2단계"
+has "긴 줄은 줄임표로 줄임" "$out" "…"
+if command -v iconv >/dev/null 2>&1; then
+  if printf '%s\n' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then ok "줄여도 UTF-8 이 깨지지 않음"; else ng "줄이다 UTF-8 글자를 반으로 자름"; fi
+fi
+
+# 줄바꿈 없이 한 줄로 길게 쌓이는 텍스트(실측: devin)는 앞이 아니라 끝을 보여 줘야 합니다
+oneline=$(printf '처음문장입니다. %.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)
+"$AW" run -n pk-oneline -- sh -c 'printf "%s" "$1"; printf "%s" "마지막문장"; sleep 5; true' sh "$oneline" >/dev/null 2>&1
+sleep 1
+out=$("$AW" peek pk-oneline)
+has "한 줄로 긴 텍스트는 끝(최신)을 보여 줌" "$out" "마지막문장"
+out=$("$AW" peek)
+has "짧게 볼 때도 끝을 보여 줌" "$(printf '%s\n' "$out" | grep -A2 '^pk-oneline')" "마지막문장"
+if command -v iconv >/dev/null 2>&1; then
+  if printf '%s\n' "$out" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then ok "끝을 남겨도 UTF-8 이 깨지지 않음"; else ng "끝을 남기다 UTF-8 글자를 반으로 자름"; fi
+fi
+
+# worktree 에서 바뀐 파일 수
+"$AW" run -n pk-wt -d "$REPO" -w feat/pk -- sh -c 'printf "a\n" > new.txt; sleep 5; true' >/dev/null 2>&1
+sleep 1
+out=$("$AW" peek pk-wt)
+has "worktree 의 새 파일 수" "$out" "파일 1개 바뀜 (새 파일 1개)"
+
+# 이름을 빼면 실행 중인 워커를 짧게, 끝난 워커는 빠짐
+"$AW" run -n pk-done -- true >/dev/null 2>&1
+"$AW" wait pk-done >/dev/null 2>&1
+out=$("$AW" peek)
+has "aw peek 은 실행 중인 워커를 보여 줌" "$out" "pk-text  running"
+hasnt "aw peek 은 끝난 워커를 빼고 보여 줌" "$out" "pk-done"
+out=$("$AW" peek pk-done)
+has "끝난 워커를 이름으로 보면 결과 안내" "$out" "aw result pk-done"
+if "$AW" peek nobody >/dev/null 2>&1; then ng "없는 워커를 peek 함"; else ok "없는 워커는 거절"; fi
+
+# macOS 의 ps 는 etimes 가 없고 etime([[일-]시:]분:초) 만 줍니다. 그 경로를 가짜 ps 로 흉내 냅니다.
+"$AW" run -n pk-mac -- sh -c 'sleep 6; true' >/dev/null 2>&1
+sleep 1
+mpid=$(cat "$AW_HOME/workers/pk-mac/pid")
+mkdir -p "$TMPROOT/macps"
+cat > "$TMPROOT/macps/ps" <<FAKE
+#!/bin/sh
+# 실제 macOS 처럼: 모르는 열이 있으면 오류와 함께 나머지 열로 출력하고 1 로 끝남
+case "\$*" in *etimes*) echo "ps: etimes: keyword not found" >&2; printf '%s\n' "$mpid 1 sh -c sleep" "99999 $mpid make build"; exit 1 ;; esac
+printf '%s\n' "$mpid 1 05:00 sh -c sleep" "99999 $mpid 1-02:03:04 make build"
+FAKE
+chmod +x "$TMPROOT/macps/ps"
+out=$(PATH="$TMPROOT/macps:$PATH" "$AW" peek pk-mac)
+has "etimes 가 없으면 etime 으로 (일-시:분:초 → 26h3m)" "$out" "make build   (26h3m)"
+hasnt "etimes 로 밀린 출력은 쓰지 않음" "$out" "실행 중: build"
+
+# watch: 터미널이 아니면 지우지 않고 이어 쓰고, 다 끝나면 스스로 멈춤 (timeout 명령 없이)
+"$AW" run -n pk-watch -- sh -c 'sleep 2; true' >/dev/null 2>&1
+rm -f "$TMPROOT/watch.rc"
+( "$AW" watch pk-watch -i 1 > "$TMPROOT/watch.out" 2>&1; echo $? > "$TMPROOT/watch.rc" ) &
+wpid=$!; i=0
+while [ ! -f "$TMPROOT/watch.rc" ] && [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done
+kill "$wpid" 2>/dev/null
+check "watch 는 워커가 끝나면 0 으로 멈춤" 0 "$(cat "$TMPROOT/watch.rc" 2>/dev/null || echo 시간초과)"
+has "watch 가 끝났다고 알림" "$(cat "$TMPROOT/watch.out")" "모두 끝났습니다"
+"$AW" wait pk-tree pk-claude pk-codex pk-agy pk-text pk-oneline pk-wt pk-mac --timeout 20 >/dev/null 2>&1
+[ -n "$(command -v bash)" ] && "$AW" wait pk-mcp --timeout 20 >/dev/null 2>&1
+"$AW" clean >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

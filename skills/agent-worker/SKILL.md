@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.8.1"
+  version: "0.9.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -58,6 +58,9 @@ aw rm review
 - `aw run` 은 바로 반환합니다. 이름은 늘 `-n` 으로 줍니다 (영문·숫자·`.` `_` `-`).
 - `--timeout` 은 `aw` 의 제한이 아니라 **셸 도구 한 번의 제한에 맞추는 값**입니다.
   코드 2 면 다시 `aw wait` 합니다. 오래 걸릴 작업은 아래 [오래 걸리는 작업](#오래-걸리는-작업).
+- **진행 상황**은 `aw peek <이름>` 입니다. 지금 도는 명령, 최근 활동(도구 호출과 말), 마지막 활동
+  시각, worktree 에서 바뀐 파일 수가 나옵니다. `aw watch` 는 사람이 보는 화면용이라 끝날 때까지
+  돌아오지 않으니 직접 쓰지 않고, 사용자에게 알려 줍니다.
 - 실패하면 `aw errs <이름>` 과 `aw logs <이름>` 을 먼저 봅니다. 전체 목록은 `aw list`.
 - **워커는 이 대화를 모릅니다.** 프롬프트에 목표, 관련 파일 경로, 제약, 원하는 출력 형식을
   전부 적습니다. 읽기만 할 작업이면 "파일을 고치지 마" 라고 분명히 씁니다.
@@ -72,7 +75,7 @@ aw rm review
 | 예상 시간 | 기다리는 법 |
 | --- | --- |
 | 몇 분 | `aw wait <이름> --timeout <셸 제한보다 조금 짧게>` 를 코드 0·1 이 나올 때까지 반복. 셸 제한을 늘릴 수 있으면 늘려서 호출 횟수를 줄임 |
-| 수십 분 이상 | 붙잡혀 있지 않습니다. 띄운 뒤 다른 일을 하다가 사이사이 `aw list` 로 확인 |
+| 수십 분 이상 | 붙잡혀 있지 않습니다. 띄운 뒤 다른 일을 하다가 사이사이 `aw peek <이름>` 으로 확인 |
 | 백그라운드 셸이 있으면 | `aw wait <이름>` 을 `--timeout` 없이 백그라운드로 걸어 두고, 끝났다는 알림을 받음 (Claude Code 의 백그라운드 실행 등) |
 | 이 대화보다 오래 | 워커 이름과 확인 방법을 사용자에게 남기고 마침. 나중 대화에서 `aw list`, `aw result <이름>`, `aw resume <이름>` 으로 이어받음 |
 
@@ -84,28 +87,29 @@ aw rm review
    (가정을 적고 계속할지, 멈추고 보고할지).
 3. **`-w` 로 격리하고**, 진행 상황과 결론을 worktree 안의 파일 (예: `PROGRESS.md`, `REPORT.md`) 에 적게 합니다.
    끝나기 전에도 그 파일로 어디까지 했는지 볼 수 있습니다.
-4. **도중 진행이 보이는 출력 형식**을 씁니다. claude 의 `--output-format json` 은 끝날 때 한 번에 나와서
-   그 전엔 `aw logs` 가 비어 있습니다. `--output-format stream-json --verbose` 는 진행이 줄줄이 쌓이고
-   `aw result <이름> --field result` 도 그대로 됩니다. codex 의 `--json` 은 처음부터 사건마다 한 줄씩 나옵니다.
+4. **도중 진행은 `aw peek <이름>` 으로** 봅니다. 위 표대로 claude·agy 를 `stream-json` 으로 띄우면 출력에
+   바로 쌓입니다. `json` 으로 띄웠다면 claude 는 대화 기록에서 읽고, agy 는 지금 도는 명령만 보입니다.
 
    ```sh
    aw run -n big -w aw/big-refactor -f task.md -- claude -p --output-format stream-json --verbose
    ```
 
-5. **띄운 직후 사용자에게** 워커 이름, 작업 위치 (worktree), 확인 명령 (`aw list`, `aw logs <이름> -f`,
-   `aw result <이름>`) 을 알립니다. 이 대화가 먼저 끝나도 사용자가 직접 확인할 수 있게 하기 위해서입니다.
-6. **멈춘 것 같으면** `aw status <이름>` (경과 시간), `aw logs <이름> -n 20`, `aw errs <이름>` 을 봅니다.
-   승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인). 끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
+5. **띄운 직후 사용자에게** 워커 이름, 작업 위치 (worktree), 확인 명령 (`aw watch <이름>` 으로 지켜보기,
+   `aw result <이름>` 으로 결과) 을 알립니다. 이 대화가 먼저 끝나도 사용자가 직접 확인할 수 있게 하기 위해서입니다.
+6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령과 마지막 활동 시각을 보고, 그다음 `aw errs <이름>` 을
+   봅니다. 승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인). 끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
 
 ## 에이전트별 한 줄
 
 | 에이전트 | 띄우기 | 답 꺼내기 |
 | --- | --- | --- |
-| claude | `aw run -n c -- claude -p --output-format json "작업"` | `aw result c --field result` |
+| claude | `aw run -n c -- claude -p --output-format stream-json --verbose "작업"` | `aw result c --field result` |
 | codex | `aw run -n x -- codex exec --json "작업"` | `aw result x --field text` |
-| agy (Gemini) | `aw run -n a -- agy --output-format json --model gemini-3.8-flash-high -p='작업'` | `aw result a --field response` |
+| agy (Gemini) | `aw run -n a -- agy --output-format stream-json --model gemini-3.8-flash-high -p='작업'` | `aw result a --field response` |
 | devin | `aw run -n d -- devin -p "작업" --model gemini-3-8-flash-high` | `aw result d` (텍스트) |
 
+- **claude·agy 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
+  `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.
 - **claude·codex 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.
 - **codex 는 git 저장소 밖에서** `--skip-git-repo-check` 가 필요합니다 (프롬프트 앞에):
   `codex exec --json --skip-git-repo-check "작업"`
@@ -118,9 +122,9 @@ aw rm review
 프롬프트가 길거나 따옴표가 많으면 파일에 쓰고 넘깁니다 (인자 하나는 128KB 가 한계):
 
 ```sh
-aw run -n c -f task.md -- claude -p --output-format json
+aw run -n c -f task.md -- claude -p --output-format stream-json --verbose
 aw run -n x -f task.md -- codex exec --json -
-aw run -n a -f task.md -- agy --output-format json --model gemini-3.8-flash-high   # -p 빼기
+aw run -n a -f task.md -- agy --output-format stream-json --model gemini-3.8-flash-high   # -p 빼기
 aw run -n d -- devin -p --prompt-file task.md --model gemini-3-8-flash-high        # stdin 안 받음
 ```
 
@@ -133,7 +137,7 @@ aw run -n d -- devin -p --prompt-file task.md --model gemini-3-8-flash-high     
   워커 여럿이 같은 저장소를 고칠 때는 각자 `-w` 를 씁니다.
 
   ```sh
-  aw run -n fix -w aw/fix-login -- claude -p --output-format json "로그인 버그를 고쳐줘"
+  aw run -n fix -w aw/fix-login -- claude -p --output-format stream-json --verbose "로그인 버그를 고쳐줘"
   aw status fix                   # worktree 경로 확인
   git -C <worktree 경로> status    # 무엇을 바꿨는지 봄
   ```
@@ -156,7 +160,7 @@ aw resume review-r1 -- '테스트도 추가해줘'             # → review-r2
 
 ```sh
 aw run -n rv-codex -- codex exec --json "이 설계를 검토해줘: ..."
-aw run -n rv-gemini -- agy --output-format json --model gemini-3.8-flash-high -p='이 설계를 검토해줘: ...'
+aw run -n rv-gemini -- agy --output-format stream-json --model gemini-3.8-flash-high -p='이 설계를 검토해줘: ...'
 aw wait rv-codex rv-gemini --timeout 100
 ```
 

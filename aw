@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.8.1
+AW_VERSION=0.9.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -32,6 +32,8 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw result <이름> [--field KEY]       출력 전문, 또는 JSON 필드 하나
   aw resume <이름> -- '프롬프트'        그 워커의 대화를 이어서 새 워커로
   aw logs|errs <이름> [-f] [-n N]      표준 출력 / 표준 오류
+  aw peek [이름...]                    지금 도는 명령, 최근 활동, worktree 변경
+  aw watch [이름...] [-i 초]           peek 을 몇 초마다 다시 그림 (사람이 보는 용)
   aw status <이름>                     상세 정보
   aw stop|rm <이름...>                 중단 / 기록 삭제
   aw clean [--all]                     끝난 워커 일괄 정리
@@ -42,7 +44,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw version | aw help [주제]
 
 전형적인 흐름
-  aw run -n job -- claude -p --output-format json "작업 내용"
+  aw run -n job -- claude -p --output-format stream-json --verbose "작업 내용"
   aw wait job && aw result job --field result
   aw resume job -- "앞 답변을 반영해서 더 해줘"    # 대화를 이어감
   aw rm job
@@ -73,17 +75,22 @@ help_topic() {
 끝난 워커의 출력에서 찾아 meta 에 적어 둡니다 (aw status 에서 볼 수 있습니다).
 claude/codex 는 프롬프트를 맨 끝 인자로 둬야 이어할 때 제대로 걷어냅니다.
 
+진행을 보려면 claude·agy 는 stream-json 으로 띄우세요. 도중 사건이 출력에 쌓여
+aw peek / aw logs -f 로 보이고, 끝난 뒤 --field 는 json 과 똑같이 됩니다.
+
 claude — Claude Code
-  aw run -n c1 -- claude -p --output-format json "작업"
-  aw run -n c2 -f spec.md -- claude -p --output-format json   # 프롬프트 인자 생략
-  aw result c1 --field result        # 성공 여부: --field is_error
+  aw run -n c1 -- claude -p --output-format stream-json --verbose "작업"
+  aw run -n c2 -f spec.md -- claude -p --output-format stream-json --verbose   # 프롬프트 인자 생략
+  aw result c1 --field result        # 성공 여부: --field is_error (true/false)
+  --output-format json 도 됩니다. 끝날 때까지 출력이 비지만 aw peek 은 대화 기록에서 읽습니다.
   이어하기: --resume <session_id>  (aw resume 이 알아서 붙입니다)
   계정 분리: aw run --profile work-sub -- claude -p "작업"
 
 agy — Antigravity CLI (Gemini)
-  aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='작업'
-  aw run -n a2 -f spec.md -- agy --output-format json --model ...   # -p 를 빼야 함
+  aw run -n a1 -- agy --output-format stream-json --model gemini-3.8-flash-high -p='작업'
+  aw run -n a2 -f spec.md -- agy --output-format stream-json --model ...   # -p 를 빼야 함
   aw result a1 --field response      # 상태: --field status (SUCCESS)
+  --output-format json 이면 끝날 때까지 출력이 없고 aw peek 은 지금 도는 명령만 보여 줍니다.
   이어하기: --conversation <conversation_id>
   함정: -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
         -p='작업' 형태로 붙이면 플래그 순서와 무관합니다.
@@ -145,8 +152,8 @@ T
   그 이상     아래 파일 입력을 쓰세요. 인자 제한에 걸리지 않습니다.
 
 파일로 프롬프트 넣기 (크기 제한 없음)
-  claude   aw run -f spec.md -- claude -p --output-format json
-  agy      aw run -f spec.md -- agy --output-format json --model ...   (-p 빼기)
+  claude   aw run -f spec.md -- claude -p --output-format stream-json --verbose
+  agy      aw run -f spec.md -- agy --output-format stream-json --model ...   (-p 빼기)
   codex    aw run -f spec.md -- codex exec --json -
   devin    aw run -- devin -p --prompt-file spec.md --model ...   (stdin 안 받음)
 
@@ -223,6 +230,25 @@ worker_alive() { # <pgid(빈값 가능)> <pid>
   pid_alive "$2"
 }
 
+# 하위 프로세스 전부 (자기 자신은 뺌). 에이전트는 도구 명령을 새 세션으로 떼어 띄워서
+# 프로세스 그룹째 끊어도 남습니다 (실측: claude, codex). setsid 가 없는 macOS 는 그룹
+# 자체가 없습니다. 그래서 stop 은 그룹과 함께 이것도 끊습니다.
+proc_descendants() { # <pid>
+  ps -eo pid=,ppid= 2>/dev/null | awk -v root="$1" '
+    { pid[NR] = $1; pp[NR] = $2 }
+    END {
+      want[root] = 1; grew = 1
+      while (grew) {
+        grew = 0
+        for (i = 1; i <= NR; i++)
+          if ((pp[i] in want) && !(pid[i] in want)) { want[pid[i]] = 1; grew = 1 }
+      }
+      for (i = 1; i <= NR; i++) if ((pid[i] in want) && pid[i] != root) print pid[i]
+    }'
+}
+
+any_alive() { for aa in "$@"; do kill -0 "$aa" 2>/dev/null && return 0; done; return 1; }
+
 # running | done | failed | stopped | lost
 state_of() { # <워커디렉터리>
   d=$1
@@ -258,10 +284,14 @@ json_unescape() {
     }
   '
 }
-json_str() { # <키>  (JSON 은 표준 입력)
-  tr '\n' ' ' \
-    | sed -n -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p' \
-    | json_unescape
+json_str() { # <키>  (JSON 은 표준 입력. 여러 번 나오면 마지막 것)
+  js_in=$(tr '\n' ' ')
+  js_v=$(printf '%s' "$js_in" \
+    | sed -n -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p')
+  if [ -n "$js_v" ]; then printf '%s\n' "$js_v" | json_unescape; return 0; fi
+  # 문자열이 아닌 값 (true / false / null / 숫자). is_error 같은 필드가 이렇습니다.
+  printf '%s' "$js_in" \
+    | sed -n -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*(true|false|null|-?[0-9][0-9.eE+-]*).*/\1/p'
 }
 # 우리가 만드는 JSON 에 넣을 값 이스케이프
 json_escape() {
@@ -853,10 +883,16 @@ cmd_stop() {
     p=$(cat "$d/pid" 2>/dev/null || printf '')
     g=$(cat "$d/pgid" 2>/dev/null || printf '')
     if [ -z "$p" ] && [ -z "$g" ]; then say "$n: 프로세스를 찾을 수 없습니다."; continue; fi
+    # 부모가 죽으면 자식은 다른 부모에게 넘어가 연결이 끊기므로 먼저 모읍니다.
+    kids=''; [ -n "$p" ] && kids=$(proc_descendants "$p")
     sig_worker TERM "$g" "$p"
+    # shellcheck disable=SC2086  # pid 목록은 일부러 쪼갭니다
+    for k in $kids; do kill -TERM "$k" 2>/dev/null || true; done
     i=0
-    while [ "$i" -lt 10 ] && worker_alive "$g" "$p"; do i=$((i + 1)); sleep 0.3 2>/dev/null || sleep 1; done
+    # shellcheck disable=SC2086
+    while [ "$i" -lt 10 ] && { worker_alive "$g" "$p" || any_alive $kids; }; do i=$((i + 1)); sleep 0.3 2>/dev/null || sleep 1; done
     worker_alive "$g" "$p" && sig_worker KILL "$g" "$p"
+    for k in $kids; do kill -KILL "$k" 2>/dev/null || true; done
     printf 'stopped=1\n' >> "$d/meta"
     [ -f "$d/exit" ] || printf '143\n' > "$d/exit"
     [ -f "$d/finished" ] || now > "$d/finished"
@@ -974,6 +1010,320 @@ ARGV
   fi
   say "이어하기: $src → $name${sid:+  (세션 $sid)}"
   eval "cmd_run -n $(shquote "$name") -d $(shquote "$dir")$opts --" '"$@"'
+}
+
+# ---------------------------------------------------------------- 진행 상황
+
+# 워커가 띄운 하위 프로세스 중 끝에 있는 것(자식이 없는 것)을 최근 것부터 냅니다.
+# 에이전트는 명령을 새 세션이나 샌드박스로 떼어 띄워서 프로세스 그룹에 안 잡힙니다
+# (실측: claude, codex). 그래서 부모-자식 관계로 따라갑니다. MCP 서버처럼 처음부터
+# 떠 있는 도우미는 뺍니다.
+proc_leaves() { # <pid>  → "경과초<TAB>명령" 줄들
+  # etimes(초) 는 Linux procps 만 있습니다. macOS 의 ps 는 etime([[일-]시:]분:초) 만 줍니다.
+  # macOS 는 모르는 열이 있으면 오류를 내면서도 나머지 열로 출력해 열이 밀리므로(실측),
+  # 출력하기 전에 되는지 먼저 봅니다.
+  pl_fmt=etime
+  ps -o etimes= -p $$ >/dev/null 2>&1 && pl_fmt=etimes
+  ps -eo "pid=,ppid=,$pl_fmt=,args=" 2>/dev/null | awk -v root="$1" '
+    function secs(t,   d, n, p, s, i) {
+      if (t ~ /^[0-9]+$/) return t
+      d = 0
+      if (index(t, "-")) { d = substr(t, 1, index(t, "-") - 1); t = substr(t, index(t, "-") + 1) }
+      n = split(t, p, ":"); s = 0
+      for (i = 1; i <= n; i++) s = s * 60 + p[i]
+      return d * 86400 + s
+    }
+    { pid[NR] = $1; pp[NR] = $2; et[NR] = secs($3); $1 = $2 = $3 = ""; sub(/^ +/, ""); cmd[NR] = $0 }
+    END {
+      want[root] = 1; grew = 1
+      while (grew) {
+        grew = 0
+        for (i = 1; i <= NR; i++)
+          if ((pp[i] in want) && !(pid[i] in want)) { want[pid[i]] = 1; grew = 1 }
+      }
+      for (i = 1; i <= NR; i++) if (pid[i] in want) parent[pp[i]] = 1
+      for (i = 1; i <= NR; i++) {
+        if (!(pid[i] in want) || (pid[i] in parent) || pid[i] == root) continue
+        if (cmd[i] ~ /(^|[ \/])(mcp|acp)( |$)|mcp-server|code-mode-host/) continue
+        print et[i] "\t" cmd[i]
+      }
+    }' | sort -n
+}
+
+# 에이전트 출력(한 줄에 JSON 하나)을 사람이 읽을 "종류<TAB>내용" 줄로 풉니다.
+# 형식은 에이전트 이름이 아니라 내용으로 알아봅니다.
+#   claude  stream-json, 그리고 claude 의 대화 기록: "role":"assistant" 줄의 tool_use / text
+#   codex   --json: command_execution 시작, agent_message, file_change
+#   agy     stream-json: step_update 의 도구 단계 (ACTIVE)
+# 모르는 형식이면 아무것도 내지 않습니다 (부르는 쪽이 마지막 줄들을 보여 줍니다).
+activity_lines() {
+  LC_ALL=C awk '
+    function unesc(s) { gsub(/\\[ntr]/, " ", s); gsub(/\\"/, "\"", s); gsub(/\\\\/, "\\", s); return s }
+    function str(s, key,   v) {          # "key":"값" 의 값
+      if (!match(s, "\"" key "\":\"([^\"\\\\]|\\\\.)*\"")) return ""
+      return unesc(substr(s, RSTART + length(key) + 4, RLENGTH - length(key) - 5))
+    }
+    function first_str(s, key,   v) {    # "key":{"아무키":"값" 의 값
+      if (!match(s, "\"" key "\":\\{\"[^\"]*\":\"([^\"\\\\]|\\\\.)*\"")) return ""
+      v = substr(s, RSTART, RLENGTH); sub(/^[^{]*\{"[^"]*":"/, "", v); sub(/"$/, "", v)
+      return unesc(v)
+    }
+    /"role":"assistant"/ {
+      rest = $0
+      while (match(rest, /"type":"(tool_use|text)"/)) {
+        blk = substr(rest, RSTART); rest = substr(rest, RSTART + RLENGTH)
+        if (blk ~ /^"type":"tool_use"/) {
+          id = str(blk, "id"); if (id != "" && (id in seen)) continue
+          seen[id] = 1; print str(blk, "name") "\t" first_str(blk, "input")
+        } else if ((x = str(blk, "text")) != "" && x != lasttext) { lasttext = x; print "말\t" x }
+      }
+      next
+    }
+    /"type":"item\.started"/ && /"type":"command_execution"/ {
+      c = str($0, "command"); sub(/^[^ ]*sh -l?c /, "", c); gsub(/^'\''|'\''$/, "", c)
+      print "명령\t" c; next
+    }
+    /"type":"item\.completed"/ && /"type":"agent_message"/ { print "말\t" str($0, "text"); next }
+    /"type":"item\.completed"/ && /"type":"file_change"/ {
+      rest = $0
+      while (match(rest, /"path":"([^"\\]|\\.)*"/)) {
+        print "파일\t" unesc(substr(rest, RSTART + 8, RLENGTH - 9)); rest = substr(rest, RSTART + RLENGTH)
+      }
+      next
+    }
+    /"event":"step_update"/ && /"step_type":"tool"/ && /"state":"ACTIVE"/ {
+      print str($0, "tool_name") "\t" first_str($0, "parameters"); next
+    }
+  '
+}
+
+# 줄마다 <바이트> 까지만 남깁니다. UTF-8 글자를 반으로 자르지 않습니다.
+trunc_filter() { # <바이트>
+  LC_ALL=C awk -v n="$1" '
+    {
+      s = $0
+      if (length(s) > n) {
+        s = substr(s, 1, n)
+        for (i = length(s); i > 0 && i > length(s) - 4; i--) {
+          c = substr(s, i, 1)
+          if (c < "\200") break
+          if (c >= "\300") {
+            need = (c >= "\360") ? 4 : (c >= "\340") ? 3 : 2
+            if (length(s) - i + 1 < need) s = substr(s, 1, i - 1)
+            break
+          }
+        }
+        s = s "…"
+      }
+      print s
+    }'
+}
+
+# 위와 같되 줄의 끝을 남깁니다. 텍스트 출력은 줄바꿈 없이 한 줄로 길게 쌓이기도 해서
+# (실측: devin) 앞을 남기면 처음 문장만 계속 보입니다.
+trunc_tail_filter() { # <바이트>
+  LC_ALL=C awk -v n="$1" '
+    {
+      s = $0
+      if (length(s) > n) {
+        s = substr(s, length(s) - n + 1)
+        while (s != "" && substr(s, 1, 1) >= "\200" && substr(s, 1, 1) < "\300") s = substr(s, 2)
+        s = "…" s
+      }
+      print s
+    }'
+}
+
+mtime_of() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || printf ''; }
+
+# claude 는 도는 동안 <설정>/sessions/<pid>.json 에 세션 ID 를 적어 두고 끝나면 지웁니다
+# (실측). 그 ID 로 <설정>/projects/*/<ID>.jsonl 대화 기록을 찾습니다. 끝난 워커는 meta 의
+# 세션 ID 를 씁니다. 추정이 아니라서 같은 폴더에 claude 가 여럿 돌아도 헷갈리지 않습니다.
+claude_transcript() { # <워커디렉터리>
+  ct_prof=$(meta_get "$1" profile)
+  case "$ct_prof" in
+    '' | default) ct_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;;
+    *) ct_cfg="${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}/$ct_prof" ;;
+  esac
+  # 끝난 워커는 출력에서 세션 ID 를 찾아 meta 에 적어 둡니다 (session_of).
+  ct_sid=$(session_of "$1")
+  if [ -z "$ct_sid" ]; then
+    ct_pid=$(cat "$1/pid" 2>/dev/null || printf '')
+    [ -n "$ct_pid" ] && [ -f "$ct_cfg/sessions/$ct_pid.json" ] \
+      && ct_sid=$(json_str sessionId < "$ct_cfg/sessions/$ct_pid.json")
+  fi
+  [ -n "$ct_sid" ] || return 0
+  find "$ct_cfg/projects" -mindepth 2 -maxdepth 2 -name "$ct_sid.jsonl" 2>/dev/null | head -1
+}
+
+peek_label() { printf '  %s: ' "$(padw 12 "$1")"; }
+
+peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
+  pk_d=$1; pk_n=$2; pk_brief=$3
+  pk_w=160; [ -t 1 ] && pk_w=$(tput cols 2>/dev/null || printf 160)
+  pk_st=$(state_of "$pk_d")
+  pk_start=$(meta_get "$pk_d" started); [ -n "$pk_start" ] || pk_start=$(now)
+  pk_fin=$(cat "$pk_d/finished" 2>/dev/null || now)
+  pk_cf="$pk_d/cmd.orig"; [ -f "$pk_cf" ] || pk_cf="$pk_d/cmd"
+  pk_agent=$(head -1 "$pk_cf" 2>/dev/null || printf ''); pk_agent=${pk_agent##*/}
+  pk_code=''; [ -f "$pk_d/exit" ] && pk_code=" (종료 코드 $(cat "$pk_d/exit"))"
+  say "$(meta_get "$pk_d" name)  $pk_st$pk_code  $(elapsed_str $((pk_fin - pk_start)))  $pk_agent"
+
+  if [ "$pk_st" = running ]; then
+    pk_pid=$(cat "$pk_d/pid" 2>/dev/null || printf '')
+    pk_lv=''; [ -n "$pk_pid" ] && pk_lv=$(proc_leaves "$pk_pid")
+    if [ -n "$pk_lv" ]; then
+      pk_k=3; [ "$pk_brief" -eq 1 ] && pk_k=1
+      printf '%s\n' "$pk_lv" | head -"$pk_k" | {
+        pk_i=0
+        while IFS="$(printf '\t')" read -r pk_et pk_c; do
+          if [ "$pk_i" -eq 0 ]; then pk_l=$(peek_label '지금 실행 중'); else pk_l='                  '; fi
+          pk_i=1
+          printf '%s%s   (%s)\n' "$pk_l" "$pk_c" "$(elapsed_str "$pk_et")"
+        done
+      } | trunc_filter "$pk_w"
+    else
+      say "$(peek_label '지금 실행 중')(하위 명령 없음. 에이전트가 생각하거나 답을 쓰는 중)"
+    fi
+  fi
+
+  pk_from=''; pk_tr=''
+  pk_act=$(tail -c 262144 "$pk_d/out" 2>/dev/null | activity_lines)
+  if [ -z "$pk_act" ] && [ "$pk_agent" = claude ]; then
+    pk_tr=$(claude_transcript "$pk_d")
+    if [ -n "$pk_tr" ]; then
+      pk_act=$(tail -c 262144 "$pk_tr" 2>/dev/null | activity_lines)
+      pk_from=' (claude 대화 기록에서)'
+    fi
+  fi
+
+  # 살아서 일하는지: 출력이나 대화 기록이 마지막으로 바뀐 때
+  pk_last=0
+  for pk_f in "$pk_d/out" "$pk_d/err" $pk_tr; do
+    [ -s "$pk_f" ] || continue
+    pk_m=$(mtime_of "$pk_f"); [ -n "$pk_m" ] && [ "$pk_m" -gt "$pk_last" ] && pk_last=$pk_m
+  done
+  [ "$pk_brief" -eq 1 ] || if [ "$pk_last" -gt 0 ]; then
+    say "$(peek_label '마지막 활동')$(elapsed_str $(($(now) - pk_last))) 전"
+  else
+    say "$(peek_label '마지막 활동')없음 (출력도 기록도 아직 없음)"
+  fi
+  if [ -n "$pk_act" ]; then
+    if [ "$pk_brief" -eq 1 ]; then
+      printf '%s\n' "$pk_act" | tail -1 | while IFS="$(printf '\t')" read -r pk_t pk_v; do
+        say "$(peek_label '최근 활동')$pk_t  $pk_v"
+      done | trunc_filter "$pk_w"
+    else
+      say "  최근 활동$pk_from"
+      printf '%s\n' "$pk_act" | tail -"$pk_n" | while IFS="$(printf '\t')" read -r pk_t pk_v; do
+        say "    $(padw 8 "$pk_t") $pk_v"
+      done | trunc_filter "$pk_w"
+    fi
+  else
+    # 모르는 형식(텍스트, 빌드 로그 등)은 마지막 줄들을 그대로 보여 줍니다.
+    # 끝난 워커의 출력이 JSON 한 덩어리면 날것 대신 아래에서 답만 보여 줍니다.
+    pk_lab='최근 출력'
+    pk_tl=$(tail -c 65536 "$pk_d/out" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -"$pk_n")
+    [ "$pk_st" != running ] && [ -n "$(printf '%s' "$pk_tl" | tail -1 | grep '^[[:space:]]*{')" ] && pk_tl=''
+    if [ -z "$pk_tl" ]; then
+      pk_lab='최근 오류 출력'
+      pk_tl=$(tail -c 65536 "$pk_d/err" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -"$pk_n")
+    fi
+    if [ -n "$pk_tl" ] && [ "$pk_brief" -eq 1 ]; then
+      printf '%s%s\n' "$(peek_label "$pk_lab")" "$(printf '%s\n' "$pk_tl" | tail -1 | trunc_tail_filter $((pk_w - 20)))"
+    elif [ -n "$pk_tl" ]; then
+      say "  $pk_lab"
+      printf '%s\n' "$pk_tl" | trunc_tail_filter $((pk_w - 6)) | sed 's/^/    /'
+    elif [ "$pk_st" = running ]; then
+      say "$(peek_label '최근 활동')(도중 출력 없음. 이 명령은 끝날 때 한 번에 내는 것 같습니다)"
+    fi
+  fi
+
+  pk_wt=$(meta_get "$pk_d" worktree)
+  if [ "$pk_brief" -eq 0 ] && [ -n "$pk_wt" ] && [ -d "$pk_wt" ]; then
+    pk_porc=$(git -C "$pk_wt" status --porcelain 2>/dev/null || printf '')
+    pk_nf=$(printf '%s' "$pk_porc" | grep -c . || true)
+    pk_new=$(printf '%s' "$pk_porc" | grep -c '^??' || true)
+    pk_ss=$(git -C "$pk_wt" diff --shortstat HEAD 2>/dev/null || printf '')
+    pk_ins=$(printf '%s' "$pk_ss" | sed -n 's/.* \([0-9]*\) insertion.*/\1/p')
+    pk_del=$(printf '%s' "$pk_ss" | sed -n 's/.* \([0-9]*\) deletion.*/\1/p')
+    pk_det=''
+    [ -n "$pk_ss" ] && pk_det="+${pk_ins:-0} -${pk_del:-0}"
+    [ "$pk_new" -gt 0 ] && pk_det="${pk_det:+$pk_det, }새 파일 ${pk_new}개"
+    if [ "$pk_nf" -eq 0 ]; then pk_sum='아직 바뀐 파일 없음'; else pk_sum="파일 ${pk_nf}개 바뀜${pk_det:+ ($pk_det)}"; fi
+    say "$(peek_label 'worktree')$pk_sum   $(tilde "$pk_wt")"
+  fi
+  if [ "$pk_brief" -eq 0 ] && [ "$pk_st" != running ]; then
+    # JSON 결과면 최종 답을 한 줄로 (claude result / agy response / codex 마지막 text)
+    pk_ans=''
+    for pk_k in result response text; do
+      pk_ans=$(json_str "$pk_k" < "$pk_d/out" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
+      [ -n "$pk_ans" ] && break
+    done
+    [ -n "$pk_ans" ] && printf '%s%s\n' "$(peek_label '답')" "$pk_ans" | trunc_filter "$pk_w"
+    say "$(peek_label '결과')aw result $(meta_get "$pk_d" name)"
+  fi
+  return 0
+}
+
+cmd_peek() {
+  pk_lines=6; pk_names=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n) pk_lines="${2:?-n 에 줄 수가 필요합니다}"; shift 2 ;;
+      -h | --help) say "사용법: aw peek [이름...] [-n 줄수]   (이름을 빼면 실행 중인 워커 전부를 짧게)"; return 0 ;;
+      -*) die "알 수 없는 옵션: $1   (aw peek --help)" ;;
+      *) need_worker "$1"; pk_names="$pk_names $1"; shift ;;
+    esac
+  done
+  pk_found=0
+  if [ -n "$pk_names" ]; then
+    for pk_nm in $pk_names; do
+      [ "$pk_found" -eq 0 ] || say ""
+      pk_found=1
+      peek_one "$(wdir "$pk_nm")" "$pk_lines" 0
+    done
+  else
+    for pk_dd in $(list_dirs); do
+      [ "$(state_of "$pk_dd")" = running ] || continue
+      [ "$pk_found" -eq 0 ] || say ""
+      pk_found=1
+      peek_one "$pk_dd" 1 1
+    done
+    [ "$pk_found" -eq 1 ] || say "실행 중인 워커가 없습니다.   끝난 워커는: aw peek <이름>"
+  fi
+  return 0
+}
+
+# peek 을 몇 초마다 다시 그립니다. 사람이 보는 화면용입니다 (끝날 때까지 돌아옵니다).
+cmd_watch() {
+  wa_int=2; wa_n=''; wa_names=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -i) wa_int="${2:?-i 에 초가 필요합니다}"; shift 2 ;;
+      -n) wa_n="${2:?-n 에 줄 수가 필요합니다}"; shift 2 ;;
+      -h | --help) say "사용법: aw watch [이름...] [-i 초] [-n 줄수]   (Ctrl-C 로 멈춰도 워커는 계속 돕니다)"; return 0 ;;
+      -*) die "알 수 없는 옵션: $1   (aw watch --help)" ;;
+      *) need_worker "$1"; wa_names="$wa_names $1"; shift ;;
+    esac
+  done
+  trap 'say ""; say "지켜보기를 멈춥니다. 워커는 계속 돕니다."; exit 0' INT
+  while :; do
+    # shellcheck disable=SC2086  # 이름 목록은 일부러 쪼갭니다
+    wa_out=$(cmd_peek $wa_names ${wa_n:+-n "$wa_n"})
+    if [ -t 1 ]; then printf '\033[H\033[2J'; else say "----"; fi
+    say "aw watch  $(date +%H:%M:%S)   ${wa_int}초마다 다시 그림. Ctrl-C 로 멈춰도 워커는 계속 돕니다."
+    say ""
+    printf '%s\n' "$wa_out"
+    wa_left=0
+    if [ -n "$wa_names" ]; then
+      for wa_nm in $wa_names; do [ "$(state_of "$(wdir "$wa_nm")")" = running ] && wa_left=1; done
+    else
+      for wa_dd in $(list_dirs); do [ "$(state_of "$wa_dd")" = running ] && wa_left=1; done
+    fi
+    if [ "$wa_left" -eq 0 ]; then say ""; say "모두 끝났습니다."; return 0; fi
+    sleep "$wa_int"
+  done
 }
 
 # ---------------------------------------------------------------- 에이전트 스킬
@@ -1362,6 +1712,9 @@ aw rm review
 - `aw run` 은 바로 반환합니다. 이름은 늘 `-n` 으로 줍니다 (영문·숫자·`.` `_` `-`).
 - `--timeout` 은 `aw` 의 제한이 아니라 **셸 도구 한 번의 제한에 맞추는 값**입니다.
   코드 2 면 다시 `aw wait` 합니다. 오래 걸릴 작업은 아래 [오래 걸리는 작업](#오래-걸리는-작업).
+- **진행 상황**은 `aw peek <이름>` 입니다. 지금 도는 명령, 최근 활동(도구 호출과 말), 마지막 활동
+  시각, worktree 에서 바뀐 파일 수가 나옵니다. `aw watch` 는 사람이 보는 화면용이라 끝날 때까지
+  돌아오지 않으니 직접 쓰지 않고, 사용자에게 알려 줍니다.
 - 실패하면 `aw errs <이름>` 과 `aw logs <이름>` 을 먼저 봅니다. 전체 목록은 `aw list`.
 - **워커는 이 대화를 모릅니다.** 프롬프트에 목표, 관련 파일 경로, 제약, 원하는 출력 형식을
   전부 적습니다. 읽기만 할 작업이면 "파일을 고치지 마" 라고 분명히 씁니다.
@@ -1376,7 +1729,7 @@ aw rm review
 | 예상 시간 | 기다리는 법 |
 | --- | --- |
 | 몇 분 | `aw wait <이름> --timeout <셸 제한보다 조금 짧게>` 를 코드 0·1 이 나올 때까지 반복. 셸 제한을 늘릴 수 있으면 늘려서 호출 횟수를 줄임 |
-| 수십 분 이상 | 붙잡혀 있지 않습니다. 띄운 뒤 다른 일을 하다가 사이사이 `aw list` 로 확인 |
+| 수십 분 이상 | 붙잡혀 있지 않습니다. 띄운 뒤 다른 일을 하다가 사이사이 `aw peek <이름>` 으로 확인 |
 | 백그라운드 셸이 있으면 | `aw wait <이름>` 을 `--timeout` 없이 백그라운드로 걸어 두고, 끝났다는 알림을 받음 (Claude Code 의 백그라운드 실행 등) |
 | 이 대화보다 오래 | 워커 이름과 확인 방법을 사용자에게 남기고 마침. 나중 대화에서 `aw list`, `aw result <이름>`, `aw resume <이름>` 으로 이어받음 |
 
@@ -1388,28 +1741,29 @@ aw rm review
    (가정을 적고 계속할지, 멈추고 보고할지).
 3. **`-w` 로 격리하고**, 진행 상황과 결론을 worktree 안의 파일 (예: `PROGRESS.md`, `REPORT.md`) 에 적게 합니다.
    끝나기 전에도 그 파일로 어디까지 했는지 볼 수 있습니다.
-4. **도중 진행이 보이는 출력 형식**을 씁니다. claude 의 `--output-format json` 은 끝날 때 한 번에 나와서
-   그 전엔 `aw logs` 가 비어 있습니다. `--output-format stream-json --verbose` 는 진행이 줄줄이 쌓이고
-   `aw result <이름> --field result` 도 그대로 됩니다. codex 의 `--json` 은 처음부터 사건마다 한 줄씩 나옵니다.
+4. **도중 진행은 `aw peek <이름>` 으로** 봅니다. 위 표대로 claude·agy 를 `stream-json` 으로 띄우면 출력에
+   바로 쌓입니다. `json` 으로 띄웠다면 claude 는 대화 기록에서 읽고, agy 는 지금 도는 명령만 보입니다.
 
    ```sh
    aw run -n big -w aw/big-refactor -f task.md -- claude -p --output-format stream-json --verbose
    ```
 
-5. **띄운 직후 사용자에게** 워커 이름, 작업 위치 (worktree), 확인 명령 (`aw list`, `aw logs <이름> -f`,
-   `aw result <이름>`) 을 알립니다. 이 대화가 먼저 끝나도 사용자가 직접 확인할 수 있게 하기 위해서입니다.
-6. **멈춘 것 같으면** `aw status <이름>` (경과 시간), `aw logs <이름> -n 20`, `aw errs <이름>` 을 봅니다.
-   승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인). 끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
+5. **띄운 직후 사용자에게** 워커 이름, 작업 위치 (worktree), 확인 명령 (`aw watch <이름>` 으로 지켜보기,
+   `aw result <이름>` 으로 결과) 을 알립니다. 이 대화가 먼저 끝나도 사용자가 직접 확인할 수 있게 하기 위해서입니다.
+6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령과 마지막 활동 시각을 보고, 그다음 `aw errs <이름>` 을
+   봅니다. 승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인). 끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
 
 ## 에이전트별 한 줄
 
 | 에이전트 | 띄우기 | 답 꺼내기 |
 | --- | --- | --- |
-| claude | `aw run -n c -- claude -p --output-format json "작업"` | `aw result c --field result` |
+| claude | `aw run -n c -- claude -p --output-format stream-json --verbose "작업"` | `aw result c --field result` |
 | codex | `aw run -n x -- codex exec --json "작업"` | `aw result x --field text` |
-| agy (Gemini) | `aw run -n a -- agy --output-format json --model gemini-3.8-flash-high -p='작업'` | `aw result a --field response` |
+| agy (Gemini) | `aw run -n a -- agy --output-format stream-json --model gemini-3.8-flash-high -p='작업'` | `aw result a --field response` |
 | devin | `aw run -n d -- devin -p "작업" --model gemini-3-8-flash-high` | `aw result d` (텍스트) |
 
+- **claude·agy 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
+  `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.
 - **claude·codex 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.
 - **codex 는 git 저장소 밖에서** `--skip-git-repo-check` 가 필요합니다 (프롬프트 앞에):
   `codex exec --json --skip-git-repo-check "작업"`
@@ -1422,9 +1776,9 @@ aw rm review
 프롬프트가 길거나 따옴표가 많으면 파일에 쓰고 넘깁니다 (인자 하나는 128KB 가 한계):
 
 ```sh
-aw run -n c -f task.md -- claude -p --output-format json
+aw run -n c -f task.md -- claude -p --output-format stream-json --verbose
 aw run -n x -f task.md -- codex exec --json -
-aw run -n a -f task.md -- agy --output-format json --model gemini-3.8-flash-high   # -p 빼기
+aw run -n a -f task.md -- agy --output-format stream-json --model gemini-3.8-flash-high   # -p 빼기
 aw run -n d -- devin -p --prompt-file task.md --model gemini-3-8-flash-high        # stdin 안 받음
 ```
 
@@ -1437,7 +1791,7 @@ aw run -n d -- devin -p --prompt-file task.md --model gemini-3-8-flash-high     
   워커 여럿이 같은 저장소를 고칠 때는 각자 `-w` 를 씁니다.
 
   ```sh
-  aw run -n fix -w aw/fix-login -- claude -p --output-format json "로그인 버그를 고쳐줘"
+  aw run -n fix -w aw/fix-login -- claude -p --output-format stream-json --verbose "로그인 버그를 고쳐줘"
   aw status fix                   # worktree 경로 확인
   git -C <worktree 경로> status    # 무엇을 바꿨는지 봄
   ```
@@ -1460,7 +1814,7 @@ aw resume review-r1 -- '테스트도 추가해줘'             # → review-r2
 
 ```sh
 aw run -n rv-codex -- codex exec --json "이 설계를 검토해줘: ..."
-aw run -n rv-gemini -- agy --output-format json --model gemini-3.8-flash-high -p='이 설계를 검토해줘: ...'
+aw run -n rv-gemini -- agy --output-format stream-json --model gemini-3.8-flash-high -p='이 설계를 검토해줘: ...'
 aw wait rv-codex rv-gemini --timeout 100
 ```
 
@@ -1494,6 +1848,8 @@ case "$sub" in
   result)  cmd_result "$@" ;;
   wait)    cmd_wait "$@" ;;
   resume)  cmd_resume "$@" ;;
+  peek)    cmd_peek "$@" ;;
+  watch)   cmd_watch "$@" ;;
   stop)    cmd_stop "$@" ;;
   rm)      cmd_rm "$@" ;;
   clean)   cmd_clean "$@" ;;

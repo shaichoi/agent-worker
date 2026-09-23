@@ -4,15 +4,15 @@
 에이전트 종류를 가리지 않습니다 — `claude`, `codex`, `aider`, 빌드 스크립트가 전부 같은 방식입니다.
 
 ```
-$ aw run -n refactor -- claude -p --output-format json "이 모듈 정리해줘"
+$ aw run -n refactor -- claude -p --output-format stream-json --verbose "이 모듈 정리해줘"
 워커 시작: refactor
   디렉터리: /home/me/proj
-  명령: claude -p --output-format json 이 모듈 정리해줘
+  명령: claude -p --output-format stream-json --verbose 이 모듈 정리해줘
   보기: aw logs refactor -f    기다리기: aw wait refactor    결과: aw result refactor
 
 $ aw list
 이름               상태     코드  경과     명령
-refactor           running  -     42s      claude -p --output-format json 이 모듈 정리해줘
+refactor           running  -     42s      claude -p --output-format stream-json --verbose 이 모듈…
 
 $ aw wait refactor && aw result refactor --field result
 ```
@@ -24,7 +24,7 @@ $ aw wait refactor && aw result refactor --field result
 
 
 ```sh
-aw run -n job -- claude -p --output-format json "이 저장소에 테스트를 추가해줘"
+aw run -n job -- claude -p --output-format stream-json --verbose "이 저장소에 테스트를 추가해줘"
 aw logs job -f                      # 진행 보기 (Ctrl-C 로 빠져나와도 워커는 계속)
 aw wait job && aw result job --field result
 aw rm job
@@ -97,6 +97,8 @@ cd agent-worker
 | `aw status <이름>` | 하나의 상세 |
 | `aw logs <이름> [-f] [-n N]` | 표준 출력 (`-f` 는 따라가기) |
 | `aw errs <이름>` | 표준 오류 |
+| `aw peek [이름...]` | [진행 상황](#진행-상황-보기): 지금 도는 명령, 최근 활동, worktree 변경 |
+| `aw watch [이름...] [-i 초]` | `peek` 을 몇 초마다 다시 그림 (Ctrl-C 해도 워커는 계속) |
 | `aw result <이름> [--field K]` | 출력 전문, 또는 JSON 필드 하나 |
 | `aw resume <이름> -- '프롬프트'` | 그 워커의 대화를 이어서 새 워커로 |
 | `aw wait <이름...> [--timeout N]` | 끝날 때까지 대기 (실패면 0이 아닌 코드) |
@@ -142,8 +144,8 @@ if aw wait build test; then echo "둘 다 성공"; else echo "실패한 워커 �
 긴 작업을 던져 놓고 다른 일 하기:
 
 ```sh
-aw run -n bigjob -f task.md -- claude -p --output-format json
-aw logs bigjob -f
+aw run -n bigjob -f task.md -- claude -p --output-format stream-json --verbose
+aw watch bigjob          # 지금 무엇을 하는지 (날것의 출력은 aw logs bigjob -f)
 ```
 
 여러 개를 병렬로 돌리고 전부 기다리기:
@@ -165,6 +167,42 @@ aw run -n featB -w feat/b -- claude -p "B 기능 구현"
 
 각 워커는 `<저장소>/.aw-worktrees/<이름>`에서 새 브랜치로 돌고, `aw rm`이 worktree까지 정리합니다.
 `aw`가 만든 worktree만 지우고 사용자가 만든 것은 건드리지 않습니다.
+
+## 진행 상황 보기
+
+`aw peek <이름>` 은 지금 무엇을 하는지 한 번 보여 주고, `aw watch <이름>` 은 그걸 몇 초마다 다시 그립니다
+(Ctrl-C 로 멈춰도 워커는 계속 돕니다. 워커가 끝나면 스스로 멈춥니다). 이름을 빼면 실행 중인 워커 전부를 짧게 보여 줍니다.
+
+```
+$ aw peek review
+review  running  3m12s  claude
+  지금 실행 중: npm test -- auth   (41s)
+  마지막 활동 : 5s 전
+  최근 활동 (claude 대화 기록에서)
+    Read     src/auth/login.ts
+    Bash     npm test -- auth
+    말       테스트 3개가 실패합니다. 원인을 보겠습니다.
+  worktree    : 파일 4개 바뀜 (+120 -35, 새 파일 1개)   ~/proj/.aw-worktrees/review
+```
+
+| 항목 | 어디서 |
+| --- | --- |
+| 지금 실행 중 | 워커가 띄운 하위 프로세스 중 가장 최근 것. 에이전트는 명령을 새 세션이나 샌드박스로 떼어 띄워서(실측: claude, codex) 프로세스 그룹이 아니라 부모-자식 관계로 따라갑니다. MCP 서버 같은 상주 도우미는 뺍니다. Linux 와 macOS(26.5) 에서 확인했습니다 |
+| 마지막 활동 | 출력이나 claude 대화 기록이 마지막으로 바뀐 때. 오래 그대로면 멈췄을 수 있습니다 |
+| 최근 활동 | 에이전트 출력을 읽을 수 있게 풉니다: claude `stream-json`, codex `--json`, agy `--output-format stream-json`. 모르는 형식(텍스트, 빌드 로그)은 마지막 줄들을 그대로 보여 줍니다 |
+| worktree | `-w` 로 띄웠으면 지금까지 바뀐 파일 수 |
+| 답 | 끝난 워커면 JSON 결과의 최종 답 한 줄 |
+
+**claude 를 `--output-format json` 으로 띄워도 보입니다.** 이 형식은 끝날 때 한 번에 나와서 도중엔 출력이
+비어 있습니다. 대신 claude 는 도는 동안 `~/.claude/sessions/<pid>.json` 에 세션 ID 를 적고, 대화 기록
+(`~/.claude/projects/…/<세션>.jsonl`)을 실시간으로 씁니다(실측, 2.1.280). `aw` 는 워커의 pid 로 그 기록을
+찾으므로, 같은 폴더에서 claude 가 여럿 돌아도 헷갈리지 않습니다. `--profile` 로 띄웠으면 그 프로필의 기록을 봅니다.
+
+devin 은 텍스트를 줄바꿈 없이 한 줄로 길게 쌓습니다(실측). 그래서 텍스트 출력은 긴 줄의 **끝**(가장 최근)을 보여 줍니다.
+도중에 아무것도 안 내놓는 동안에는 지금 도는 명령만 보입니다.
+
+`aw peek` 은 한 번 보고 돌아오므로 에이전트도 씁니다(스킬에 적혀 있음). `aw watch` 는 끝날 때까지
+돌아오지 않아 사람이 보는 용입니다.
 
 ## 에이전트 연동 (처음 설정)
 
@@ -191,7 +229,7 @@ agy models                                                     # gemini-3.8-flas
 설치 프로그램이 `~/.bashrc`와 `~/.bash_profile`에 PATH 줄을 덧붙입니다(zsh는 건드리지 않음).
 
 ```sh
-aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='테스트를 추가해줘'
+aw run -n a1 -- agy --output-format stream-json --model gemini-3.8-flash-high -p='테스트를 추가해줘'
 aw wait a1 && aw result a1 --field response
 ```
 
@@ -209,12 +247,14 @@ left as an argument and ignored.
 크기 제한(127KB)도 피합니다. 379KB 파일로 확인했습니다.
 
 ```sh
-aw run -n a2 -f spec.md -- agy --output-format json --model gemini-3.8-flash-high
+aw run -n a2 -f spec.md -- agy --output-format stream-json --model gemini-3.8-flash-high
 ```
 
 `-p` 와 표준 입력을 같이 주면 `-p` 가 이기고 표준 입력은 무시됩니다.
 
-`--output-format json` 의 실제 응답:
+**`--output-format stream-json` 을 권합니다.** 도중 사건(도구 호출, 단계)이 한 줄씩 쌓여 `aw peek` 과
+`aw logs -f` 로 진행이 보입니다. 마지막 줄이 아래 `json` 결과와 같은 내용이라 `--field` 는 똑같이 됩니다.
+`--output-format json` 은 끝날 때 한 번에 나와서 도중엔 출력이 없습니다. 그 결과의 실제 모양:
 
 ```json
 {"conversation_id":"1553b767-...","status":"SUCCESS","response":"4\n",
@@ -242,9 +282,13 @@ claude auth login
 ```
 
 ```sh
-aw run -n c1 -- claude -p --output-format json "테스트를 추가해줘"
-aw wait c1 && aw result c1 --field result
+aw run -n c1 -- claude -p --output-format stream-json --verbose "테스트를 추가해줘"
+aw wait c1 && aw result c1 --field result      # 성공 여부: --field is_error (true/false)
 ```
+
+`stream-json` 은 `-p` 와 같이 쓸 때 `--verbose` 가 필요합니다. 도중 사건이 쌓여 `aw peek`, `aw logs -f` 로
+진행이 보이고, 끝난 뒤 `--field` 는 `json` 과 똑같이 됩니다. `--output-format json` 도 됩니다. 끝날 때까지
+출력이 비지만 `aw peek` 은 claude 의 대화 기록에서 진행을 읽습니다.
 
 계정이 여러 개면 [claude-profiles](https://github.com/shaichoi/claude-profiles)와 함께 씁니다.
 
@@ -333,7 +377,7 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 `session` 으로 나옵니다.
 
 ```sh
-aw run -n job -- agy --output-format json --model gemini-3.8-flash-high -p='설계를 검토해줘'
+aw run -n job -- agy --output-format stream-json --model gemini-3.8-flash-high -p='설계를 검토해줘'
 aw wait job
 aw resume job -- '방금 지적한 것 중 첫 번째를 고쳐줘'     # → job-r1
 aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
@@ -377,8 +421,8 @@ aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
 
 | 에이전트 | 명령 |
 | --- | --- |
-| `claude` | `aw run -f spec.md -- claude -p --output-format json` (프롬프트 인자 생략) |
-| `agy` | `aw run -f spec.md -- agy --output-format json --model ...` (`-p` 빼기) |
+| `claude` | `aw run -f spec.md -- claude -p --output-format stream-json --verbose` (프롬프트 인자 생략) |
+| `agy` | `aw run -f spec.md -- agy --output-format stream-json --model ...` (`-p` 빼기) |
 | `codex` | `aw run -f spec.md -- codex exec --json -` |
 | `devin` | `aw run -- devin -p --prompt-file spec.md --model ...` (표준 입력 안 받음) |
 
@@ -618,11 +662,12 @@ AW_HOME=/tmp/aw-test aw run -- echo 시험
 
 **승인 프롬프트가 필요한 작업은 멈춰 있을 수 있습니다.** 비대화형으로 도구를 쓰는 에이전트는
 권한을 물어볼 자리가 없습니다. `claude`라면 `--permission-mode`를 함께 넘기세요. 상태가
-오래 `running`이면 `aw logs`와 `aw errs`를 먼저 보세요.
+오래 `running`이면 `aw peek`으로 지금 도는 명령과 마지막 활동 시각을 보고, 그다음 `aw errs`를 보세요.
 
-**`stop`은 프로세스 그룹을 종료합니다.** 에이전트가 띄운 하위 프로세스(테스트 러너, 빌드 등)까지
-함께 정리됩니다. `setsid`가 없는 환경에서는 새 그룹을 만들 수 없어 실행한 명령 하나만 종료되고,
-그 하위 프로세스는 남을 수 있습니다.
+**`stop`은 하위 프로세스까지 끊습니다.** 프로세스 그룹째 끊고, 부모-자식 관계로 찾은 하위 프로세스도
+전부 끊습니다. 에이전트는 도구 명령(테스트 러너, 빌드 등)을 새 세션으로 떼어 띄워서 그룹째 끊어도
+남기 때문입니다(실측: claude, codex). `setsid`가 없는 macOS 도 이렇게 정리됩니다(실측). 다만 하위 프로세스가
+스스로 부모와 연을 끊고 떠나 버린(데몬이 된) 경우는 찾을 수 없습니다.
 
 **출력은 파일에 그대로 쌓입니다.** 매우 긴 작업이면 `out` 파일이 커질 수 있으니
 `aw clean`으로 주기적으로 정리하세요.
