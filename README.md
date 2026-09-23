@@ -76,6 +76,7 @@ cd agent-worker
 | `aw logs <이름> [-f] [-n N]` | 표준 출력 (`-f` 는 따라가기) |
 | `aw errs <이름>` | 표준 오류 |
 | `aw result <이름> [--field K]` | 출력 전문, 또는 JSON 필드 하나 |
+| `aw resume <이름> -- '프롬프트'` | 그 워커의 대화를 이어서 새 워커로 |
 | `aw wait <이름...> [--timeout N]` | 끝날 때까지 대기 (실패면 0이 아닌 코드) |
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
@@ -299,6 +300,41 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 **GUI 기반 도구(Antigravity IDE, Cursor 등)는 안 됩니다.** VS Code 계열의 CLI 는 창을 여는
 용도라 헤드리스로 돌지 않습니다. 같은 모델을 쓰고 싶으면 그 모델을 지원하는 CLI 에이전트를
 쓰세요 — 예를 들어 Gemini 는 `agy` 나 `devin --model gemini-...` 로 돌립니다.
+
+### 대화 이어하기
+
+에이전트들은 대화를 이어갈 수 있게 세션 ID 를 내놓습니다. 이름이 제각각이라
+(`session_id` / `conversation_id` / `thread_id`) `aw` 가 끝난 워커의 출력에서
+찾아 `meta` 에 적어 둡니다. `aw status` 에서 볼 수 있고 `aw list --json` 에도
+`session` 으로 나옵니다.
+
+```sh
+aw run -n job -- agy --output-format json --model gemini-3.8-flash-high -p='설계를 검토해줘'
+aw wait job
+aw resume job -- '방금 지적한 것 중 첫 번째를 고쳐줘'     # → job-r1
+aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
+```
+
+원래 명령을 그대로 물려받고 프롬프트만 갈아 끼웁니다. 실행할 명령을 화면에
+찍어 주니 무엇이 붙었는지 바로 보입니다. 새 이름은 `<원래이름>-r1`, `-r2` 로
+붙고 `-n` 으로 바꿀 수 있습니다. 작업 디렉터리와 `--profile` 도 물려받습니다.
+
+| 에이전트 | 이어하기 | 비고 |
+| --- | --- | --- |
+| `claude` | `--resume <session_id>` | |
+| `agy` | `--conversation <conversation_id>` | |
+| `codex` | `codex exec resume <thread_id>` | 이 서브명령이 `--sandbox` 를 안 받아 기본 옵션을 자동으로 끕니다 |
+| `devin` | `-c` | 텍스트만 내놓아 세션 ID 를 못 뽑습니다. 아래 참고 |
+
+**`devin` 은 정확하지 않습니다.** 세션 ID 를 비대화형으로 얻을 길이 없어
+`-c`(그 디렉터리의 **가장 최근** 대화)로 이어갑니다. 같은 디렉터리에 devin
+워커가 여럿이면 엉뚱한 대화를 집을 수 있어서, 그럴 때 `aw` 가 경고를 냅니다.
+
+**claude 와 codex 는 프롬프트를 맨 끝 인자로 두세요.** 이어할 때 맨 끝을
+프롬프트로 보고 걷어냅니다. `claude -p "프롬프트" --output-format json` 처럼
+가운데 두면 엉뚱한 걸 걷어냅니다. `-f` 로 넣었다면 걷어낼 게 없으니 그대로입니다.
+
+`-e` 로 준 환경변수는 이어지지 않습니다. 필요하면 `aw resume` 에 다시 주세요.
 
 ### 프롬프트가 클 때
 

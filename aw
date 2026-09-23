@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.6.2
+AW_VERSION=0.7.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -30,6 +30,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw list [--json]                     목록과 상태
   aw wait <이름...> [--timeout N]      끝날 때까지 대기 (종료 코드로 성패)
   aw result <이름> [--field KEY]       출력 전문, 또는 JSON 필드 하나
+  aw resume <이름> -- '프롬프트'        그 워커의 대화를 이어서 새 워커로
   aw logs|errs <이름> [-f] [-n N]      표준 출력 / 표준 오류
   aw status <이름>                     상세 정보
   aw stop|rm <이름...>                 중단 / 기록 삭제
@@ -41,6 +42,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
 전형적인 흐름
   aw run -n job -- claude -p --output-format json "작업 내용"
   aw wait job && aw result job --field result
+  aw resume job -- "앞 답변을 반영해서 더 해줘"    # 대화를 이어감
   aw rm job
 
 run 옵션
@@ -65,16 +67,22 @@ help_topic() {
     agents) cat <<'T'
 에이전트별 호출법 (aw 는 명령을 그대로 넘깁니다)
 
+대화 이어하기는 aw resume <워커> -- '프롬프트' 로 합니다. 세션 ID 는 aw 가
+끝난 워커의 출력에서 찾아 meta 에 적어 둡니다 (aw status 에서 볼 수 있습니다).
+claude/codex 는 프롬프트를 맨 끝 인자로 둬야 이어할 때 제대로 걷어냅니다.
+
 claude — Claude Code
   aw run -n c1 -- claude -p --output-format json "작업"
   aw run -n c2 -f spec.md -- claude -p --output-format json   # 프롬프트 인자 생략
   aw result c1 --field result        # 성공 여부: --field is_error
+  이어하기: --resume <session_id>  (aw resume 이 알아서 붙입니다)
   계정 분리: aw run --profile work-sub -- claude -p "작업"
 
 agy — Antigravity CLI (Gemini)
   aw run -n a1 -- agy --output-format json --model gemini-3.8-flash-high -p='작업'
   aw run -n a2 -f spec.md -- agy --output-format json --model ...   # -p 를 빼야 함
   aw result a1 --field response      # 상태: --field status (SUCCESS)
+  이어하기: --conversation <conversation_id>
   함정: -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
         -p='작업' 형태로 붙이면 플래그 순서와 무관합니다.
         -p 와 stdin 을 같이 주면 -p 가 이기고 stdin 은 무시됩니다.
@@ -91,11 +99,16 @@ devin
         (aw defaults). -w 로 만드는 worktree 는 실행할 때 새로 생기는
         경로라 미리 신뢰 등록을 할 수 없어, 사실상 이 옵션이 필요합니다.
         진단: devin doctor
+        텍스트만 내놓아 세션 ID 를 뽑을 수 없습니다. aw resume 은 -c (그
+        디렉터리의 최근 대화) 로 이어가며, 워커가 여럿이면 엉뚱한 걸 집을
+        수 있어 경고를 냅니다.
   모델 목록: devin models list
 
 codex — OpenAI Codex CLI
   aw run -n x1 -- codex exec --json "작업"
   aw run -n x2 -f spec.md -- codex exec --json -    # stdin 을 - 로 받습니다
+  이어하기: codex exec resume <thread_id>. 이 서브명령은 --sandbox 를 안 받아서
+            aw resume 이 기본 옵션을 자동으로 끕니다.
 
 GUI 도구(Antigravity IDE, Cursor)는 창만 열려서 워커로 쓸 수 없습니다.
 T
@@ -105,6 +118,7 @@ T
 
   meta      이름, 디렉터리, 시작 시각, worktree, 꼬리표, 토큰 추정치, 세션 ID
   cmd       실행한 인자 (한 줄에 하나)
+  cmd.orig  기본 옵션을 붙이기 전, 사용자가 준 인자 (aw resume 이 씀)
   out / err 표준 출력 / 표준 오류
   exit      종료 코드 (이 파일이 생기면 끝난 것)
   pid       실행 중인 명령의 pid
@@ -268,6 +282,112 @@ session_of() { # <워커디렉터리>
     done
   fi
   printf '%s' "$sess"
+  return 0
+}
+
+# 프롬프트와, 이미 붙어 있는 이어하기 표시를 걷어내며 나머지를 한 줄에 하나씩 냅니다.
+# 이어하기를 또 이어할 때 --resume 이 겹치지 않게 하는 것이 두 번째 몫입니다.
+resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <인자...>
+  rmode=$1; rhas=$2; shift 2
+  rskip=0; rn=$#; ri=0
+  for ra in "$@"; do
+    ri=$((ri + 1))
+    if [ "$rskip" -eq 1 ]; then
+      rskip=0
+      # 값처럼 보이지 않으면(플래그면) 버리지 않고 살립니다.
+      case "$ra" in -*) ;; *) continue ;; esac
+    fi
+    case "$rmode" in
+      claude)
+        case "$ra" in
+          --resume) rskip=1; continue ;;
+          --resume=*) continue ;;
+          -c | --continue) continue ;;
+        esac
+        # 프롬프트는 맨 끝 인자입니다.
+        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then continue; fi
+        ;;
+      agy)
+        case "$ra" in
+          --conversation) rskip=1; continue ;;
+          --conversation=*) continue ;;
+          -c | --continue) continue ;;
+          -p | --prompt) rskip=1; continue ;;
+          -p=* | --prompt=*) continue ;;
+        esac
+        ;;
+      codex)
+        # '-' 는 stdin 으로 프롬프트를 받겠다는 표식입니다. 새 프롬프트는
+        # 인자로 주므로 같이 두면 codex 가 둘 다 프롬프트로 보고 실패합니다.
+        [ "$ra" = - ] && continue
+        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then continue; fi
+        ;;
+      devin)
+        # -p 와 그 뒤 프롬프트, 이어하기 옵션은 앞쪽에서 새로 붙였습니다.
+        case "$ra" in
+          -p | --print)     rskip=1; continue ;;
+          -p=* | --print=*) continue ;;
+          -c | --continue)  continue ;;
+          -r | --resume)    rskip=1; continue ;;
+          --resume=*)       continue ;;
+          --prompt-file)    rskip=1; continue ;;
+          --prompt-file=*)  continue ;;
+        esac
+        ;;
+    esac
+    printf '%s\n' "$ra"
+  done
+  return 0
+}
+
+# 이어하기 명령을 만들어 한 줄에 하나씩 냅니다.
+#
+# 여기가 에이전트별 지식이 모이는 유일한 곳입니다. 새 에이전트를 붙이려면
+# 이 case 에 한 갈래만 더하면 됩니다.
+#
+# 프롬프트가 원래 어디 있었는지는 meta 의 stdin 으로 압니다. 파일을 물렸으면
+# 인자에는 프롬프트가 없고, /dev/null 이면 인자에 있었습니다.
+resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
+  rd=$1; rsid=$2; rp=$3
+  set --
+  rsrc="$rd/cmd.orig"; [ -f "$rsrc" ] || rsrc="$rd/cmd"
+  while IFS= read -r ra; do set -- "$@" "$ra"; done < "$rsrc"
+  [ $# -gt 0 ] || return 1
+  rprog=$1; ragent=${rprog##*/}; shift
+  [ "$(meta_get "$rd" stdin)" = /dev/null ] && rhas=1 || rhas=0
+
+  case "$ragent" in
+    claude)
+      [ -n "$rsid" ] || return 3
+      printf '%s\n--resume\n%s\n' "$rprog" "$rsid"
+      resume_rest claude "$rhas" "$@"
+      printf '%s\n' "$rp"
+      ;;
+    agy)
+      [ -n "$rsid" ] || return 3
+      printf '%s\n--conversation\n%s\n' "$rprog" "$rsid"
+      resume_rest agy "$rhas" "$@"
+      printf -- '-p=%s\n' "$rp"
+      ;;
+    codex)
+      [ -n "$rsid" ] || return 3
+      [ "${1:-}" = exec ] || return 4
+      shift
+      # 이미 이어하기 명령이면 'resume <id>' 를 걷어내고 새로 붙입니다.
+      [ "${1:-}" = resume ] && { shift; [ $# -gt 0 ] && case "$1" in -*) ;; *) shift ;; esac; }
+      printf '%s\nexec\nresume\n%s\n' "$rprog" "$rsid"
+      resume_rest codex "$rhas" "$@"
+      printf '%s\n' "$rp"
+      ;;
+    devin)
+      # devin 은 프롬프트가 -p 바로 뒤에 와야 해서 앞으로 뺍니다.
+      # 세션 ID 를 비대화형으로 얻을 길이 없어 보통 -c 로 갑니다.
+      printf '%s\n-p\n%s\n' "$rprog" "$rp"
+      if [ -n "$rsid" ]; then printf -- '-r\n%s\n' "$rsid"; else printf -- '-c\n'; fi
+      resume_rest devin "$rhas" "$@"
+      ;;
+    *) return 2 ;;
+  esac
   return 0
 }
 
@@ -464,6 +584,11 @@ cmd_run() {
     fi
     dir="$wt"
   fi
+
+  # 사용자가 준 그대로의 인자를 남겨 둡니다. 아래에서 기본 옵션을 뒤에 붙이면
+  # "프롬프트는 맨 끝" 같은 규칙이 깨지므로, aw resume 은 이 파일을 봅니다.
+  : > "$wd/cmd.orig"
+  for a in "$@"; do printf '%s\n' "$a" >> "$wd/cmd.orig"; done
 
   # 에이전트별 기본 옵션을 뒤에 붙입니다.
   # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
@@ -774,6 +899,75 @@ cmd_clean() {
   return 0
 }
 
+cmd_resume() {
+  [ $# -gt 0 ] || die "이어할 워커 이름이 필요합니다.   예) aw resume job -- '이어서 해줘'"
+  case "$1" in
+    -h | --help) say "사용법: aw resume <워커> [-n 이름] [-d 경로] [--tag 문자열] -- '새 프롬프트'"; return 0 ;;
+    -*) die "먼저 이어할 워커 이름을 주세요.   예) aw resume job -- '...'" ;;
+  esac
+  src=$1; shift
+  need_worker "$src"
+  sd=$(wdir "$src")
+  [ -f "$sd/exit" ] || die "$src 은 아직 실행 중입니다. aw wait $src 부터 하세요."
+
+  # -- 앞은 aw 옵션, 뒤는 새 프롬프트입니다.
+  opts=''; name=''; dir=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --) shift; break ;;
+      -n | --name) name="${2:?--name 에 값이 필요합니다}"; shift 2 ;;
+      -d | --dir)  dir="${2:?--dir 에 값이 필요합니다}"; shift 2 ;;
+      -h | --help) say "사용법: aw resume <워커> [-n 이름] [-d 경로] [--tag 문자열] -- '새 프롬프트'"; return 0 ;;
+      --tag | --max-input-tokens | -e | --env)
+        opts="$opts $(shquote "$1") $(shquote "${2:?$1 에 값이 필요합니다}")"; shift 2 ;;
+      --no-defaults) opts="$opts --no-defaults"; shift ;;
+      -*) die "aw resume 이 모르는 옵션입니다: $1" ;;
+      *) break ;;
+    esac
+  done
+  [ $# -gt 0 ] || die "새 프롬프트가 없습니다.   예) aw resume $src -- '이어서 해줘'"
+  prompt=$*
+
+  sid=$(session_of "$sd")
+  argv=$(resume_argv "$sd" "$sid" "$prompt") || case $? in
+    2) die "이어하기를 아는 에이전트가 아닙니다: $(meta_get "$sd" cmdline | cut -d' ' -f1)
+   claude, agy, codex, devin 만 지원합니다. 직접 명령을 써서 aw run 으로 돌리세요." ;;
+    3) die "$src 의 출력에서 세션 ID 를 찾지 못했습니다.
+   JSON 출력 옵션 없이 돌렸을 수 있습니다 (예: --output-format json).
+   aw status $src 로 확인하세요." ;;
+    4) die "codex 는 exec 로 시작한 워커만 이어할 수 있습니다." ;;
+    *) die "원래 명령을 읽을 수 없습니다: $src" ;;
+  esac
+
+  # 새 이름: 원래이름-r1, -r2 ...
+  if [ -z "$name" ]; then
+    base=${src%%-r[0-9]*}
+    i=1
+    while [ -d "$AW_WORKERS/$base-r$i" ]; do i=$((i + 1)); done
+    name="$base-r$i"
+  fi
+  # 디렉터리: 원래 워커가 돌던 곳 (devin 의 -c 는 디렉터리 기준이라 특히 중요)
+  [ -n "$dir" ] || dir=$(meta_get "$sd" dir)
+  # 프로필도 물려받습니다. 세션이 그 CLAUDE_CONFIG_DIR 안에 있어서,
+  # 기본 프로필로 이어하면 --resume 이 세션을 못 찾습니다.
+  sprof=$(meta_get "$sd" profile)
+  [ -n "$sprof" ] && opts="$opts --profile $(shquote "$sprof")"
+  # codex exec resume 은 프롬프트 뒤 플래그를 받지 않습니다.
+  cfile="$sd/cmd.orig"; [ -f "$cfile" ] || cfile="$sd/cmd"
+  case "$(head -1 "$cfile")" in *codex) opts="$opts --no-defaults" ;; esac
+
+  set --
+  while IFS= read -r a; do set -- "$@" "$a"; done <<ARGV
+$argv
+ARGV
+  if [ -z "$sid" ]; then
+    warn "세션 ID 가 없어 devin 의 -c (그 디렉터리의 가장 최근 대화) 로 이어갑니다."
+    warn "  같은 디렉터리에 devin 워커가 여럿이면 엉뚱한 대화를 집을 수 있습니다."
+  fi
+  say "이어하기: $src → $name${sid:+  (세션 $sid)}"
+  eval "cmd_run -n $(shquote "$name") -d $(shquote "$dir")$opts --" '"$@"'
+}
+
 # ---------------------------------------------------------------- 진입점
 
 mkdir -p "$AW_WORKERS" 2>/dev/null || die "작업 디렉터리를 만들 수 없습니다: $AW_WORKERS"
@@ -788,6 +982,7 @@ case "$sub" in
   errs)    cmd_errs "$@" ;;
   result)  cmd_result "$@" ;;
   wait)    cmd_wait "$@" ;;
+  resume)  cmd_resume "$@" ;;
   stop)    cmd_stop "$@" ;;
   rm)      cmd_rm "$@" ;;
   clean)   cmd_clean "$@" ;;

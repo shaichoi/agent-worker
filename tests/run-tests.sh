@@ -300,28 +300,106 @@ for s in bash zsh; do
   check "$s 에서 호출" 안녕 "$out"
 done
 
-head_ "15. 세션 ID 기록"
+head_ "15. 세션 이어하기"
 RSTUB="$TMPROOT/rstub"
 mkdir -p "$RSTUB"
-printf '#!/bin/sh\nprintf "{\\"session_id\\":\\"SID1\\",\\"result\\":\\"ok\\"}\\n"\n' > "$RSTUB/claude"
-printf '#!/bin/sh\nprintf "{\\"conversation_id\\":\\"CID1\\"}\\n"\n' > "$RSTUB/agy"
-printf '#!/bin/sh\nprintf "{\\"thread_id\\":\\"TID1\\"}\\n"\n' > "$RSTUB/codex"
-printf '#!/bin/sh\necho 텍스트만\n' > "$RSTUB/devin"
+# JSON 을 내놓는 에이전트 셋 (필드 이름이 제각각인 것까지 흉내)
+printf '#!/bin/sh\nprintf "{\\"session_id\\":\\"SID1\\",\\"result\\":\\"ok\\"}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RSTUB/claude"
+printf '#!/bin/sh\nprintf "{\\"conversation_id\\":\\"CID1\\",\\"response\\":\\"ok\\"}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RSTUB/agy"
+printf '#!/bin/sh\nprintf "{\\"thread_id\\":\\"TID1\\"}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RSTUB/codex"
+# devin 은 텍스트만 내놓습니다 (세션 ID 를 못 뽑는 쪽)
+printf '#!/bin/sh\necho 텍스트만\nprintf "%%s\\n" "$@" >&2\n' > "$RSTUB/devin"
 chmod +x "$RSTUB"/*
 PATH="$RSTUB:$PATH"; export PATH
+AW_DEFAULTS="$TMPROOT/rdefaults"; export AW_DEFAULTS
+printf 'claude --permission-mode bypassPermissions\ncodex --sandbox workspace-write\n' > "$AW_DEFAULTS"
 "$AW" clean --all >/dev/null 2>&1
-for a in claude:SID1 agy:CID1 codex:TID1; do
-  n=${a%%:*}; want=${a#*:}
-  "$AW" run -n "sess-$n" -- "$n" >/dev/null 2>&1
-  "$AW" wait "sess-$n" >/dev/null 2>&1
-  case "$("$AW" status "sess-$n")" in *"$want"*) ok "$n 의 세션 ID 를 찾음 ($want)" ;; *) ng "$n 의 세션 ID 를 못 찾음" ;; esac
-  check "$n: 한 번 찾으면 meta 에 적어 둠" "$want" "$(sed -n 's/^session=//p' "$AW_HOME/workers/sess-$n/meta")"
-done
+
+# 세션 ID 를 찾아 meta 에 적는가
+"$AW" run -n r-claude -- claude -p --output-format json 원래 >/dev/null 2>&1
+"$AW" wait r-claude >/dev/null 2>&1
+check "meta 에는 아직 없음 (찾기는 처음 볼 때)" "" "$(sed -n 's/^session=//p' "$AW_HOME/workers/r-claude/meta")"
+case "$("$AW" status r-claude)" in *SID1*) ok "aw status 가 세션을 보여줌" ;; *) ng "status 에 세션 없음" ;; esac
+check "한 번 찾으면 meta 에 적어 둠" SID1 "$(sed -n 's/^session=//p' "$AW_HOME/workers/r-claude/meta")"
 case "$("$AW" list --json)" in *'"session":"SID1"'*) ok "list --json 에 session 필드" ;; *) ng "list --json 에 session 없음" ;; esac
-"$AW" run -n sess-devin -- devin >/dev/null 2>&1
-"$AW" wait sess-devin >/dev/null 2>&1
-check "텍스트만 내놓으면 빈 값" "" "$(sed -n 's/^session=//p' "$AW_HOME/workers/sess-devin/meta")"
+
+# 에이전트별 argv
+"$AW" resume r-claude -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-claude-r1 >/dev/null 2>&1
+check "claude: --resume 을 붙이고 옛 프롬프트를 걷어냄" \
+  "$(printf -- '--resume\nSID1\n-p\n--output-format\njson\n새프롬프트\n--permission-mode\nbypassPermissions')" \
+  "$("$AW" errs r-claude-r1)"
+
+"$AW" run -n r-agy -- agy --output-format json --model M -p=원래 >/dev/null 2>&1
+"$AW" wait r-agy >/dev/null 2>&1
+"$AW" resume r-agy -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-agy-r1 >/dev/null 2>&1
+check "agy: --conversation 을 붙이고 -p= 를 갈아 끼움" \
+  "$(printf -- '--conversation\nCID1\n--output-format\njson\n--model\nM\n-p=새프롬프트')" \
+  "$("$AW" errs r-agy-r1)"
+
+"$AW" run -n r-codex -- codex exec --json 원래 >/dev/null 2>&1
+"$AW" wait r-codex >/dev/null 2>&1
+"$AW" resume r-codex -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-codex-r1 >/dev/null 2>&1
+check "codex: exec resume 으로 바꾸고 --sandbox 를 떼어냄" \
+  "$(printf -- 'exec\nresume\nTID1\n--json\n새프롬프트')" \
+  "$("$AW" errs r-codex-r1)"
+
+# codex 의 stdin 표식 '-' 는 새 프롬프트와 같이 있으면 안 됩니다
+printf '사양\n' > "$TMPROOT/rspec.md"
+"$AW" run -n r-cxf -f "$TMPROOT/rspec.md" -- codex exec --json - >/dev/null 2>&1
+"$AW" wait r-cxf >/dev/null 2>&1
+"$AW" resume r-cxf -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-cxf-r1 >/dev/null 2>&1
+check "codex: stdin 표식 - 를 걷어냄" \
+  "$(printf -- 'exec\nresume\nTID1\n--json\n새프롬프트')" \
+  "$("$AW" errs r-cxf-r1)"
+
+# -f 로 돌린 워커는 인자에 프롬프트가 없으니 걷어낼 것도 없습니다
+"$AW" run -n r-cf -f "$TMPROOT/rspec.md" -- claude -p --output-format json >/dev/null 2>&1
+"$AW" wait r-cf >/dev/null 2>&1
+"$AW" resume r-cf -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-cf-r1 >/dev/null 2>&1
+check "-f 로 돌린 워커는 인자를 안 잃음" \
+  "$(printf -- '--resume\nSID1\n-p\n--output-format\njson\n새프롬프트\n--permission-mode\nbypassPermissions')" \
+  "$("$AW" errs r-cf-r1)"
+
+# 이어하기를 또 이어해도 --resume 이 겹치지 않아야 합니다
+"$AW" resume r-claude-r1 -- 세번째 >/dev/null 2>&1
+"$AW" wait r-claude-r2 >/dev/null 2>&1
+n=$("$AW" errs r-claude-r2 | grep -c -- '--resume')
+check "이어하기를 또 이어해도 --resume 이 하나" 1 "$n"
+check "이어하기의 이어하기도 새 프롬프트를 씀" \
+  "$(printf -- '--resume\nSID1\n-p\n--output-format\njson\n세번째\n--permission-mode\nbypassPermissions')" \
+  "$("$AW" errs r-claude-r2)"
+
+# devin 은 세션 ID 가 없어 -c 로 갑니다
+"$AW" run -n r-devin -- devin -p 원래 --model M >/dev/null 2>&1
+"$AW" wait r-devin >/dev/null 2>&1
+check "세션 ID 를 못 뽑으면 meta 에 안 적음" "" "$(sed -n 's/^session=//p' "$AW_HOME/workers/r-devin/meta")"
+out=$("$AW" resume r-devin -- 이어서 2>&1)
+case "$out" in *"-c"*) ok "devin 은 -c 로 간다고 알려 줌" ;; *) ng "devin -c 경고가 없음" ;; esac
+"$AW" wait r-devin-r1 >/dev/null 2>&1
+check "devin: -p 뒤에 프롬프트를 두고 -c 를 붙임" \
+  "$(printf -- '-p\n이어서\n-c\n--model\nM')" \
+  "$("$AW" errs r-devin-r1)"
+
+# 오류 경로
+printf '#!/bin/sh\necho 텍스트만\n' > "$RSTUB/plain"; chmod +x "$RSTUB/plain"
+"$AW" run -n r-plain -- plain >/dev/null 2>&1
+"$AW" wait r-plain >/dev/null 2>&1
+if "$AW" resume r-plain -- 이어서 >/dev/null 2>&1; then ng "모르는 에이전트를 이어함"; else ok "모르는 에이전트는 거절" ; fi
+"$AW" run -n r-noexec -- codex --json 질문 >/dev/null 2>&1
+"$AW" wait r-noexec >/dev/null 2>&1
+if "$AW" resume r-noexec -- 이어서 >/dev/null 2>&1; then ng "exec 아닌 codex 를 이어함"; else ok "exec 로 시작하지 않은 codex 는 거절"; fi
+"$AW" run -n r-run -- sleep 30 >/dev/null 2>&1
+if "$AW" resume r-run -- 이어서 >/dev/null 2>&1; then ng "실행 중인 워커를 이어함"; else ok "실행 중인 워커는 거절"; fi
+"$AW" stop r-run >/dev/null 2>&1
+if "$AW" resume r-claude >/dev/null 2>&1; then ng "프롬프트 없이 이어함"; else ok "새 프롬프트가 없으면 거절"; fi
+if "$AW" resume --help >/dev/null 2>&1; then ok "aw resume --help"; else ng "aw resume --help 실패"; fi
 "$AW" clean --all >/dev/null 2>&1
+unset AW_DEFAULTS
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
