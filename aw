@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.9.0
+AW_VERSION=0.10.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -56,7 +56,8 @@ run 옵션
   --tag 문자열                --max-input-tokens N   --no-defaults
 
 상태: running / done(0) / failed(≠0) / stopped(aw stop) / lost(코드 없이 사라짐)
-wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과
+wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 / 3 조용함
+  wait --idle N  N초 동안 출력·새 명령·파일 변경·생각 신호가 없으면 3 (끊지는 않음)
 
 자세히
   aw help agents    에이전트별 호출법과 함정 (claude, agy, devin, codex)
@@ -840,10 +841,11 @@ cmd_result() {
 }
 
 cmd_wait() {
-  timeout=0; names=''
+  timeout=0; idle=0; tick=0; names=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --timeout) timeout="${2:?--timeout 에 초가 필요합니다}"; shift 2 ;;
+      --idle)    idle="${2:?--idle 에 초가 필요합니다}"; shift 2 ;;
       *) names="$names $1"; shift ;;
     esac
   done
@@ -862,6 +864,22 @@ cmd_wait() {
       if [ "$timeout" -gt 0 ] && [ $(( $(now) - start )) -ge "$timeout" ]; then
         warn "시간 초과로 기다리기를 멈춥니다: $n"
         return 2
+      fi
+      # --idle: 기다리는 워커 중 하나라도 그만큼 신호가 없으면 3 으로 돌아옵니다 (5초마다 봄).
+      # 끊지는 않습니다. 조용히 생각하다 정답을 내는 에이전트가 있어서입니다.
+      if [ "$idle" -gt 0 ]; then
+        tick=$((tick + 1))
+        if [ $((tick % 5)) -eq 1 ]; then
+          for wn in $names; do
+            wd=$(wdir "$wn")
+            [ "$(state_of "$wd")" = running ] || continue
+            wq=$(quiet_secs "$wd")
+            if [ "$wq" -ge "$idle" ]; then
+              warn "$wn: $(elapsed_str "$wq")째 신호가 없습니다 (--idle $idle). 워커는 계속 돕니다. 상태: aw peek $wn"
+              return 3
+            fi
+          done
+        fi
       fi
       sleep 1
     done
@@ -1140,6 +1158,8 @@ mtime_of() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || print
 # (실측). 그 ID 로 <설정>/projects/*/<ID>.jsonl 대화 기록을 찾습니다. 끝난 워커는 meta 의
 # 세션 ID 를 씁니다. 추정이 아니라서 같은 폴더에 claude 가 여럿 돌아도 헷갈리지 않습니다.
 claude_transcript() { # <워커디렉터리>
+  ct_c=$(meta_get "$1" transcript)
+  if [ -n "$ct_c" ] && [ -f "$ct_c" ]; then printf '%s' "$ct_c"; return 0; fi
   ct_prof=$(meta_get "$1" profile)
   case "$ct_prof" in
     '' | default) ct_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;;
@@ -1153,7 +1173,88 @@ claude_transcript() { # <워커디렉터리>
       && ct_sid=$(json_str sessionId < "$ct_cfg/sessions/$ct_pid.json")
   fi
   [ -n "$ct_sid" ] || return 0
-  find "$ct_cfg/projects" -mindepth 2 -maxdepth 2 -name "$ct_sid.jsonl" 2>/dev/null | head -1
+  ct_f=$(find "$ct_cfg/projects" -mindepth 2 -maxdepth 2 -name "$ct_sid.jsonl" 2>/dev/null | head -1)
+  [ -n "$ct_f" ] || return 0
+  printf 'transcript=%s\n' "$ct_f" >> "$1/meta"
+  printf '%s' "$ct_f"
+}
+
+# codex 는 생각하는 동안 출력(--json)이 조용하지만, 자기 세션 파일
+# <CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*-<thread_id>.jsonl 에 추론 단계를 10~15초마다
+# 적습니다 (실측). thread_id 는 출력의 첫 줄에 있습니다.
+codex_rollout() { # <워커디렉터리>
+  cr_c=$(meta_get "$1" rollout)
+  if [ -n "$cr_c" ] && [ -f "$cr_c" ]; then printf '%s' "$cr_c"; return 0; fi
+  cr_tid=$(head -c 4096 "$1/out" 2>/dev/null | json_str thread_id)
+  [ -n "$cr_tid" ] || return 0
+  cr_f=$(find "${CODEX_HOME:-$HOME/.codex}/sessions" -name "*$cr_tid.jsonl" 2>/dev/null | head -1)
+  [ -n "$cr_f" ] || return 0
+  printf 'rollout=%s\n' "$cr_f" >> "$1/meta"
+  printf '%s' "$cr_f"
+}
+
+# 지금 생각하는 중이면 그 진행량. 생각 내용은 숨겨져 있어도 양은 보입니다 (실측).
+#   claude stream-json: 생각하는 동안 몇 초마다 "subtype":"thinking_tokens" 줄 (추정 토큰 수)
+#   codex 세션 파일: 끝에 이어진 reasoning 항목 수
+claude_thinking() { # <출력 파일>  → 추정 토큰 (마지막 사건이 생각일 때만)
+  tail -c 16384 "$1" 2>/dev/null | LC_ALL=C awk '
+    /"subtype":"thinking_tokens"/ {
+      if (match($0, /"estimated_tokens":[0-9]+/)) n = substr($0, RSTART + 19, RLENGTH - 19)
+      on = 1; next
+    }
+    /"thinking_delta"/ { on = 1; next }
+    /[^[:space:]]/ { on = 0 }
+    END { if (on && n != "") print n }'
+}
+codex_thinking() { # <세션 파일>  → 끝에 이어진 추론 단계 수
+  tail -c 65536 "$1" 2>/dev/null | LC_ALL=C awk '
+    match($0, /"payload":\{"type":"[a-z_]*"/) {
+      k = substr($0, RSTART + 19, RLENGTH - 20)
+      if (k == "reasoning") n++; else if (k != "token_count") n = 0
+    }
+    END { print n + 0 }'
+}
+
+agent_of() { # <워커디렉터리>  → 명령 이름 (claude, codex, ...)
+  ao_f="$1/cmd.orig"; [ -f "$ao_f" ] || ao_f="$1/cmd"
+  ao_a=$(head -1 "$ao_f" 2>/dev/null || printf '')
+  printf '%s' "${ao_a##*/}"
+}
+
+# 워커가 마지막으로 무언가 한 때와 그 출처 → "시각<TAB>출처" (없으면 "0<TAB>")
+# 출력, 에이전트 기록(claude 대화 기록, codex 세션 파일), 새로 뜬 하위 명령, 작업 폴더의
+# 바뀐 파일 중 가장 최근 것입니다. devin·agy 는 생각하는 동안 이 중 아무것도 없습니다 (실측).
+la_upd() { if [ -n "$1" ] && [ "$1" -gt "$la_t" ]; then la_t=$1; la_src=$2; fi; }
+last_activity() { # <워커디렉터리>
+  la_t=0; la_src=''
+  for la_f in "$1/out" "$1/err"; do
+    [ -s "$la_f" ] && la_upd "$(mtime_of "$la_f")" 출력
+  done
+  case "$(agent_of "$1")" in
+    claude) la_f=$(claude_transcript "$1"); [ -n "$la_f" ] && la_upd "$(mtime_of "$la_f")" 'claude 기록' ;;
+    codex)  la_f=$(codex_rollout "$1");     [ -n "$la_f" ] && la_upd "$(mtime_of "$la_f")" 'codex 기록' ;;
+  esac
+  if [ "$(state_of "$1")" = running ]; then
+    la_p=$(cat "$1/pid" 2>/dev/null || printf '')
+    if [ -n "$la_p" ]; then
+      la_et=$(proc_leaves "$la_p" | head -1 | cut -f1)
+      [ -n "$la_et" ] && la_upd $(($(now) - la_et)) '새 명령'
+    fi
+  fi
+  la_dir=$(meta_get "$1" worktree); [ -n "$la_dir" ] || la_dir=$(meta_get "$1" dir)
+  if [ -n "$la_dir" ] && la_top=$(git -C "$la_dir" rev-parse --show-toplevel 2>/dev/null); then
+    la_m=$(git -C "$la_top" status --porcelain 2>/dev/null | head -300 | sed 's/^...//; s/.* -> //' \
+      | while IFS= read -r la_g; do mtime_of "$la_top/$la_g"; printf '\n'; done | sort -n | tail -1)
+    la_upd "$la_m" '파일 변경'
+  fi
+  printf '%s\t%s\n' "$la_t" "$la_src"
+}
+
+quiet_secs() { # <워커디렉터리>  → 아무 신호 없이 지난 초 (시작 뒤로)
+  qs_t=$(last_activity "$1" | cut -f1)
+  qs_s=$(meta_get "$1" started); [ -n "$qs_s" ] || qs_s=0
+  [ "$qs_s" -gt "$qs_t" ] && qs_t=$qs_s
+  printf '%s' $(($(now) - qs_t))
 }
 
 peek_label() { printf '  %s: ' "$(padw 12 "$1")"; }
@@ -1164,8 +1265,8 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
   pk_st=$(state_of "$pk_d")
   pk_start=$(meta_get "$pk_d" started); [ -n "$pk_start" ] || pk_start=$(now)
   pk_fin=$(cat "$pk_d/finished" 2>/dev/null || now)
-  pk_cf="$pk_d/cmd.orig"; [ -f "$pk_cf" ] || pk_cf="$pk_d/cmd"
-  pk_agent=$(head -1 "$pk_cf" 2>/dev/null || printf ''); pk_agent=${pk_agent##*/}
+  pk_agent=$(agent_of "$pk_d")
+  pk_think=''; pk_quiet=0
   pk_code=''; [ -f "$pk_d/exit" ] && pk_code=" (종료 코드 $(cat "$pk_d/exit"))"
   say "$(meta_get "$pk_d" name)  $pk_st$pk_code  $(elapsed_str $((pk_fin - pk_start)))  $pk_agent"
 
@@ -1185,6 +1286,19 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
     else
       say "$(peek_label '지금 실행 중')(하위 명령 없음. 에이전트가 생각하거나 답을 쓰는 중)"
     fi
+    pk_think=''
+    case "$pk_agent" in
+      claude)
+        pk_tk=$(claude_thinking "$pk_d/out")
+        [ -n "$pk_tk" ] && pk_think="약 ${pk_tk} 토큰째" ;;
+      codex)
+        pk_rf=$(codex_rollout "$pk_d")
+        if [ -n "$pk_rf" ]; then
+          pk_tk=$(codex_thinking "$pk_rf")
+          [ "$pk_tk" -gt 0 ] && pk_think="추론 ${pk_tk}단계 (마지막 $(elapsed_str $(($(now) - $(mtime_of "$pk_rf")))) 전)"
+        fi ;;
+    esac
+    [ -n "$pk_think" ] && say "$(peek_label '생각 중')$pk_think"
   fi
 
   pk_from=''; pk_tr=''
@@ -1197,16 +1311,41 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
     fi
   fi
 
-  # 살아서 일하는지: 출력이나 대화 기록이 마지막으로 바뀐 때
-  pk_last=0
-  for pk_f in "$pk_d/out" "$pk_d/err" $pk_tr; do
-    [ -s "$pk_f" ] || continue
-    pk_m=$(mtime_of "$pk_f"); [ -n "$pk_m" ] && [ "$pk_m" -gt "$pk_last" ] && pk_last=$pk_m
-  done
-  [ "$pk_brief" -eq 1 ] || if [ "$pk_last" -gt 0 ]; then
-    say "$(peek_label '마지막 활동')$(elapsed_str $(($(now) - pk_last))) 전"
+  # 살아서 일하는지: 출력, 에이전트 기록, 새 명령, 파일 변경 중 가장 최근 것
+  pk_la=$(last_activity "$pk_d")
+  pk_lt=${pk_la%%"$(printf '\t')"*}; pk_ls=${pk_la#*"$(printf '\t')"}
+  [ "$pk_brief" -eq 1 ] || if [ "$pk_lt" -gt 0 ]; then
+    say "$(peek_label '마지막 활동')$(elapsed_str $(($(now) - pk_lt))) 전 ($pk_ls)"
   else
     say "$(peek_label '마지막 활동')없음 (출력도 기록도 아직 없음)"
+  fi
+  # 오래 조용하면 알립니다. 조용하다고 멈춘 건 아닙니다: devin·agy 는 생각하는 동안
+  # 아무 신호가 없고, 실측에서 devin 은 6분, agy 는 3분 조용하다가 정답을 냈습니다.
+  if [ "$pk_st" = running ]; then
+    pk_base=$pk_lt; [ "$pk_start" -gt "$pk_base" ] && pk_base=$pk_start
+    pk_q=$(($(now) - pk_base))
+    pk_quiet=0
+    if [ "$pk_q" -ge "${AW_QUIET:-300}" ]; then
+      pk_quiet=1
+      say "$(peek_label '조용함')$(elapsed_str "$pk_q")째 신호가 없습니다 (출력, 새 명령, 파일 변경, 생각)"
+      if [ "$pk_brief" -eq 0 ]; then
+        pk_ind='                '
+        case "$pk_agent" in
+          devin | agy)
+            say "${pk_ind}이 에이전트는 생각하는 동안 아무것도 내지 않아, 멈췄는지 밖에서는 알 수 없습니다."
+            say "${pk_ind}(실측: devin 6분, agy 3분 조용하다가 정답)" ;;
+          claude)
+            if grep -q stream-json "$pk_d/cmd.orig" 2>/dev/null; then
+              say "${pk_ind}claude 는 stream-json 이면 생각하는 동안에도 몇 초마다 신호를 냅니다. 멈췄을 수 있습니다."
+            else
+              say "${pk_ind}claude 를 json 으로 띄우면 생각하는 동안 신호가 없습니다 (stream-json 이면 보임)."
+            fi ;;
+          codex)
+            say "${pk_ind}codex 는 생각하는 동안에도 10~15초마다 신호를 냅니다. 멈췄을 수 있습니다." ;;
+        esac
+        say "${pk_ind}더 기다리거나, 멈추려면 aw stop $(meta_get "$pk_d" name)"
+      fi
+    fi
   fi
   if [ -n "$pk_act" ]; then
     if [ "$pk_brief" -eq 1 ]; then
@@ -1223,18 +1362,23 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
     # 모르는 형식(텍스트, 빌드 로그 등)은 마지막 줄들을 그대로 보여 줍니다.
     # 끝난 워커의 출력이 JSON 한 덩어리면 날것 대신 아래에서 답만 보여 줍니다.
     pk_lab='최근 출력'
-    pk_tl=$(tail -c 65536 "$pk_d/out" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -"$pk_n")
+    # claude·codex·agy 의 JSON 사건은 위에서 풀었으니, 남은 JSON 줄(thread.started 등)은 날것으로 보이지 않습니다.
+    pk_json='^$'
+    case "$pk_agent" in claude | codex | agy) pk_json='^[[:space:]]*{' ;; esac
+    pk_tl=$(tail -c 65536 "$pk_d/out" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | grep -v "$pk_json" | tail -"$pk_n")
     [ "$pk_st" != running ] && [ -n "$(printf '%s' "$pk_tl" | tail -1 | grep '^[[:space:]]*{')" ] && pk_tl=''
     if [ -z "$pk_tl" ]; then
       pk_lab='최근 오류 출력'
-      pk_tl=$(tail -c 65536 "$pk_d/err" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -"$pk_n")
+      # codex 는 표준 입력이 비었을 때 늘 이 줄을 남깁니다. 뜻이 없어 뺍니다.
+      pk_tl=$(tail -c 65536 "$pk_d/err" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' \
+        | grep -v '^Reading additional input from stdin' | tail -"$pk_n")
     fi
     if [ -n "$pk_tl" ] && [ "$pk_brief" -eq 1 ]; then
       printf '%s%s\n' "$(peek_label "$pk_lab")" "$(printf '%s\n' "$pk_tl" | tail -1 | trunc_tail_filter $((pk_w - 20)))"
     elif [ -n "$pk_tl" ]; then
       say "  $pk_lab"
       printf '%s\n' "$pk_tl" | trunc_tail_filter $((pk_w - 6)) | sed 's/^/    /'
-    elif [ "$pk_st" = running ]; then
+    elif [ "$pk_st" = running ] && [ -z "${pk_think:-}" ] && [ "${pk_quiet:-0}" -eq 0 ]; then
       say "$(peek_label '최근 활동')(도중 출력 없음. 이 명령은 끝날 때 한 번에 내는 것 같습니다)"
     fi
   fi
@@ -1712,6 +1856,10 @@ aw rm review
 - `aw run` 은 바로 반환합니다. 이름은 늘 `-n` 으로 줍니다 (영문·숫자·`.` `_` `-`).
 - `--timeout` 은 `aw` 의 제한이 아니라 **셸 도구 한 번의 제한에 맞추는 값**입니다.
   코드 2 면 다시 `aw wait` 합니다. 오래 걸릴 작업은 아래 [오래 걸리는 작업](#오래-걸리는-작업).
+- **조용함 알림**: `--idle 600` 을 같이 주면 10분 동안 아무 신호(출력, 새 명령, 파일 변경, 생각)가
+  없을 때 코드 3 으로 돌아옵니다. 그때 `aw peek <이름>` 을 보고 사용자에게 알립니다.
+  **조용하다고 멈추지 않습니다.** devin·agy 는 생각하는 동안 아무것도 내지 않아서, 실측으로 devin 은
+  6분, agy 는 3분 조용하다가 정답을 냈습니다. 멈출지는 사용자가 정합니다.
 - **진행 상황**은 `aw peek <이름>` 입니다. 지금 도는 명령, 최근 활동(도구 호출과 말), 마지막 활동
   시각, worktree 에서 바뀐 파일 수가 나옵니다. `aw watch` 는 사람이 보는 화면용이라 끝날 때까지
   돌아오지 않으니 직접 쓰지 않고, 사용자에게 알려 줍니다.
@@ -1728,7 +1876,7 @@ aw rm review
 
 | 예상 시간 | 기다리는 법 |
 | --- | --- |
-| 몇 분 | `aw wait <이름> --timeout <셸 제한보다 조금 짧게>` 를 코드 0·1 이 나올 때까지 반복. 셸 제한을 늘릴 수 있으면 늘려서 호출 횟수를 줄임 |
+| 몇 분 | `aw wait <이름> --timeout <셸 제한보다 조금 짧게> --idle 600` 을 코드 0·1 이 나올 때까지 반복 (코드 3 이면 위 조용함 알림). 셸 제한을 늘릴 수 있으면 늘려서 호출 횟수를 줄임 |
 | 수십 분 이상 | 붙잡혀 있지 않습니다. 띄운 뒤 다른 일을 하다가 사이사이 `aw peek <이름>` 으로 확인 |
 | 백그라운드 셸이 있으면 | `aw wait <이름>` 을 `--timeout` 없이 백그라운드로 걸어 두고, 끝났다는 알림을 받음 (Claude Code 의 백그라운드 실행 등) |
 | 이 대화보다 오래 | 워커 이름과 확인 방법을 사용자에게 남기고 마침. 나중 대화에서 `aw list`, `aw result <이름>`, `aw resume <이름>` 으로 이어받음 |
@@ -1750,8 +1898,9 @@ aw rm review
 
 5. **띄운 직후 사용자에게** 워커 이름, 작업 위치 (worktree), 확인 명령 (`aw watch <이름>` 으로 지켜보기,
    `aw result <이름>` 으로 결과) 을 알립니다. 이 대화가 먼저 끝나도 사용자가 직접 확인할 수 있게 하기 위해서입니다.
-6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령과 마지막 활동 시각을 보고, 그다음 `aw errs <이름>` 을
-   봅니다. 승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인). 끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
+6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령, 생각 중인지 (claude·codex), 마지막 활동과 그 출처,
+   조용한 시간을 보고, 그다음 `aw errs <이름>` 을 봅니다. 승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인).
+   끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
 
 ## 에이전트별 한 줄
 

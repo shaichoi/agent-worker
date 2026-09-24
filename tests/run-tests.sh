@@ -693,10 +693,11 @@ out=$("$AW" peek pk-wt)
 has "worktree 의 새 파일 수" "$out" "파일 1개 바뀜 (새 파일 1개)"
 
 # 이름을 빼면 실행 중인 워커를 짧게, 끝난 워커는 빠짐
+"$AW" run -n pk-long -- sh -c 'sleep 15; true' >/dev/null 2>&1
 "$AW" run -n pk-done -- true >/dev/null 2>&1
 "$AW" wait pk-done >/dev/null 2>&1
 out=$("$AW" peek)
-has "aw peek 은 실행 중인 워커를 보여 줌" "$out" "pk-text  running"
+has "aw peek 은 실행 중인 워커를 보여 줌" "$out" "pk-long  running"
 hasnt "aw peek 은 끝난 워커를 빼고 보여 줌" "$out" "pk-done"
 out=$("$AW" peek pk-done)
 has "끝난 워커를 이름으로 보면 결과 안내" "$out" "aw result pk-done"
@@ -727,8 +728,74 @@ while [ ! -f "$TMPROOT/watch.rc" ] && [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1));
 kill "$wpid" 2>/dev/null
 check "watch 는 워커가 끝나면 0 으로 멈춤" 0 "$(cat "$TMPROOT/watch.rc" 2>/dev/null || echo 시간초과)"
 has "watch 가 끝났다고 알림" "$(cat "$TMPROOT/watch.out")" "모두 끝났습니다"
+"$AW" stop pk-long >/dev/null 2>&1
 "$AW" wait pk-tree pk-claude pk-codex pk-agy pk-text pk-oneline pk-wt pk-mac --timeout 20 >/dev/null 2>&1
 [ -n "$(command -v bash)" ] && "$AW" wait pk-mcp --timeout 20 >/dev/null 2>&1
+"$AW" clean >/dev/null 2>&1
+
+head_ "19. 생각 중 / 조용함 (peek, wait --idle)"
+# claude stream-json: 생각하는 동안 몇 초마다 thinking_tokens 줄이 나옵니다 (실측)
+fresh
+cat > "$IH/fakebin/claude" <<'FAKE'
+#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"s1"}' \
+  '{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"estimated_tokens_delta":50}' \
+  '{"type":"system","subtype":"thinking_tokens","estimated_tokens":1200,"estimated_tokens_delta":150}'
+sleep 6
+FAKE
+chmod +x "$IH/fakebin/claude"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-claude --no-defaults -- claude -p --output-format stream-json --verbose "생각" >/dev/null 2>&1
+sleep 1
+out=$(env HOME="$IH" "$AW" peek th-claude)
+has "claude: 생각 중 토큰 수" "$out" "생각 중     : 약 1200 토큰째"
+
+# codex: 출력은 조용하지만 자기 세션 파일에 추론 단계가 쌓입니다 (실측)
+cat > "$IH/fakebin/codex" <<'FAKE'
+#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"T-abc-123"}' '{"type":"turn.started"}'
+d="$HOME/.codex/sessions/2026/09/24"; mkdir -p "$d"
+# 세션 파일은 마지막 명령(sleep 7)이 뜬 뒤에 씁니다. 그래야 마지막 활동의 출처가 이 파일입니다.
+( sleep 2
+  printf '%s\n' '{"timestamp":"t","type":"event_msg","payload":{"type":"user_message"}}' \
+    '{"timestamp":"t","type":"response_item","payload":{"type":"reasoning","summary":[]}}' \
+    '{"timestamp":"t","type":"event_msg","payload":{"type":"token_count"}}' \
+    '{"timestamp":"t","type":"response_item","payload":{"type":"reasoning","summary":[]}}' \
+    '{"timestamp":"t","type":"response_item","payload":{"type":"reasoning","summary":[]}}' > "$d/rollout-2026-T-abc-123.jsonl" ) &
+sleep 7
+FAKE
+chmod +x "$IH/fakebin/codex"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-codex --no-defaults -- codex exec --json "생각" >/dev/null 2>&1
+sleep 4
+out=$(env -u CODEX_HOME HOME="$IH" "$AW" peek th-codex)
+has "codex: 세션 파일의 추론 단계 수" "$out" "추론 3단계"
+has "codex: 세션 파일도 활동으로 침" "$out" "(codex 기록)"
+hasnt "codex: 남은 JSON 사건 줄을 날것으로 보이지 않음" "$out" "thread.started"
+
+# 마지막 활동의 출처: 새로 뜬 하위 명령, 작업 폴더의 파일 변경
+"$AW" run -n la-cmd -- sh -c 'sleep 2; sh -c "sleep 8; true"; true' >/dev/null 2>&1
+"$AW" run -n la-file -d "$REPO" -w feat/la -- sh -c '(sleep 2; printf x > f.txt) & sleep 9; true' >/dev/null 2>&1
+sleep 4
+has "새로 뜬 명령이 활동" "$("$AW" peek la-cmd)" "(새 명령)"
+has "작업 폴더의 파일 변경이 활동" "$("$AW" peek la-file)" "(파일 변경)"
+
+# 오래 조용하면 알림 (AW_QUIET 초)
+"$AW" run -n q-quiet -- sh -c 'echo 시작; sleep 9; true' >/dev/null 2>&1
+"$AW" run -n q-busy -- sh -c 'for i in 1 2 3 4 5 6 7 8; do echo "$i"; sleep 1; done' >/dev/null 2>&1
+sleep 4
+has "조용하면 조용함을 알림" "$(AW_QUIET=2 "$AW" peek q-quiet)" "조용함"
+hasnt "계속 출력하면 조용함이 아님" "$(AW_QUIET=5 "$AW" peek q-busy)" "조용함"
+
+# wait --idle: 조용하면 3 으로 돌아오고 워커는 그대로, 바쁘면 끝까지 기다림
+"$AW" run -n idle-w -- sh -c 'sleep 12; true' >/dev/null 2>&1
+"$AW" wait idle-w --idle 2 >/dev/null 2>&1; rc=$?
+check "wait --idle: 조용하면 코드 3" 3 "$rc"
+state=$("$AW" list --json | sed -n 's/.*"name":"idle-w","state":"\([a-z]*\)".*/\1/p')
+check "wait --idle 은 워커를 끊지 않음" running "$state"
+"$AW" run -n busy-w -- sh -c 'for i in 1 2 3 4 5 6; do echo "$i"; sleep 1; done' >/dev/null 2>&1
+"$AW" wait busy-w --idle 5 >/dev/null 2>&1; rc=$?
+check "wait --idle: 계속 신호가 있으면 끝까지 (코드 0)" 0 "$rc"
+"$AW" stop idle-w >/dev/null 2>&1
+"$AW" wait th-claude th-codex la-cmd la-file q-quiet q-busy --timeout 20 >/dev/null 2>&1
 "$AW" clean >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
