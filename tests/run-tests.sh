@@ -795,6 +795,15 @@ check "wait --idle 은 워커를 끊지 않음" running "$state"
 "$AW" wait busy-w --idle 5 >/dev/null 2>&1; rc=$?
 check "wait --idle: 계속 신호가 있으면 끝까지 (코드 0)" 0 "$rc"
 "$AW" stop idle-w >/dev/null 2>&1
+
+# 끝난 워커의 worktree 를 누군가 이어서 고쳐도, 그건 이 워커의 활동이 아닙니다
+"$AW" run -n fin-wt -d "$REPO" -w feat/fin -- sh -c 'echo 끝' >/dev/null 2>&1
+"$AW" wait fin-wt >/dev/null 2>&1
+sleep 3
+: > "$REPO/.aw-worktrees/fin-wt/late.txt"
+out=$("$AW" peek fin-wt)
+has "끝난 워커의 마지막 활동은 끝나기 전 것" "$out" "(출력)"
+hasnt "끝난 뒤의 파일 변경은 세지 않음" "$out" "(파일 변경)"
 "$AW" wait th-claude th-codex la-cmd la-file q-quiet q-busy --timeout 20 >/dev/null 2>&1
 "$AW" clean >/dev/null 2>&1
 

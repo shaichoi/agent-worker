@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.10.0
+AW_VERSION=0.10.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -1224,9 +1224,19 @@ agent_of() { # <워커디렉터리>  → 명령 이름 (claude, codex, ...)
 # 워커가 마지막으로 무언가 한 때와 그 출처 → "시각<TAB>출처" (없으면 "0<TAB>")
 # 출력, 에이전트 기록(claude 대화 기록, codex 세션 파일), 새로 뜬 하위 명령, 작업 폴더의
 # 바뀐 파일 중 가장 최근 것입니다. devin·agy 는 생각하는 동안 이 중 아무것도 없습니다 (실측).
-la_upd() { if [ -n "$1" ] && [ "$1" -gt "$la_t" ]; then la_t=$1; la_src=$2; fi; }
+la_upd() {
+  [ -n "$1" ] || return 0
+  # 끝난 워커는 끝난 뒤의 신호를 세지 않습니다. worktree 를 다른 사람(다른 세션)이
+  # 이어서 고치면 그게 이 워커의 활동처럼 보였습니다.
+  [ -n "$la_cap" ] && [ "$1" -gt "$la_cap" ] && return 0
+  if [ "$1" -gt "$la_t" ]; then la_t=$1; la_src=$2; fi
+}
 last_activity() { # <워커디렉터리>
-  la_t=0; la_src=''
+  la_t=0; la_src=''; la_cap=''
+  if [ -f "$1/exit" ]; then
+    la_cap=$(cat "$1/finished" 2>/dev/null || printf '')
+    [ -n "$la_cap" ] && la_cap=$((la_cap + 2))
+  fi
   for la_f in "$1/out" "$1/err"; do
     [ -s "$la_f" ] && la_upd "$(mtime_of "$la_f")" 출력
   done
