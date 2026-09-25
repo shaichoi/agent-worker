@@ -5,13 +5,13 @@
 # 같은 방식으로 돌립니다. 실행 디렉터리, 표준 입력, 환경변수, git worktree 만
 # 챙겨 주고 나머지는 명령에 그대로 맡깁니다.
 #
-#   aw run -- claude -p --output-format json
+#   aw run -- claude -p --output-format stream-json --verbose "작업"
 #   aw run -n refactor -w feat/x -f task.md -- claude -p
 #   aw list ; aw wait refactor ; aw result refactor
 
 set -eu
 
-AW_VERSION=0.11.0
+AW_VERSION=0.11.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -1104,7 +1104,7 @@ cmd_resume() {
     2) die "이어하기를 아는 에이전트가 아닙니다: $(meta_get "$sd" cmdline | cut -d' ' -f1)
    claude, agy, codex, devin 만 지원합니다. 직접 명령을 써서 aw run 으로 돌리세요." ;;
     3) die "$src 의 출력에서 세션 ID 를 찾지 못했습니다.
-   JSON 출력 옵션 없이 돌렸을 수 있습니다 (예: --output-format json).
+   JSON 출력 옵션 없이 돌렸을 수 있습니다 (예: --output-format stream-json).
    aw status $src 로 확인하세요." ;;
     4) die "codex 는 exec 로 시작한 워커만 이어할 수 있습니다." ;;
     *) die "원래 명령을 읽을 수 없습니다: $src" ;;

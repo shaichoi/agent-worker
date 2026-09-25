@@ -439,7 +439,7 @@ aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
 워커가 여럿이면 엉뚱한 대화를 집을 수 있어서, 그럴 때 `aw` 가 경고를 냅니다.
 
 **claude 와 codex 는 프롬프트를 맨 끝 인자로 두세요.** 이어할 때 맨 끝을
-프롬프트로 보고 걷어냅니다. `claude -p "프롬프트" --output-format json` 처럼
+프롬프트로 보고 걷어냅니다. `claude -p "프롬프트" --output-format stream-json --verbose` 처럼
 가운데 두면 엉뚱한 걸 걷어냅니다. `-f` 로 넣었다면 걷어낼 게 없으니 그대로입니다.
 
 `-e` 로 준 환경변수는 이어지지 않습니다. 필요하면 `aw resume` 에 다시 주세요.
@@ -735,8 +735,8 @@ AW_HOME=/tmp/aw-test aw run -- echo 시험
 
 **에이전트 워커는 고정 비용이 있습니다.** Claude Code로 측정해 보면 "2+3은?" 한 줄에도
 시스템 프롬프트와 컨텍스트 때문에 3만 토큰 가까이 듭니다. 워커는 **덩어리 작업**에 쓰는 게 맞고,
-잘게 쪼개 많이 띄우는 건 오히려 비쌉니다. 비용은 `aw result <이름> | grep total_cost_usd`로
-확인할 수 있습니다(Claude Code의 `--output-format json` 기준).
+잘게 쪼개 많이 띄우는 건 오히려 비쌉니다. 비용은 `aw result <이름> --field total_cost_usd`로
+확인할 수 있습니다(Claude Code 의 `stream-json`·`json` 결과).
 
 **승인 프롬프트가 필요한 작업은 멈춰 있을 수 있습니다.** 비대화형으로 도구를 쓰는 에이전트는
 권한을 물어볼 자리가 없습니다. `claude`라면 `--permission-mode`를 함께 넘기세요. 상태가

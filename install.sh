@@ -158,9 +158,10 @@ esac
 cat <<DONE
 
 써 보기:
-  aw run -- claude -p --output-format json "무엇이든"
+  aw run -n job -- claude -p --output-format stream-json --verbose "무엇이든"
+  aw peek job                            # 지금 무엇을 하는지
   aw list
-  aw wait <이름> && aw result <이름> --field result
+  aw wait job && aw result job --field result
 
 도움말: aw help          에이전트별 호출법: aw help agents
 설치 점검: aw setup      에이전트 스킬: aw skill
