@@ -11,6 +11,7 @@ RAW_URL="${AW_RAW_URL:-https://raw.githubusercontent.com/shaichoi/agent-worker/m
 PREFIX="${AW_PREFIX:-$HOME/.local/bin}"
 DRY_RUN=0
 WITH_DEFAULTS=1
+WITH_BRIEF=1
 SKILL_MODE=ask     # ask | all | list | none
 SKILL_NAMES=''
 
@@ -20,6 +21,7 @@ usage() {
 
   --prefix DIR   설치 위치 (기본: ~/.local/bin)
   --no-defaults  무인 실행용 권한 옵션을 켜지 않음 (아래 설명 참고)
+  --no-brief     워커 지시문(예상 소요 시간 먼저 등)을 켜지 않음
   --skill        찾은 에이전트 전부에 스킬을 묻지 않고 넣음
   --skill=A,B    고른 에이전트에만 넣음 (claude, codex, devin, agy, hermes)
   --no-skill     스킬은 아예 건드리지 않음
@@ -39,6 +41,7 @@ while [ $# -gt 0 ]; do
     --prefix)   PREFIX="${2:?--prefix 에 경로가 필요합니다}"; shift 2 ;;
     --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
     --no-defaults) WITH_DEFAULTS=0; shift ;;
+    --no-brief) WITH_BRIEF=0; shift ;;
     --skill)    SKILL_MODE=all; shift ;;
     --skill=*)  SKILL_MODE=list; SKILL_NAMES=$(printf '%s' "${1#--skill=}" | tr ',' ' '); shift ;;
     --no-skill) SKILL_MODE=none; shift ;;
@@ -98,7 +101,18 @@ else
   say "  이 설정을 원하지 않으면 그 파일을 지우면 됩니다."
 fi
 
-say "== 4. 에이전트 스킬"
+say "== 4. 워커 지시문"
+# 워커 프롬프트 앞에 붙는 지시문입니다. 예상 소요 시간을 먼저 적고, 오래 걸리면 중간중간
+# 진행을 남기게 합니다. 기존 파일은 그대로 둡니다 (aw brief --init 은 덮어쓰지 않음).
+if [ "$WITH_BRIEF" -eq 0 ]; then
+  say "  건너뜀 (--no-brief). 나중에 켜려면: aw brief --init"
+elif [ "$DRY_RUN" -eq 1 ]; then
+  say "  aw brief --init 을 실행할 예정 (끄려면 --no-brief)"
+else
+  "$PREFIX/aw" brief --init | sed 's/^/  /'
+fi
+
+say "== 5. 에이전트 스킬"
 # 스킬 내용은 aw 안에 있습니다. 어느 에이전트가 어느 폴더를 읽는지도 aw 가 압니다 (aw skill).
 # 스킬은 에이전트가 읽는 지시문이라 묻지 않고 넣지 않습니다. 스킬은 덤이라 실패해도 설치는 끝까지 갑니다.
 skill_cmd() { # <aw skill 인자...>
@@ -132,7 +146,7 @@ case "$SKILL_MODE" in
     fi ;;
 esac
 
-say "== 5. PATH 확인"
+say "== 6. PATH 확인"
 case ":$PATH:" in
   *":$PREFIX:"*) say "  $PREFIX 는 이미 PATH 에 있습니다." ;;
   *)
@@ -150,6 +164,6 @@ cat <<DONE
 
 도움말: aw help          에이전트별 호출법: aw help agents
 설치 점검: aw setup      에이전트 스킬: aw skill
-권한 옵션 확인/끄기: aw defaults
+권한 옵션 확인/끄기: aw defaults   지시문 확인/고치기: aw brief
 제거: ./uninstall.sh   (워커 기록은 남습니다)
 DONE

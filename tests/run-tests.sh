@@ -19,6 +19,8 @@ check() { if [ "$2" = "$3" ]; then ok "$1"; else ng "$1 (기대: [$2] 실제: [$
 TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/aw-test.XXXXXX")
 trap 'rm -rf "$TMPROOT"' EXIT
 export AW_HOME="$TMPROOT/awhome"
+# 이 컴퓨터에 켜 둔 지시문이 시험용 명령에 붙지 않게 합니다 (지시문 시험은 따로 켬).
+export AW_BRIEF="$TMPROOT/brief"
 
 head_ "1. 문법 검사"
 for s in sh bash zsh; do
@@ -287,11 +289,15 @@ case "$(cat "$AW_DEFAULTS")" in *"--respect-workspace-trust false"*) ok "권장�
 # 설치 스크립트가 켜 주는지 / --no-defaults 로 건너뛰는지
 IH="$TMPROOT/insthome"
 rm -rf "$IH"; mkdir -p "$IH"
-(cd "$SRC_DIR" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh >/dev/null 2>&1)
+(cd "$SRC_DIR" && env -u AW_DEFAULTS -u AW_BRIEF HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh >/dev/null 2>&1)
 if [ -f "$IH/.config/agent-worker/defaults" ]; then ok "install.sh 가 기본 옵션을 켜 줌"; else ng "install.sh 가 켜지 않음"; fi
 rm -rf "$IH"; mkdir -p "$IH"
-(cd "$SRC_DIR" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh --no-defaults >/dev/null 2>&1)
+(cd "$SRC_DIR" && env -u AW_DEFAULTS -u AW_BRIEF HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh --no-defaults >/dev/null 2>&1)
 if [ -f "$IH/.config/agent-worker/defaults" ]; then ng "--no-defaults 인데 켜 버림"; else ok "install.sh --no-defaults 는 켜지 않음"; fi
+if [ -f "$IH/.config/agent-worker/brief" ]; then ok "install.sh 가 지시문을 켜 줌"; else ng "install.sh 가 지시문을 안 켬"; fi
+rm -rf "$IH"; mkdir -p "$IH"
+(cd "$SRC_DIR" && env -u AW_DEFAULTS -u AW_BRIEF HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh --no-brief >/dev/null 2>&1)
+if [ -f "$IH/.config/agent-worker/brief" ]; then ng "--no-brief 인데 켜 버림"; else ok "install.sh --no-brief 는 지시문을 켜지 않음"; fi
 unset AW_DEFAULTS
 
 head_ "13. 도움말"
@@ -301,9 +307,23 @@ for want in "aw run" "aw wait" "wait 종료 코드" "running / done" "aw help ag
 done
 lines=$(printf '%s\n' "$h" | wc -l)
 if [ "$lines" -lt 60 ]; then ok "개요가 짧음 (${lines}줄)"; else ng "개요가 너무 김 (${lines}줄)"; fi
-for topic in agents defaults files limits; do
+for topic in agents defaults files limits peek brief; do
   if "$AW" help "$topic" >/dev/null 2>&1; then ok "aw help $topic"; else ng "aw help $topic 실패"; fi
+  case "$h" in *"aw help $topic"*) ok "개요의 자세히에 $topic 이 있음" ;; *) ng "개요에 aw help $topic 안내 없음" ;; esac
 done
+hb=$("$AW" help brief)
+for want in --no-brief AW_NO_BRIEF "brief --init" "예상 소요" claude codex agy devin --prompt-file "aw resume"; do
+  case "$hb" in *"$want"*) ok "brief 주제에 '$want'" ;; *) ng "brief 주제에 '$want' 없음" ;; esac
+done
+hp=$("$AW" help peek)
+for want in "aw watch" "--idle" AW_QUIET "생각 중" "조용함" "마지막 활동" "예상 소요" devin agy; do
+  case "$hp" in *"$want"*) ok "peek 주제에 '$want'" ;; *) ng "peek 주제에 '$want' 없음" ;; esac
+done
+for sub in "brief" "peek" "watch" "wait" "skill" "setup" "resume" "run"; do
+  if "$AW" $sub --help >/dev/null 2>&1; then ok "aw $sub --help"; else ng "aw $sub --help 실패"; fi
+done
+case "$("$AW" wait --help)" in *"3 "*"--idle"*) ok "aw wait --help 에 코드 3 과 --idle" ;; *) ng "aw wait --help 에 코드 3 설명 없음" ;; esac
+case "$("$AW" peek --help)" in *"aw help peek"*) ok "aw peek --help 가 자세한 도움말을 가리킴" ;; *) ng "aw peek --help 에 안내 없음" ;; esac
 case "$("$AW" help agents)" in *codex*agy*|*agy*codex*) ok "agents 주제가 에이전트들을 다룸" ;; *) ng "agents 주제 내용 부족" ;; esac
 if "$AW" help nosuchtopic >/dev/null 2>&1; then ng "없는 주제를 받아들임"; else ok "없는 주제는 0이 아닌 코드"; fi
 if "$AW" run --help >/dev/null 2>&1; then ok "aw run --help"; else ng "aw run --help 실패"; fi
@@ -503,7 +523,7 @@ if awh skill install --ask < /dev/null >/dev/null 2>&1; then ng "터미널이 �
 
 # install.sh: 스킬은 묻고 넣음. 터미널이 없으면 새로 넣지 않고, 이미 넣은 것만 갱신
 inst() { # [install.sh 옵션...]
-  (cd "$SRC_DIR" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
+  (cd "$SRC_DIR" && env -u AW_DEFAULTS -u AW_BRIEF HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
      PATH="$IH/fakebin:/usr/bin:/bin" sh ./install.sh "$@" >/dev/null 2>&1)
 }
 fresh; mkdir -p "$IH/.claude"; fake agy
@@ -552,7 +572,7 @@ fi
 # curl ... | sh 경로: 옆에 aw 가 없으면 받아오고, 스킬은 그 aw 안에 들어 있음 (file:// 로 흉내)
 if command -v curl >/dev/null 2>&1; then
   pipe_inst() { # [install.sh 옵션...]
-    (cd "$IH/empty" && env -u AW_DEFAULTS HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
+    (cd "$IH/empty" && env -u AW_DEFAULTS -u AW_BRIEF HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" \
        PATH="$IH/fakebin:/usr/bin:/bin" AW_RAW_URL="file://$AW" sh -s -- "$@" < "$SRC_DIR/install.sh" >/dev/null 2>&1)
   }
   fresh; mkdir -p "$IH/empty" "$IH/.claude"
@@ -563,7 +583,7 @@ if command -v curl >/dev/null 2>&1; then
   if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
     # 파이프로 받은 스크립트도 터미널(/dev/tty)로 물어봄: claude 는 y, agy 는 그냥 Enter (기본 아니오)
     fresh; mkdir -p "$IH/empty" "$IH/.claude"; fake agy
-    printf 'y\n\n' | script -qec "cd '$IH/empty' && env -u AW_DEFAULTS HOME='$IH' XDG_CONFIG_HOME='$IH/.config' AW_PREFIX='$IH/bin' PATH='$IH/fakebin:/usr/bin:/bin' AW_RAW_URL='file://$AW' sh < '$SRC_DIR/install.sh'" /dev/null >/dev/null 2>&1
+    printf 'y\n\n' | script -qec "cd '$IH/empty' && env -u AW_DEFAULTS -u AW_BRIEF HOME='$IH' XDG_CONFIG_HOME='$IH/.config' AW_PREFIX='$IH/bin' PATH='$IH/fakebin:/usr/bin:/bin' AW_RAW_URL='file://$AW' sh < '$SRC_DIR/install.sh'" /dev/null >/dev/null 2>&1
     if [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then ok "파이프 설치에서 y 로 고른 곳엔 넣음"; else ng "y 라 했는데 안 넣음"; fi
     if [ -e "$IH/.gemini" ]; then ng "Enter(기본 아니오)인데 넣음"; else ok "그냥 Enter 면 넣지 않음 (기본 아니오)"; fi
   fi
@@ -574,24 +594,25 @@ fi
 head_ "17. 설치 점검 (aw setup)"
 fresh; fake codex
 out=$(env HOME="$IH" PATH="$IH/fakebin:/usr/bin:/bin" AW_DEFAULTS="$IH/defaults" "$AW" setup < /dev/null 2>&1)
-for want in "[1/4] 권한 옵션" "[2/4] 에이전트 CLI" "[3/4] 에이전트 스킬" "[4/4] PATH" "아무것도 바꾸지 않습니다"; do
+for want in "[1/5] 권한 옵션" "[2/5] 워커 지시문" "[3/5] 에이전트 CLI" "[4/5] 에이전트 스킬" "[5/5] PATH" "아무것도 바꾸지 않습니다"; do
   case "$out" in *"$want"*) ok "점검 출력에 '$want'" ;; *) ng "점검 출력에 '$want' 없음" ;; esac
 done
 if [ -e "$IH/defaults" ] || [ -e "$IH/.agents" ]; then ng "터미널이 아닌데 무언가를 바꿈"; else ok "터미널이 아니면 아무것도 바꾸지 않음"; fi
 if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
   # 가상 터미널로 답을 넣습니다: 권한 옵션은 n, 스킬은 y
   fresh; fake codex
-  printf 'n\ny\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' '$AW' setup" /dev/null >/dev/null 2>&1
+  printf 'n\nn\ny\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' AW_BRIEF='$IH/brief' '$AW' setup" /dev/null >/dev/null 2>&1
   if [ -e "$IH/defaults" ]; then ng "n 이라 했는데 권한 옵션을 켬"; else ok "권한 옵션은 n 이면 켜지 않음"; fi
   if [ -f "$IH/.agents/skills/agent-worker/SKILL.md" ]; then ok "스킬은 y 면 넣음"; else ng "y 라 했는데 스킬을 안 넣음"; fi
   fresh; fake codex
-  printf 'y\n\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' '$AW' setup" /dev/null >/dev/null 2>&1
+  printf 'y\n\n\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' AW_BRIEF='$IH/brief' '$AW' setup" /dev/null >/dev/null 2>&1
   if [ -f "$IH/defaults" ]; then ok "권한 옵션은 y 면 켬"; else ng "y 라 했는데 권한 옵션을 안 켬"; fi
   if [ -e "$IH/.agents" ]; then ng "Enter(기본 아니오)인데 스킬을 넣음"; else ok "새 스킬은 그냥 Enter 면 넣지 않음 (기본 아니오)"; fi
+  if [ -f "$IH/brief" ]; then ok "지시문은 그냥 Enter 면 켬 (기본 예)"; else ng "Enter 인데 지시문을 안 켬"; fi
   # 이미 넣은 스킬을 새 버전으로 바꾸는 건 기본 예
   fresh; fake codex
   awh skill install >/dev/null 2>&1; printf '추가된 줄\n' >> "$IH/.agents/skills/agent-worker/SKILL.md"
-  printf '\n\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' '$AW' setup" /dev/null >/dev/null 2>&1
+  printf '\n\n\n' | script -qec "env HOME='$IH' PATH='$IH/fakebin:/usr/bin:/bin' AW_DEFAULTS='$IH/defaults' AW_BRIEF='$IH/brief' '$AW' setup" /dev/null >/dev/null 2>&1
   check "옛 버전은 그냥 Enter 면 최신으로 (기본 예)" 최신 "$(state_of_agent codex)"
 else
   echo "  (script 없음: 대화형 점검 시험 생략)"
@@ -805,6 +826,98 @@ out=$("$AW" peek fin-wt)
 has "끝난 워커의 마지막 활동은 끝나기 전 것" "$out" "(출력)"
 hasnt "끝난 뒤의 파일 변경은 세지 않음" "$out" "(파일 변경)"
 "$AW" wait th-claude th-codex la-cmd la-file q-quiet q-busy --timeout 20 >/dev/null 2>&1
+"$AW" clean >/dev/null 2>&1
+
+head_ "20. 워커 지시문 (brief)"
+fresh
+# 가짜 에이전트: 받은 인자와 표준 입력을 그대로 찍습니다 (devin 은 --prompt-file 내용도)
+for a in claude codex agy; do
+  printf '%s\n' '#!/bin/sh' 'printf "[%s]\n" "$@"' 'cat' 'printf "%s\n" "{\"session_id\":\"S1\"}"' > "$IH/fakebin/$a"
+done
+cat > "$IH/fakebin/devin" <<'FAKE'
+#!/bin/sh
+printf '[%s]\n' "$@"
+nxt=''
+for a in "$@"; do
+  [ "$nxt" = f ] && { echo "<파일>"; cat "$a"; }
+  nxt=''
+  case "$a" in --prompt-file) nxt=f ;; --prompt-file=*) echo "<파일>"; cat "${a#--prompt-file=}" ;; esac
+done
+FAKE
+chmod +x "$IH/fakebin/"*
+printf '# 이 줄은 안 붙음\n\n예상 소요를 먼저 적으세요.\n' > "$IH/brief"
+B='예상 소요를 먼저 적으세요.'
+bw() { env AW_BRIEF="$IH/brief" PATH="$IH/fakebin:$PATH" "$AW" "$@"; }
+bres() { "$AW" wait "$1" >/dev/null 2>&1; "$AW" result "$1"; }
+
+out=$(bw run -n br-claude --no-defaults -- claude -p "작업" 2>&1)
+has "run 출력에 지시문이 붙었다고 알림" "$out" "지시문이 붙었습니다"
+check "claude: 맨 끝 프롬프트 앞에 붙음" "$(printf '[-p]\n[%s\n\n작업]' "$B")" "$(bres br-claude | sed '$d')"
+check "cmd.orig 에는 붙이기 전 인자" 작업 "$(tail -1 "$AW_HOME/workers/br-claude/cmd.orig")"
+hasnt "'#' 줄은 붙지 않음" "$(bres br-claude)" "이 줄은 안 붙음"
+bw run -n br-agy-eq --no-defaults -- agy --output-format json -p='작업' >/dev/null 2>&1
+has "agy: -p= 값 앞에 붙음" "$(bres br-agy-eq)" "[-p=$B"
+bw run -n br-agy-sp --no-defaults -- agy -p '작업' --model m >/dev/null 2>&1
+check "agy: -p 다음 값 앞에 붙음" "$(printf '[-p]\n[%s\n\n작업]\n[--model]\n[m]' "$B")" "$(bres br-agy-sp | sed '$d')"
+bw run -n br-devin --no-defaults -- devin -p "작업" --model m >/dev/null 2>&1
+has "devin: -p 다음 프롬프트 앞에 붙음" "$(bres br-devin)" "[$B"
+printf '사양 내용\n' > "$TMPROOT/spec.md"
+bw run -n br-devin-f --no-defaults -- devin -p --prompt-file "$TMPROOT/spec.md" >/dev/null 2>&1
+check "devin: --prompt-file 은 지시문을 앞에 붙인 새 파일로" "$(printf '<파일>\n%s\n\n사양 내용' "$B")" "$(bres br-devin-f | sed -n '/<파일>/,$p')"
+check "devin: 원래 사양 파일은 그대로" "사양 내용" "$(cat "$TMPROOT/spec.md")"
+bw run -n br-stdin --no-defaults -f "$TMPROOT/spec.md" -- claude -p >/dev/null 2>&1
+check "-f 로 넣은 표준 입력 앞에 붙음" "$(printf '[-p]\n%s\n\n사양 내용' "$B")" "$(bres br-stdin | sed '$d')"
+bw run -n br-codex --no-defaults -f "$TMPROOT/spec.md" -- codex exec --json - >/dev/null 2>&1
+has "codex: - (표준 입력) 앞에 붙음" "$(bres br-codex)" "$B"
+bw run -n br-off --no-defaults --no-brief -- claude -p "작업" >/dev/null 2>&1
+check "--no-brief 면 안 붙음" "$(printf '[-p]\n[작업]')" "$(bres br-off | sed '$d')"
+AW_NO_BRIEF=1 bw run -n br-off2 --no-defaults -- claude -p "작업" >/dev/null 2>&1
+check "AW_NO_BRIEF=1 이면 안 붙음" "$(printf '[-p]\n[작업]')" "$(bres br-off2 | sed '$d')"
+out=$(bw run -n br-other -- sh -c 'echo "$1"' sh "작업" 2>&1)
+hasnt "모르는 명령에는 붙이지 않음" "$out" "지시문이 붙었습니다"
+check "모르는 명령의 인자는 그대로" 작업 "$(bres br-other)"
+env AW_BRIEF="$IH/없음" PATH="$IH/fakebin:$PATH" "$AW" run -n br-none --no-defaults -- claude -p "작업" >/dev/null 2>&1
+check "지시문 파일이 없으면 안 붙음" "$(printf '[-p]\n[작업]')" "$(bres br-none | sed '$d')"
+# 이어하기: 새 프롬프트에 한 번만 붙음 (옛 프롬프트와 옛 지시문은 걷어냄)
+bw resume br-claude -- '다음' >/dev/null 2>&1
+out=$(bres br-claude-r1)
+check "이어하기에도 지시문이 한 번만" 1 "$(printf '%s\n' "$out" | grep -c "$B")"
+has "이어하기는 새 프롬프트에 붙음" "$out" "$(printf '%s\n\n다음]' "$B")"
+hasnt "이어하기에 옛 프롬프트가 안 남음" "$out" "작업"
+
+# aw brief
+out=$(env AW_BRIEF="$IH/b2" "$AW" brief)
+has "지시문이 없으면 꺼져 있다고 알림" "$out" "꺼져 있습니다"
+env AW_BRIEF="$IH/b2" "$AW" brief --init >/dev/null 2>&1
+if [ -f "$IH/b2" ]; then ok "aw brief --init 이 권장값을 씀"; else ng "aw brief --init 이 파일을 안 만듦"; fi
+has "권장값은 예상 소요 시간을 묻음" "$(env AW_BRIEF="$IH/b2" "$AW" brief)" "예상 소요"
+printf '내 지시문\n' > "$IH/b2"; env AW_BRIEF="$IH/b2" "$AW" brief --init >/dev/null 2>&1
+check "aw brief --init 은 있던 것을 덮어쓰지 않음" "내 지시문" "$(cat "$IH/b2")"
+has "권장 예시에는 숫자가 없음 (답으로 잘못 읽지 않게)" "$(env AW_BRIEF="$IH/b3" "$AW" brief | grep '예상 소요:')" '약 N분'
+
+# 예상 소요 시간 읽기
+"$AW" run -n eta-text -- sh -c 'echo "예상 소요: 약 15분"; echo "일하는 중"; sleep 6; true' >/dev/null 2>&1
+cl='{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"예상 소요: 약 10~20분\n시작합니다."}]}}'
+"$AW" run -n eta-claude -- sh -c 'printf "%s\n" "$1"; sleep 6; true' sh "$cl" >/dev/null 2>&1
+ag='{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"예상 소"}}
+{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"요: 약 3"}}
+{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"0분\n"}}'
+"$AW" run -n eta-agy -- sh -c 'printf "%s\n" "$1"; sleep 6; true' sh "$ag" >/dev/null 2>&1
+us='{"type":"user","message":{"role":"user","content":"예상 소요: 약 5분 이라고 적으세요"}}'
+"$AW" run -n eta-user -- sh -c 'printf "%s\n" "$1"; sleep 6; true' sh "$us" >/dev/null 2>&1
+"$AW" run -n eta-over -- sh -c 'echo "예상 소요: 약 1분"; sleep 6; true' >/dev/null 2>&1
+sleep 1
+has "텍스트 출력의 예상 소요" "$("$AW" peek eta-text)" "예상 소요   : 약 15분"
+has "경과와 견줌" "$("$AW" peek eta-text)" "지남)"
+has "claude 말의 범위" "$("$AW" peek eta-claude)" "약 10~20분"
+has "agy 의 조각난 답을 이어 붙여 읽음" "$("$AW" peek eta-agy)" "약 30분"
+hasnt "프롬프트(사용자 말)의 예시는 답으로 읽지 않음" "$("$AW" peek eta-user)" "예상 소요   :"
+# 시작 시각을 3분 전으로 돌려 예상(1분)을 넘긴 것처럼
+m="$AW_HOME/workers/eta-over/meta"
+sed "s/^started=.*/started=$(( $(date +%s) - 180 ))/" "$m" > "$m.new" && mv "$m.new" "$m"
+has "예상보다 오래 걸리면 알림" "$("$AW" peek eta-over)" "예상보다 2m"
+"$AW" wait eta-text eta-claude eta-agy eta-user eta-over --timeout 20 >/dev/null 2>&1
+has "끝난 워커는 실제 걸린 시간과 견줌" "$("$AW" peek eta-text)" "(실제 "
 "$AW" clean >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"

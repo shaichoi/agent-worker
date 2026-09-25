@@ -11,11 +11,12 @@
 
 set -eu
 
-AW_VERSION=0.10.1
+AW_VERSION=0.11.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
 AW_DEFAULTS="${AW_DEFAULTS:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults}"
+AW_BRIEF="${AW_BRIEF:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/brief}"
 
 die()  { printf '%s\n' "$*" >&2; exit 1; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -39,6 +40,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw clean [--all]                     끝난 워커 일괄 정리
   aw contexts                          컨텍스트 한도표
   aw defaults [--init]                 기본 옵션표 / 권한 우회 켜기
+  aw brief [--init]                    워커 프롬프트 앞에 붙는 지시문 (예상 소요 시간 등)
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
   aw version | aw help [주제]
@@ -53,7 +55,8 @@ run 옵션
   -n 이름     -d 디렉터리     -w 브랜치(worktree 격리)
   -f 파일     표준 입력으로 물림 (기본 /dev/null 이라 멈추지 않음)
   -e K=V      환경변수        --profile 이름   CLAUDE_CONFIG_DIR 지정
-  --tag 문자열                --max-input-tokens N   --no-defaults
+  --tag 문자열                --max-input-tokens N
+  --no-defaults / --no-brief  권한 옵션 / 지시문을 이번만 끔
 
 상태: running / done(0) / failed(≠0) / stopped(aw stop) / lost(코드 없이 사라짐)
 wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 / 3 조용함
@@ -64,6 +67,8 @@ wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 /
   aw help defaults  자동으로 붙는 권한 옵션
   aw help files     워커 기록 파일 구조
   aw help limits    프롬프트 크기와 컨텍스트 한도
+  aw help peek      진행 상황 보기: 각 줄의 뜻, 생각 중·조용함, wait --idle
+  aw help brief     워커 지시문: 붙는 곳, 끄는 법, 예상 소요 시간
 USAGE
 }
 
@@ -127,6 +132,67 @@ GUI 도구(Antigravity IDE, Cursor)는 창만 열려서 워커로 쓸 수 없습
 T
       ;;
     defaults) cmd_defaults ;;
+    brief)
+      cat <<'T'
+워커 지시문 (brief)
+
+워커 프롬프트 앞에 붙는 지시문입니다. 권장값은 두 가지를 부탁합니다.
+  1. 시작 전에 첫 줄에 "예상 소요: 약 N분" 을 적기   → aw peek 이 경과와 견줘 보여 줌
+  2. 5분 넘게 걸리면 몇 분마다 진행을 한 줄씩       → 생각하는 동안 조용한 devin·agy 도 신호를 냄
+
+T
+      if [ -f "$AW_BRIEF" ]; then say "지금: 켜져 있음  ($AW_BRIEF)"; else say "지금: 꺼져 있음  (켜려면 aw brief --init)"; fi
+      cat <<'T'
+
+붙는 곳 (프롬프트 위치를 아는 에이전트만. 빌드 스크립트 같은 모르는 명령에는 안 붙음)
+  claude, codex  맨 끝 인자, 또는 -f 로 넣은 표준 입력 (codex 는 -)
+  agy            -p='...' / -p ... 의 값, 또는 -f 로 넣은 표준 입력
+  devin          -p 바로 뒤 프롬프트, 또는 --prompt-file (지시문을 앞에 붙인 새 파일로 넘김)
+  aw resume 은 새 프롬프트에 한 번 붙입니다. 워커 기록의 cmd.orig 는 붙이기 전,
+  cmd 는 실제로 넘긴 인자입니다.
+
+쓰는 법
+  aw brief                 지금 붙는 지시문
+  aw brief --init          권장값으로 켜기 (있으면 그대로 두고, --force 면 되돌림)
+  aw run --no-brief ...    이번만 끄기   (그 셸에서 끄려면 AW_NO_BRIEF=1)
+  지시문 파일을 지우면     아예 꺼짐. 고쳐 써도 되고, '#' 로 시작하는 줄은 붙지 않음
+
+예상 소요 시간
+  aw peek 이 에이전트가 쓴 글에서 "예상 소요: 약 15분", "약 10~20분", "ETA: 2h" 를 찾아
+  경과와 견줍니다. 넘기면 "예상보다 5m 더 걸리는 중", 끝나면 "실제 12m".
+  프롬프트(사용자 말)에 든 예시는 읽지 않습니다.
+  실측: claude, codex, agy, devin 모두 지시문대로 첫 줄에 적었습니다.
+T
+      ;;
+    peek) cat <<'T'
+진행 상황
+
+  aw peek [이름...] [-n 줄수]   한 번 보기. 이름을 빼면 실행 중인 워커 전부를 짧게
+  aw watch [이름...] [-i 초]    peek 을 몇 초마다 다시 그림. 끝나면 멈추고, Ctrl-C 해도 워커는 계속
+  aw wait <이름> --idle N       N초 동안 아무 신호가 없으면 코드 3 으로 돌아옴 (끊지는 않음)
+  에이전트는 peek 을 씁니다. watch 는 끝날 때까지 안 돌아오니 사람에게 알려 줍니다.
+
+peek 의 줄
+  예상 소요     지시문대로 에이전트가 적은 예상 시간과 경과 (aw help brief)
+  지금 실행 중  워커가 띄운 하위 프로세스 중 최근 것. 에이전트는 명령을 새 세션으로 떼어
+                띄워서 프로세스 그룹이 아니라 부모-자식으로 따라갑니다. MCP 도우미는 뺍니다
+  생각 중       claude(stream-json) 는 지금까지 생각한 토큰 수, codex 는 추론 단계 수
+  마지막 활동   가장 최근 신호와 그 출처: 출력, claude 기록, codex 기록, 새 명령, 파일 변경
+                (끝난 워커는 끝난 뒤의 신호를 세지 않음)
+  조용함        그 신호가 모두 AW_QUIET 초(기본 300) 넘게 없으면 알림
+  최근 활동     출력을 풀어 봄: 도구 호출, 명령, 말, 바뀐 파일. claude 를 json 으로 띄웠으면
+                claude 대화 기록에서 읽음. 모르는 형식은 마지막 줄(긴 줄은 끝)을 그대로
+  worktree      -w 로 띄웠으면 바뀐 파일 수
+  답            끝난 워커의 최종 답 한 줄
+
+생각하는 동안 밖에서 보이는 것 (실측: 도구 없이 머리로 계산하는 문제)
+  claude stream-json  몇 초마다 thinking_tokens (json 으로 띄우면 없음)
+  codex               출력은 조용, 자기 세션 파일(~/.codex/sessions)에 추론 단계가 10~15초마다
+  agy                 없음. 2분 47초 조용하다가 정답
+  devin               없음. 5분 56초 조용하다가 정답
+  그래서 조용하다고 멈춘 건 아닙니다. aw 는 알리기만 하고 끊지 않습니다.
+T
+      ;;
     files) printf '워커 기록: %s/<이름>/\n\n' "$AW_WORKERS"; cat <<'T'
 
   meta      이름, 디렉터리, 시작 시각, worktree, 꼬리표, 토큰 추정치, 세션 ID
@@ -139,7 +205,7 @@ T
   run.sh    실제로 돌린 스크립트 (그대로 다시 실행 가능)
 
 기계로 읽으려면: aw list --json
-환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS
+환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_QUIET
 워커 안에서는 AW_WORKER 에 그 워커 이름이 들어 있습니다 (중첩 확인용).
 T
       ;;
@@ -166,7 +232,7 @@ T
       ;;
     '') usage ;;
     *) warn "그런 도움말 주제가 없습니다: $1"
-       warn "쓸 수 있는 주제: agents, defaults, files, limits"
+       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief"
        return 1 ;;
   esac
 }
@@ -556,6 +622,7 @@ cmd_contexts() {
 cmd_run() {
   name=''; dir=''; worktree=''; stdin_file='/dev/null'; tag=''; profile=''
   envs=''; max_tokens=''; no_defaults="${AW_NO_DEFAULTS:-0}"; added=''
+  no_brief="${AW_NO_BRIEF:-0}"; briefed=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --) shift; break ;;
@@ -568,6 +635,7 @@ cmd_run() {
       --profile)         profile="${2:?--profile 에 이름이 필요합니다}"; shift 2 ;;
       --max-input-tokens) max_tokens="${2:?--max-input-tokens 에 숫자가 필요합니다}"; shift 2 ;;
       --no-defaults)     no_defaults=1; shift ;;
+      --no-brief)        no_brief=1; shift ;;
       -h | --help) usage; return 0 ;;
       -*) die "알 수 없는 옵션: $1   (aw help)" ;;
       *)  break ;;
@@ -626,6 +694,39 @@ cmd_run() {
   # "프롬프트는 맨 끝" 같은 규칙이 깨지므로, aw resume 은 이 파일을 봅니다.
   : > "$wd/cmd.orig"
   for a in "$@"; do printf '%s\n' "$a" >> "$wd/cmd.orig"; done
+
+  # 지시문(brief)을 프롬프트 앞에 붙입니다. 기본 옵션처럼 파일이 있을 때만 합니다.
+  # cmd.orig 에는 붙이기 전 인자가 남으므로, aw resume 은 새 프롬프트에 한 번만 다시 붙입니다.
+  if [ "$no_brief" -ne 1 ]; then
+    brief=$(brief_text)
+    if [ -n "$brief" ] && brief_where "$stdin_file" "$@"; then
+      nl='
+'
+      if [ "$bkind" = stdin ]; then
+        { printf '%s\n\n' "$brief"; cat "$stdin_file"; } > "$wd/prompt" && stdin_file="$wd/prompt" && briefed=1
+      else
+        # 함수는 부른 쪽의 인자를 못 바꾸므로 여기서 다시 짭니다 (여러 줄 프롬프트도 온전히).
+        bi=0; bn=$#
+        for ba in "$@"; do
+          bi=$((bi + 1))
+          if [ "$bi" -eq "$bpos" ]; then
+            case "$bkind" in
+              arg) ba="$brief$nl$nl$ba" ;;
+              eq)  ba="${ba%%=*}=$brief$nl$nl${ba#*=}" ;;
+              pfile | pfileeq)
+                bsrc=${ba#--prompt-file=}
+                case "$bsrc" in /*) ;; *) [ -f "$dir/$bsrc" ] && bsrc="$dir/$bsrc" ;; esac
+                { printf '%s\n\n' "$brief"; cat "$bsrc"; } > "$wd/prompt"
+                if [ "$bkind" = pfile ]; then ba="$wd/prompt"; else ba="--prompt-file=$wd/prompt"; fi ;;
+            esac
+          fi
+          set -- "$@" "$ba"
+        done
+        shift "$bn"
+        briefed=1
+      fi
+    fi
+  fi
 
   # 에이전트별 기본 옵션을 뒤에 붙입니다.
   # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
@@ -694,6 +795,7 @@ cmd_run() {
     printf 'stdin=%s\n' "$stdin_file"
     [ -n "$tag" ]      && printf 'tag=%s\n' "$tag"
     [ -n "$profile" ]  && printf 'profile=%s\n' "$profile"
+    [ "$briefed" -eq 1 ] && printf 'brief=1\n'
     [ -n "$wt" ]       && { printf 'worktree=%s\n' "$wt"; printf 'branch=%s\n' "$worktree"; }
     printf 'cmdline=%s\n' "$(printf '%s ' "$@" | sed 's/ $//' | tr '\n' ' ')"
   } > "$wd/meta"
@@ -733,6 +835,7 @@ cmd_run() {
   [ -n "$wt" ] && say "  worktree: $wt  (브랜치 $worktree)"
   say "  명령: $(meta_get "$wd" cmdline)"
   [ -n "$added" ] && [ "$no_defaults" -ne 1 ] && say "  (기본 옵션이 붙었습니다: $added — 끄려면 --no-defaults)"
+  [ "$briefed" -eq 1 ] && say "  (지시문이 붙었습니다: $(tilde "$AW_BRIEF") — 끄려면 --no-brief)"
   say "  보기: aw logs $name -f    기다리기: aw wait $name    결과: aw result $name"
 }
 
@@ -846,6 +949,11 @@ cmd_wait() {
     case "$1" in
       --timeout) timeout="${2:?--timeout 에 초가 필요합니다}"; shift 2 ;;
       --idle)    idle="${2:?--idle 에 초가 필요합니다}"; shift 2 ;;
+      -h | --help)
+        say "사용법: aw wait <이름...> [--timeout 초] [--idle 초]"
+        say "종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 --timeout 초과 / 3 --idle 동안 신호 없음"
+        say "--idle 은 끊지 않고 알리기만 합니다. 조용함과 에이전트별 차이: aw help peek"
+        return 0 ;;
       *) names="$names $1"; shift ;;
     esac
   done
@@ -983,6 +1091,7 @@ cmd_resume() {
       --tag | --max-input-tokens | -e | --env)
         opts="$opts $(shquote "$1") $(shquote "${2:?$1 에 값이 필요합니다}")"; shift 2 ;;
       --no-defaults) opts="$opts --no-defaults"; shift ;;
+      --no-brief)    opts="$opts --no-brief"; shift ;;
       -*) die "aw resume 이 모르는 옵션입니다: $1" ;;
       *) break ;;
     esac
@@ -1028,6 +1137,146 @@ ARGV
   fi
   say "이어하기: $src → $name${sid:+  (세션 $sid)}"
   eval "cmd_run -n $(shquote "$name") -d $(shquote "$dir")$opts --" '"$@"'
+}
+
+# ---------------------------------------------------------------- 워커 지시문
+
+# 워커 프롬프트 앞에 붙이는 지시문입니다. 예상 소요 시간을 먼저 적게 해서 aw peek 이
+# 경과와 견줘 보여 주고, 오래 걸리는 일은 중간중간 한 줄씩 남기게 해서 생각하는 동안
+# 조용한 에이전트(devin, agy)도 신호를 내게 합니다.
+#
+# 기본 옵션처럼 $AW_BRIEF 파일이 있을 때만 붙입니다 (install.sh 가 만들어 주고,
+# aw brief --init 로도 만듭니다). --no-brief 나 AW_NO_BRIEF=1 로 그때그때 끕니다.
+recommended_brief() {
+  cat <<'B'
+# aw 가 워커의 프롬프트 앞에 붙이는 지시문입니다. '#' 로 시작하는 줄은 붙지 않습니다.
+# claude, codex, agy, devin 의 프롬프트에만 붙습니다 (인자, -f 파일, devin 의 --prompt-file).
+# 고쳐 써도 됩니다. aw peek 은 답에서 "예상 소요: 약 15분" 같은 줄을 찾아 경과와 견줘 보여 줍니다.
+# 끄려면 이 파일을 지우세요. 한 번만 끄려면 aw run --no-brief (또는 AW_NO_BRIEF=1).
+작업을 시작하기 전에, 첫 줄에 예상 소요 시간을 이 형식으로 적으세요: "예상 소요: 약 N분" (범위면 "예상 소요: 약 M~N분").
+작업이 5분 넘게 걸리면 몇 분마다 지금 하는 일을 한 줄로 적으세요. 오래 생각해야 할 때도 한 번에 다 생각하지 말고, 중간에 한 줄씩 진행을 남기며 이어 가세요.
+B
+}
+
+brief_text() { # 붙일 지시문 ('#' 줄과 앞쪽 빈 줄을 뺌)
+  [ -f "$AW_BRIEF" ] || return 0
+  grep -v '^[[:space:]]*#' "$AW_BRIEF" | sed '/./,$!d'
+}
+
+# 지시문을 붙일 자리를 찾습니다: bkind(arg / eq / pfile / pfileeq / stdin), bpos(몇 번째 인자).
+# 프롬프트 위치를 아는 에이전트(claude, codex, agy, devin)만 합니다. 모르면 1 을 돌려줍니다.
+brief_where() { # <표준 입력 파일> <인자...>
+  bw_stdin=$1; shift
+  bkind=''; bpos=0
+  case "${1##*/}" in
+    claude | codex)
+      if [ "$bw_stdin" != /dev/null ]; then bkind=stdin; return 0; fi
+      [ $# -gt 1 ] || return 1
+      eval "bw_last=\${$#}"
+      case "$bw_last" in -* | '') return 1 ;; esac
+      bkind=arg; bpos=$#; return 0 ;;
+    agy)
+      bw_i=0; bw_next=0
+      for bw_a in "$@"; do
+        bw_i=$((bw_i + 1))
+        if [ "$bw_next" -eq 1 ]; then bkind=arg; bpos=$bw_i; return 0; fi
+        case "$bw_a" in
+          -p=* | --prompt=* | --print=*) bkind=eq; bpos=$bw_i; return 0 ;;
+          -p | --prompt | --print) bw_next=1 ;;
+        esac
+      done
+      if [ "$bw_stdin" != /dev/null ]; then bkind=stdin; return 0; fi
+      return 1 ;;
+    devin)
+      bw_i=0; bw_next=''
+      for bw_a in "$@"; do
+        bw_i=$((bw_i + 1))
+        case "$bw_next" in
+          p) bw_next=''; case "$bw_a" in -*) ;; *) bkind=arg; bpos=$bw_i; return 0 ;; esac ;;
+          f) bkind=pfile; bpos=$bw_i; return 0 ;;
+        esac
+        case "$bw_a" in
+          -p=* | --print=*) bkind=eq; bpos=$bw_i; return 0 ;;
+          -p | --print) bw_next=p ;;
+          --prompt-file) bw_next=f ;;
+          --prompt-file=*) bkind=pfileeq; bpos=$bw_i; return 0 ;;
+        esac
+      done
+      return 1 ;;
+  esac
+  return 1
+}
+
+brief_init() { # [--force]
+  if [ -f "$AW_BRIEF" ] && [ "${1:-}" != --force ]; then
+    say "이미 있습니다: $AW_BRIEF   (덮어쓰려면 aw brief --init --force)"
+    return 0
+  fi
+  mkdir -p "$(dirname "$AW_BRIEF")" || return 1
+  recommended_brief > "$AW_BRIEF" || return 1
+  say "지시문을 켰습니다: $AW_BRIEF"
+  say "  이제 claude, codex, agy, devin 워커의 프롬프트 앞에 붙습니다."
+  say "  끄려면 그 파일을 지우고, 한 번만 끄려면 aw run --no-brief"
+  return 0
+}
+
+cmd_brief() {
+  case "${1:-}" in
+    --init) brief_init "${2:-}"; return $? ;;
+    -h | --help) help_topic brief; return 0 ;;
+    '') ;;
+    *) warn "알 수 없는 옵션: $1   (쓸 수 있는 것: --init [--force])"; return 1 ;;
+  esac
+  if [ -f "$AW_BRIEF" ]; then
+    say "붙는 지시문  ($AW_BRIEF)"
+    say ""
+    brief_text | sed 's/^/  /'
+    say ""
+    say "고치려면 그 파일을 고치세요 ('#' 로 시작하는 줄은 붙지 않음)."
+    say "끄려면 파일을 지우고, 한 번만 끄려면 aw run --no-brief   (또는 AW_NO_BRIEF=1)"
+  else
+    say "지시문이 꺼져 있습니다. 워커 프롬프트에 아무것도 붙이지 않습니다."
+    say ""
+    say "아래 권장값을 켜려면: aw brief --init"
+    say ""
+    recommended_brief | grep -v '^#' | sed 's/^/  /'
+  fi
+}
+
+# 에이전트가 적은 예상 소요 시간 중 가장 최근 것 → "원문<TAB>상한 초" (없으면 빈 값)
+# "예상 소요: 약 15분", "예상 소요: 약 10~20분", "ETA: 2h" 같은 줄을 찾습니다.
+# 에이전트가 쓴 글에서만 찾습니다(프롬프트에 든 지시문의 예시를 답으로 읽지 않게).
+eta_of() { # <워커디렉터리>
+  {
+    tail -c 262144 "$1/out" 2>/dev/null | activity_lines | sed -n "s/^말$(printf '\t')//p"
+    # agy stream-json 은 답을 text_delta 조각으로 나눠 보냅니다. 이어 붙입니다.
+    tail -c 262144 "$1/out" 2>/dev/null | LC_ALL=C awk '
+      match($0, /"text_delta":"([^"\\]|\\.)*"/) {
+        v = substr($0, RSTART + 14, RLENGTH - 15); gsub(/\\n/, "\n", v); gsub(/\\"/, "\"", v); printf "%s", v
+      }
+      END { print "" }'
+    tail -c 262144 "$1/out" 2>/dev/null | grep -v '^[[:space:]]*{'
+    if [ "$(agent_of "$1")" = claude ]; then
+      et_tr=$(claude_transcript "$1")
+      [ -n "$et_tr" ] && tail -c 262144 "$et_tr" 2>/dev/null | activity_lines | sed -n "s/^말$(printf '\t')//p"
+    fi
+  } | LC_ALL=C awk '
+    function grab(s, m,   i, r) {
+      while ((i = index(s, m)) > 0) {
+        r = substr(s, i + length(m), 40)
+        if (match(r, /[0-9]+([.][0-9]+)?([ ]*[~-][ ]*[0-9]+([.][0-9]+)?)?[ ]*(분|시간|min|hour|h)/))
+          last = substr(r, RSTART, RLENGTH)
+        s = substr(s, i + length(m))
+      }
+    }
+    { grab($0, "예상 소요"); grab($0, "ETA:") }
+    END {
+      if (last == "") exit
+      u = 60; if (last ~ /(시간|hour|h)$/) u = 3600
+      n = last; gsub(/[^0-9.~-]/, "", n)
+      k = split(n, p, /[~-]/)
+      printf "%s\t%d\n", last, p[k] * u
+    }'
 }
 
 # ---------------------------------------------------------------- 진행 상황
@@ -1280,6 +1529,21 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
   pk_code=''; [ -f "$pk_d/exit" ] && pk_code=" (종료 코드 $(cat "$pk_d/exit"))"
   say "$(meta_get "$pk_d" name)  $pk_st$pk_code  $(elapsed_str $((pk_fin - pk_start)))  $pk_agent"
 
+  # 지시문대로 에이전트가 적은 예상 소요 시간을 경과와 견줍니다.
+  pk_eta=$(eta_of "$pk_d")
+  if [ -n "$pk_eta" ]; then
+    pk_ex=${pk_eta%%"$(printf '\t')"*}; pk_es=${pk_eta#*"$(printf '\t')"}
+    pk_el=$((pk_fin - pk_start))
+    if [ "$pk_st" != running ]; then
+      pk_en="실제 $(elapsed_str "$pk_el")"
+    elif [ "$pk_es" -gt 0 ] && [ "$pk_el" -gt "$pk_es" ]; then
+      pk_en="예상보다 $(elapsed_str $((pk_el - pk_es))) 더 걸리는 중"
+    else
+      pk_en="$(elapsed_str "$pk_el") 지남"
+    fi
+    say "$(peek_label '예상 소요')약 $pk_ex   ($pk_en)"
+  fi
+
   if [ "$pk_st" = running ]; then
     pk_pid=$(cat "$pk_d/pid" 2>/dev/null || printf '')
     pk_lv=''; [ -n "$pk_pid" ] && pk_lv=$(proc_leaves "$pk_pid")
@@ -1425,7 +1689,8 @@ cmd_peek() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -n) pk_lines="${2:?-n 에 줄 수가 필요합니다}"; shift 2 ;;
-      -h | --help) say "사용법: aw peek [이름...] [-n 줄수]   (이름을 빼면 실행 중인 워커 전부를 짧게)"; return 0 ;;
+      -h | --help) say "사용법: aw peek [이름...] [-n 줄수]   (이름을 빼면 실행 중인 워커 전부를 짧게)"
+                   say "각 줄의 뜻과 생각 중·조용함: aw help peek"; return 0 ;;
       -*) die "알 수 없는 옵션: $1   (aw peek --help)" ;;
       *) need_worker "$1"; pk_names="$pk_names $1"; shift ;;
     esac
@@ -1456,7 +1721,8 @@ cmd_watch() {
     case "$1" in
       -i) wa_int="${2:?-i 에 초가 필요합니다}"; shift 2 ;;
       -n) wa_n="${2:?-n 에 줄 수가 필요합니다}"; shift 2 ;;
-      -h | --help) say "사용법: aw watch [이름...] [-i 초] [-n 줄수]   (Ctrl-C 로 멈춰도 워커는 계속 돕니다)"; return 0 ;;
+      -h | --help) say "사용법: aw watch [이름...] [-i 초] [-n 줄수]   (Ctrl-C 로 멈춰도 워커는 계속 돕니다)"
+                   say "보이는 줄의 뜻: aw help peek"; return 0 ;;
       -*) die "알 수 없는 옵션: $1   (aw watch --help)" ;;
       *) need_worker "$1"; wa_names="$wa_names $1"; shift ;;
     esac
@@ -1739,7 +2005,7 @@ cmd_setup() {
   [ "$st_tty" -eq 1 ] || say "(터미널이 아니라 점검만 하고 아무것도 바꾸지 않습니다)"
 
   say ""
-  say "[1/4] 권한 옵션"
+  say "[1/5] 권한 옵션"
   if [ -f "$AW_DEFAULTS" ]; then
     say "  켜져 있음: $(tilde "$AW_DEFAULTS")   (내용: aw defaults)"
   else
@@ -1753,7 +2019,20 @@ cmd_setup() {
   fi
 
   say ""
-  say "[2/4] 에이전트 CLI"
+  say "[2/5] 워커 지시문"
+  if [ -f "$AW_BRIEF" ]; then
+    say "  켜져 있음: $(tilde "$AW_BRIEF")   (내용: aw brief)"
+  else
+    say "  꺼져 있음. 켜면 워커가 예상 소요 시간을 먼저 적고, 오래 걸리면 중간중간 진행을 남깁니다."
+    if [ "$st_tty" -eq 1 ] && ask "  권장 지시문을 켤까요?" y; then
+      brief_init | sed 's/^/  /'
+    else
+      say "  나중에 켜려면: aw brief --init"
+    fi
+  fi
+
+  say ""
+  say "[3/5] 에이전트 CLI"
   for st_a in $(skill_agents); do
     if command -v "$st_a" >/dev/null 2>&1; then
       say "  $(padw 10 "$st_a")있음  $(tilde "$(command -v "$st_a")")"
@@ -1763,7 +2042,7 @@ cmd_setup() {
   done
 
   say ""
-  say "[3/4] 에이전트 스킬"
+  say "[4/5] 에이전트 스킬"
   st_seen=''; st_any=0; st_need=0; sk_dry=0; sk_changed=0
   for st_a in $(skill_agents); do
     agent_present "$st_a" || continue
@@ -1789,7 +2068,7 @@ cmd_setup() {
   fi
 
   say ""
-  say "[4/4] PATH"
+  say "[5/5] PATH"
   st_self=$(command -v aw 2>/dev/null || printf '')
   if [ -n "$st_self" ]; then
     say "  aw: $(tilde "$st_self")"
@@ -1876,6 +2155,9 @@ aw rm review
 - 실패하면 `aw errs <이름>` 과 `aw logs <이름>` 을 먼저 봅니다. 전체 목록은 `aw list`.
 - **워커는 이 대화를 모릅니다.** 프롬프트에 목표, 관련 파일 경로, 제약, 원하는 출력 형식을
   전부 적습니다. 읽기만 할 작업이면 "파일을 고치지 마" 라고 분명히 씁니다.
+- **지시문**: `aw brief` 가 켜져 있으면 aw 가 프롬프트 앞에 지시문을 붙입니다 (권장값: 첫 줄에 예상 소요
+  시간을 적고, 오래 걸리면 몇 분마다 진행을 한 줄씩 남기기). 그러니 같은 요청을 프롬프트에 또 적지 않습니다.
+  `aw peek` 이 그 예상 소요 시간을 경과와 견줘 보여 줍니다. 지시문이 작업과 맞지 않으면 `--no-brief`.
 
 ## 오래 걸리는 작업
 
@@ -1987,7 +2269,8 @@ aw wait rv-codex rv-gemini --timeout 100
 ## 더 보기
 
 `aw help` (전체 명령), `aw help agents` (에이전트별 함정), `aw help limits` (프롬프트 크기와
-컨텍스트 한도), `aw help defaults` (권한 옵션), `aw help files` (워커 기록 구조).
+컨텍스트 한도), `aw help defaults` (권한 옵션), `aw help files` (워커 기록 구조),
+`aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.
 SKILL
 }
@@ -2014,6 +2297,7 @@ case "$sub" in
   clean)   cmd_clean "$@" ;;
   contexts) cmd_contexts ;;
   defaults) cmd_defaults "$@" ;;
+  brief)   cmd_brief "$@" ;;
   skill)   cmd_skill "$@" ;;
   setup)   cmd_setup "$@" ;;
   version|--version|-v) say "aw $AW_VERSION" ;;

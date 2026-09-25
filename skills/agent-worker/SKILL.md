@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.10.1"
+  version: "0.11.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -68,6 +68,9 @@ aw rm review
 - 실패하면 `aw errs <이름>` 과 `aw logs <이름>` 을 먼저 봅니다. 전체 목록은 `aw list`.
 - **워커는 이 대화를 모릅니다.** 프롬프트에 목표, 관련 파일 경로, 제약, 원하는 출력 형식을
   전부 적습니다. 읽기만 할 작업이면 "파일을 고치지 마" 라고 분명히 씁니다.
+- **지시문**: `aw brief` 가 켜져 있으면 aw 가 프롬프트 앞에 지시문을 붙입니다 (권장값: 첫 줄에 예상 소요
+  시간을 적고, 오래 걸리면 몇 분마다 진행을 한 줄씩 남기기). 그러니 같은 요청을 프롬프트에 또 적지 않습니다.
+  `aw peek` 이 그 예상 소요 시간을 경과와 견줘 보여 줍니다. 지시문이 작업과 맞지 않으면 `--no-brief`.
 
 ## 오래 걸리는 작업
 
@@ -179,5 +182,6 @@ aw wait rv-codex rv-gemini --timeout 100
 ## 더 보기
 
 `aw help` (전체 명령), `aw help agents` (에이전트별 함정), `aw help limits` (프롬프트 크기와
-컨텍스트 한도), `aw help defaults` (권한 옵션), `aw help files` (워커 기록 구조).
+컨텍스트 한도), `aw help defaults` (권한 옵션), `aw help files` (워커 기록 구조),
+`aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.
