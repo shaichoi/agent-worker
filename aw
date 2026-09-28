@@ -11,12 +11,14 @@
 
 set -eu
 
-AW_VERSION=0.13.0
+AW_VERSION=0.14.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
 AW_DEFAULTS="${AW_DEFAULTS:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults}"
 AW_BRIEF="${AW_BRIEF:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/brief}"
+AW_PICK="${AW_PICK:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/pick}"
+AW_PICK_KEYFILE="${AW_PICK_KEYFILE:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/typesafe-key}"
 
 die()  { printf '%s\n' "$*" >&2; exit 1; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -41,6 +43,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw contexts                          컨텍스트 한도표
   aw defaults [get|set|unset]          기본 옵션(권한, 모델) 보기 / 바꾸기
   aw brief [--init]                    워커 프롬프트 앞에 붙는 지시문 (예상 소요 시간 등)
+  aw pick [on|off|key] / -- '작업'     (실험용) Jev 가 작업에 맞는 에이전트·모델을 골라 워커를 띄움
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
   aw version | aw help [주제]
@@ -69,6 +72,7 @@ wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 /
   aw help limits    프롬프트 크기와 컨텍스트 한도
   aw help peek      진행 상황 보기: 각 줄의 뜻, 생각 중·조용함, wait --idle
   aw help brief     워커 지시문: 붙는 곳, 끄는 법, 예상 소요 시간
+  aw help pick      (실험용) 에이전트 고르기: 켜고 끄기, 키, 고르는 기준
 USAGE
 }
 
@@ -239,9 +243,11 @@ T
   pid       실행 중인 명령의 pid
   pgid      프로세스 그룹 (aw stop 이 이 그룹째 종료. setsid 가 있을 때만)
   run.sh    실제로 돌린 스크립트 (그대로 다시 실행 가능)
+  fallback.sh, out.model, err.model   aw pick 이 고른 모델이 거부될 때 대신 돌리는 스크립트와 첫 시도의 출력
 
 기계로 읽으려면: aw list --json
-환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_QUIET
+환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_QUIET,
+          AW_PICK, AW_PICK_KEYFILE, AW_PICK_MIN_CONFIDENCE, AW_PICK_FALLBACK, TYPESAFE_API_KEY (aw help pick)
 워커 안에서는 AW_WORKER 에 그 워커 이름이 들어 있습니다 (중첩 확인용).
 T
       ;;
@@ -267,9 +273,76 @@ T
   표는 aw contexts, 한 번만 바꾸려면 --max-input-tokens N (0 이면 끄기).
 T
       ;;
+    pick)
+      cat <<'T'
+에이전트 고르기 (aw pick, 실험용)
+
+작업(프롬프트)을 TypeSafe AI 의 Jev 에 보내 어느 에이전트가 맞는지, 그 에이전트의 어느 모델·추론 수준이
+맞는지 고르게 하고 그대로 워커를 띄웁니다. 고른 에이전트의 정석 호출(aw help agents)로 aw run 을 부르므로
+기본 옵션, 지시문, -w 가 평소처럼 붙습니다. 실험용이라 켜야 쓸 수 있습니다.
+
+T
+      if [ -f "$AW_PICK" ]; then say "지금: 켜져 있음  ($(tilde "$AW_PICK"))"; else say "지금: 꺼져 있음  (켜려면 aw pick on)"; fi
+      cat <<'T'
+
+켜고 끄기
+  aw pick on [--key 키] [--force]
+                         켜기. 후보 설명 파일을 만들고 키를 넣음 (키를 안 주면 터미널에서 물어봄)
+                         --force 면 설명을 권장값으로 되돌림
+  aw pick off            끄기. 고친 설명은 pick.off 로, 키는 그대로 남겨 다시 켜면 돌아옴
+  aw pick key [키]       키 저장. 키를 빼면 터미널에서는 가려서 묻고, 아니면 표준 입력 한 줄을 읽음
+  aw pick                상태: 켜짐, 키, 후보
+  키는 console.typesafe.ai/keys 에서 받습니다.
+
+쓰는 법
+  aw pick [run 옵션] -- '작업'      골라서 띄움. 이름을 안 주면 <에이전트>-N
+  aw pick [run 옵션] -f task.md     파일의 작업으로 (에이전트에도 파일로 넘김)
+  aw pick --dry-run -- '작업'       고르기만 하고, 띄울 aw run 명령을 보여 줌
+  --min-confidence N               확신이 N 보다 낮으면 띄우지 않고 코드 3 (기본 0.5, AW_PICK_MIN_CONFIDENCE)
+  --key 키                         이번만 이 키로 (저장하지 않음)
+  --fallback <에이전트|none>       Jev 를 못 쓸 때 대신 띄울 에이전트 (기본: 설명 파일의 첫 후보, AW_PICK_FALLBACK)
+  run 옵션: -n -d -w -e --tag --profile --max-input-tokens --no-defaults --no-brief
+  종료 코드: 0 띄움 (Jev 를 못 써서 대신 띄운 것 포함) / 1 오류 (꺼짐, --fallback none, 대신 띄울
+            에이전트가 없음) / 3 확신이 낮아 안 띄움
+
+고르는 기준 (설명 파일, aw pick on 이 만듦)
+  claude Claude Code ...                    에이전트 줄: 이 설명들 중 작업에 맞는 에이전트를 고름
+    claude-opus-5-5@xhigh For ordinary ...  들여 쓴 줄: 그 에이전트의 모델[@수준] 선택지
+  Jev 에 Choice 질문을 한 요청에 담아 보냅니다: 에이전트 하나, 그리고 모델 줄이 둘 이상인 후보마다 모델
+  하나. 고른 에이전트의 모델 답만 씁니다. 선택지는 PATH 에 있는 에이전트뿐이고, 작업이 에이전트나 모델을
+  짚으면(예: "codex 로") 그걸 고르라고 함께 적어 보냅니다. 후보나 모델 줄이 하나면 묻지 않고 그걸 씁니다.
+  모델 줄이 없는 에이전트는 기본값(aw defaults)으로, 모델 확신이 하한보다 낮아도 기본값으로 돕니다.
+  수준을 넘기는 법은 aw 가 바꿉니다: claude·agy --effort, codex -c model_reasoning_effort=,
+  devin 은 이름-수준 (swe-2@max → swe-2-max), kiro-cli 는 --agent-engine v3 를 같이 붙임
+  (kiro-cli 의 --effort 는 실측에서 먹지 않아 권장값에 수준을 적지 않았습니다).
+  설명은 써 보며 고치세요. Jev 는 영어를 가장 잘 읽어 설명은 영어로 두는 편이 낫습니다.
+
+안 될 때
+  Jev 를 못 쓰면 (키 없음, 닿지 못함, 402·403 권한·예산, 429 한도, 5xx 서버 오류, 읽을 수 없는 답)
+    설명 파일의 첫 후보(권장값에서는 claude)로, 모델은 기본값으로 띄우고 이유를 경고와 meta 의
+    pick_jev_error 에 남깁니다. --fallback <에이전트> 로 바꾸고, none 이면 띄우지 않고 코드 1.
+    요청 한 번은 연결 5초·전체 20초에서 끊고, 429·5xx 는 두 번, 연결 실패는 한 번 더 해 봅니다.
+  고른 모델을 에이전트가 거부하면 (없는 모델, 쓸 권한 없음)
+    워커가 2분 안에 실패하고 출력에 모델 탓이라는 문구가 있으면, 같은 워커에서 모델 옵션만 빼고
+    (지시문·기본 옵션은 그대로) 한 번 더 돌립니다. 첫 시도는 out.model, err.model 에, meta 에는
+    pick_fallback 이 남습니다. 실측: claude, codex, agy, devin, kiro-cli 모두 없는 모델이면 0~6초 안에
+    코드 1 과 그런 문구를 냅니다. 모델과 상관없는 실패는 다시 돌리지 않습니다.
+
+키와 보내는 것
+  키를 찾는 순서: --key 인자, TYPESAFE_API_KEY 환경변수, aw pick key 로 저장한 파일 (나만 읽기 권한).
+    TYPESAFE_API_KEY=... aw pick -- '작업'     환경변수 (TypeSafe SDK 와 같은 이름)
+    aw pick --key ... -- '작업'                인자. 셸 기록과 aw 의 ps 에 남을 수 있음
+    printf '%s\n' "$KEY" | aw pick key         표준 입력으로 저장 (기록에 안 남음)
+  aw 는 키를 curl 의 명령 인자에 싣지 않고(ps 에 보이므로) 워커 기록에도 남기지 않습니다.
+  보내는 것은 작업 글의 앞 12KB 와 후보 설명뿐입니다. 저장소 파일은 보내지 않습니다.
+  모델은 TYPESAFE_DEFAULT_MODEL (기본 jev-latest), 주소는 TYPESAFE_BASE_URL (TypeSafe SDK 와 같은 이름).
+  고른 결과는 워커 meta 의 picked, pick_confidence, pick_model, pick_model_confidence 에 남고
+  aw status 에 보입니다.
+T
+      ;;
     '') usage ;;
     *) warn "그런 도움말 주제가 없습니다: $1"
-       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief"
+       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief, pick"
        return 1 ;;
   esac
 }
@@ -868,6 +941,86 @@ cmd_contexts() {
 
 # ---------------------------------------------------------------- run
 
+# 지시문(brief)을 프롬프트에 붙이고 기본 옵션을 뒤에 붙인 인자 → rw_words (따옴표로 감싼 한 줄).
+# 부른 쪽의 stdin_file, briefed, added 를 바꿉니다 (cmd_run 의 변수). 인자는 eval "set -- $rw_words" 로 되받습니다.
+# aw pick 이 모델이 거부될 때 다시 돌릴 명령도 이 함수로 만들어, 지시문과 기본 옵션이 똑같이 붙습니다.
+run_argv() { # <인자...>
+  # 지시문(brief)을 프롬프트 앞에 붙입니다. 기본 옵션처럼 파일이 있을 때만 합니다.
+  # cmd.orig 에는 붙이기 전 인자가 남으므로, aw resume 은 새 프롬프트에 한 번만 다시 붙입니다.
+  if [ "$no_brief" -ne 1 ]; then
+    brief=$(brief_text)
+    if [ -n "$brief" ] && brief_where "$stdin_file" "$@"; then
+      nl='
+'
+      if [ "$bkind" = stdin ]; then
+        { printf '%s\n\n' "$brief"; cat "$stdin_file"; } > "$wd/prompt" && stdin_file="$wd/prompt" && briefed=1
+      else
+        # 함수는 부른 쪽의 인자를 못 바꾸므로 여기서 다시 짭니다 (여러 줄 프롬프트도 온전히).
+        bi=0; bn=$#
+        for ba in "$@"; do
+          bi=$((bi + 1))
+          if [ "$bi" -eq "$bpos" ]; then
+            case "$bkind" in
+              arg) ba="$brief$nl$nl$ba" ;;
+              eq)  ba="${ba%%=*}=$brief$nl$nl${ba#*=}" ;;
+              pfile | pfileeq)
+                bsrc=${ba#--prompt-file=}
+                case "$bsrc" in /*) ;; *) [ -f "$dir/$bsrc" ] && bsrc="$dir/$bsrc" ;; esac
+                { printf '%s\n\n' "$brief"; cat "$bsrc"; } > "$wd/prompt"
+                if [ "$bkind" = pfile ]; then ba="$wd/prompt"; else ba="--prompt-file=$wd/prompt"; fi ;;
+            esac
+          fi
+          set -- "$@" "$ba"
+        done
+        shift "$bn"
+        briefed=1
+      fi
+    fi
+  fi
+
+  # 에이전트별 기본 옵션을 뒤에 붙입니다.
+  # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
+  if [ "$no_defaults" -ne 1 ]; then
+    dgroups=$(defaults_for "$1")
+    while IFS= read -r dg; do
+      [ -n "$dg" ] || continue
+      # 그 줄의 옵션 중 하나라도 이미 있으면(사용자가 줬거나 앞 줄이 붙였으면) 줄 전체를
+      # 건너뜁니다. --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
+      # 붙거나, agy 의 --effort 처럼 사용자 값과 부딪치는 사고를 막습니다.
+      group_given "$1" "$dg" "$@" && continue
+      added="${added:+$added }$dg"
+      # 공백으로 직접 쪼갭니다. 셸의 단어 분리에 기대지 않습니다
+      # (zsh 는 따옴표 없는 변수를 분리하지 않습니다).
+      rest=$dg
+      while [ -n "$rest" ]; do
+        tok=${rest%% *}
+        case "$rest" in *' '*) rest=${rest#* } ;; *) rest='' ;; esac
+        [ -n "$tok" ] && set -- "$@" "$tok"
+      done
+    done <<DG
+$dgroups
+DG
+  fi
+
+  rw_words=''
+  for a in "$@"; do rw_words="$rw_words $(shquote "$a")"; done
+}
+
+# 실행 스크립트 (인자를 따옴표로 보존). exec 라 종료 코드는 run.sh 가 받습니다.
+write_launch() { # <파일> <따옴표로 감싼 인자들>
+  {
+    printf '%s\n' '#!/bin/sh'
+    printf '%s\n' '# aw 가 자동으로 만든 실행 스크립트입니다.'
+    printf 'cd %s || { printf "127\\n" > %s/exit; exit 127; }\n' "$(shquote "$dir")" "$(shquote "$wd")"
+    # 워커 안의 에이전트가 자기가 워커인지 알 수 있게 합니다 (중첩 확인용).
+    printf 'export AW_WORKER=%s\n' "$(shquote "$name")"
+    printf '%s' "$envs"
+    printf 'printf "%%s\\n" "$$" > %s/pid\n' "$(shquote "$wd")"
+    printf 'exec%s' "$2"
+    printf ' < %s > %s 2> %s\n' "$(shquote "$stdin_file")" "$(shquote "$wd/out")" "$(shquote "$wd/err")"
+  } > "$1"
+}
+
 cmd_run() {
   name=''; dir=''; worktree=''; stdin_file='/dev/null'; tag=''; profile=''
   envs=''; max_tokens=''; no_defaults="${AW_NO_DEFAULTS:-0}"; added=''
@@ -944,80 +1097,29 @@ cmd_run() {
   : > "$wd/cmd.orig"
   for a in "$@"; do printf '%s\n' "$a" >> "$wd/cmd.orig"; done
 
-  # 지시문(brief)을 프롬프트 앞에 붙입니다. 기본 옵션처럼 파일이 있을 때만 합니다.
-  # cmd.orig 에는 붙이기 전 인자가 남으므로, aw resume 은 새 프롬프트에 한 번만 다시 붙입니다.
-  if [ "$no_brief" -ne 1 ]; then
-    brief=$(brief_text)
-    if [ -n "$brief" ] && brief_where "$stdin_file" "$@"; then
-      nl='
-'
-      if [ "$bkind" = stdin ]; then
-        { printf '%s\n\n' "$brief"; cat "$stdin_file"; } > "$wd/prompt" && stdin_file="$wd/prompt" && briefed=1
-      else
-        # 함수는 부른 쪽의 인자를 못 바꾸므로 여기서 다시 짭니다 (여러 줄 프롬프트도 온전히).
-        bi=0; bn=$#
-        for ba in "$@"; do
-          bi=$((bi + 1))
-          if [ "$bi" -eq "$bpos" ]; then
-            case "$bkind" in
-              arg) ba="$brief$nl$nl$ba" ;;
-              eq)  ba="${ba%%=*}=$brief$nl$nl${ba#*=}" ;;
-              pfile | pfileeq)
-                bsrc=${ba#--prompt-file=}
-                case "$bsrc" in /*) ;; *) [ -f "$dir/$bsrc" ] && bsrc="$dir/$bsrc" ;; esac
-                { printf '%s\n\n' "$brief"; cat "$bsrc"; } > "$wd/prompt"
-                if [ "$bkind" = pfile ]; then ba="$wd/prompt"; else ba="--prompt-file=$wd/prompt"; fi ;;
-            esac
-          fi
-          set -- "$@" "$ba"
-        done
-        shift "$bn"
-        briefed=1
-      fi
-    fi
-  fi
+  stdin_orig=$stdin_file
+  run_argv "$@"
+  eval "set -- $rw_words"
 
-  # 에이전트별 기본 옵션을 뒤에 붙입니다.
-  # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
-  if [ "$no_defaults" -ne 1 ]; then
-    dgroups=$(defaults_for "$1")
-    while IFS= read -r dg; do
-      [ -n "$dg" ] || continue
-      # 그 줄의 옵션 중 하나라도 이미 있으면(사용자가 줬거나 앞 줄이 붙였으면) 줄 전체를
-      # 건너뜁니다. --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
-      # 붙거나, agy 의 --effort 처럼 사용자 값과 부딪치는 사고를 막습니다.
-      group_given "$1" "$dg" "$@" && continue
-      added="${added:+$added }$dg"
-      # 공백으로 직접 쪼갭니다. 셸의 단어 분리에 기대지 않습니다
-      # (zsh 는 따옴표 없는 변수를 분리하지 않습니다).
-      rest=$dg
-      while [ -n "$rest" ]; do
-        tok=${rest%% *}
-        case "$rest" in *' '*) rest=${rest#* } ;; *) rest='' ;; esac
-        [ -n "$tok" ] && set -- "$@" "$tok"
-      done
-    done <<DG
-$dgroups
-DG
+  # aw pick 이 붙인 모델이 거부될 때(없는 모델 등) 모델 옵션 없이 다시 돌릴 명령 (run_fallback, 따옴표로 감싼 인자).
+  # 첫 판과 같은 지시문·기본 옵션이 붙게 하위 셸에서 run_argv 를 한 번 더 돌립니다.
+  fb_words=''
+  if [ -n "${run_fallback:-}" ]; then
+    fb_words=$(stdin_file=$stdin_orig; added=''; eval "set -- $run_fallback"; run_argv "$@"; printf '%s' "$rw_words")
   fi
 
   # setsid 가 있으면 워커를 새 프로세스 그룹의 리더로 띄울 수 있습니다.
   leader=0
   command -v setsid >/dev/null 2>&1 && leader=1
 
-  # 실행 스크립트 만들기 (인자를 따옴표로 보존)
-  {
-    printf '%s\n' '#!/bin/sh'
-    printf '%s\n' '# aw 가 자동으로 만든 실행 스크립트입니다.'
-    printf 'cd %s || { printf "127\\n" > %s/exit; exit 127; }\n' "$(shquote "$dir")" "$(shquote "$wd")"
-    # 워커 안의 에이전트가 자기가 워커인지 알 수 있게 합니다 (중첩 확인용).
-    printf 'export AW_WORKER=%s\n' "$(shquote "$name")"
-    printf '%s' "$envs"
-    printf 'printf "%%s\\n" "$$" > %s/pid\n' "$(shquote "$wd")"
-    printf '%s' 'exec'
-    for a in "$@"; do printf ' %s' "$(shquote "$a")"; done
-    printf ' < %s > %s 2> %s\n' "$(shquote "$stdin_file")" "$(shquote "$wd/out")" "$(shquote "$wd/err")"
-  } > "$wd/launch.sh"
+  write_launch "$wd/launch.sh" "$rw_words"
+  if [ -n "$fb_words" ]; then
+    write_launch "$wd/fallback.sh" "$fb_words"
+    : > "$wd/cmd.fallback"
+    ( eval "set -- $fb_words"; for a in "$@"; do printf '%s\n' "$a"; done ) >> "$wd/cmd.fallback"
+    : > "$wd/cmd.orig.fallback"
+    ( eval "set -- $run_fallback"; for a in "$@"; do printf '%s\n' "$a"; done ) >> "$wd/cmd.orig.fallback"
+  fi
 
   # exec 는 종료 코드를 남길 수 없으므로 한 겹 더 감쌉니다.
   {
@@ -1025,8 +1127,21 @@ DG
     # setsid 로 띄우면 이 스크립트가 세션/그룹 리더라 $$ 가 곧 PGID 입니다.
     # nohup 폴백은 새 그룹을 만들지 않으므로(= aw 자신의 그룹) 남기지 않습니다.
     [ "$leader" -eq 1 ] && printf 'printf "%%s\\n" "$$" > %s/pgid\n' "$(shquote "$wd")"
+    printf 'st=$(date +%%s)\n'
     printf 'sh %s\n' "$(shquote "$wd/launch.sh")"
     printf 'code=$?\n'
+    # aw pick 이 고른 모델을 에이전트가 거부하면(없는 모델, 권한 없음 등) 모델 옵션 없이 한 번 더 돌립니다.
+    # 실측: claude, codex, agy, devin, kiro-cli 모두 0~6초 안에 코드 1 과 모델 탓이라는 문구를 남깁니다.
+    if [ -n "$fb_words" ]; then
+      printf 'if [ "$code" -ne 0 ] && [ $(( $(date +%%s) - st )) -le %s ] && grep -Eiq %s %s %s 2>/dev/null; then\n' \
+        "$PICK_FALLBACK_SECS" "$(shquote "$PICK_MODEL_REJECTED")" "$(shquote "$wd/out")" "$(shquote "$wd/err")"
+      printf '  mv %s %s; mv %s %s\n' "$(shquote "$wd/out")" "$(shquote "$wd/out.model")" "$(shquote "$wd/err")" "$(shquote "$wd/err.model")"
+      printf '  mv %s %s; mv %s %s\n' "$(shquote "$wd/cmd.fallback")" "$(shquote "$wd/cmd")" "$(shquote "$wd/cmd.orig.fallback")" "$(shquote "$wd/cmd.orig")"
+      printf '  printf "pick_fallback=%%s\\n" "$code" >> %s\n' "$(shquote "$wd/meta")"
+      printf '  sh %s\n' "$(shquote "$wd/fallback.sh")"
+      printf '  code=$?\n'
+      printf 'fi\n'
+    fi
     printf 'printf "%%s\\n" "$code" > %s/exit.tmp\n' "$(shquote "$wd")"
     printf 'mv %s/exit.tmp %s/exit\n' "$(shquote "$wd")" "$(shquote "$wd")"
     printf 'date +%%s > %s/finished\n' "$(shquote "$wd")"
@@ -1147,6 +1262,9 @@ cmd_status() {
   [ -n "$(meta_get "$d" worktree)" ] && say "  worktree : $(meta_get "$d" worktree)  (브랜치 $(meta_get "$d" branch))"
   [ -n "$(meta_get "$d" profile)" ]  && say "  프로필   : $(meta_get "$d" profile)"
   [ -n "$(meta_get "$d" tag)" ]      && say "  꼬리표   : $(meta_get "$d" tag)"
+  [ -n "$(meta_get "$d" picked)" ]   && say "  aw pick  : $(meta_get "$d" picked) 를 고름$( [ -n "$(meta_get "$d" pick_confidence)" ] && printf ' (확신 %s)' "$(meta_get "$d" pick_confidence)" )$( [ -n "$(meta_get "$d" pick_model)" ] && printf ', 모델 %s' "$(meta_get "$d" pick_model)" )$( [ -n "$(meta_get "$d" pick_model_confidence)" ] && printf ' (확신 %s)' "$(meta_get "$d" pick_model_confidence)" )"
+  [ -n "$(meta_get "$d" pick_jev_error)" ] && say "             Jev 를 못 써서 대신 띄움: $(meta_get "$d" pick_jev_error)"
+  [ -n "$(meta_get "$d" pick_fallback)" ] && say "             모델이 거부돼(코드 $(meta_get "$d" pick_fallback)) 모델 없이 다시 돌림. 첫 시도: $d/out.model, err.model"
   sess=$(session_of "$d")
   [ -n "$sess" ] && say "  세션     : $sess"
   say "  경과     : $(elapsed_str $((fin - started)))"
@@ -2307,6 +2425,516 @@ cmd_skill() {
   esac
 }
 
+# ---------------------------------------------------------------- 에이전트 고르기 (실험용)
+
+# aw pick 은 작업을 TypeSafe AI 의 Jev 에 보내 어느 에이전트가 맞는지 고르게 한 뒤, 그 에이전트의
+# 정석 호출(aw help agents)로 cmd_run 을 부릅니다. 그래서 기본 옵션, 지시문, worktree 는 aw run 과 같습니다.
+#
+# Jev 는 글을 짓지 않고 정해 준 선택지 중 하나를 고르는 모델입니다 (POST /v1/systemone, Choice 질문).
+# 선택지는 $AW_PICK 파일의 '에이전트 설명' 줄 중 PATH 에 있는 것이고, 그 파일이 있으면 켜진 것입니다.
+# aw pick off 는 파일을 지우지 않고 .off 로 옮겨, 고친 설명이 다시 켤 때 돌아오게 합니다.
+#
+# 키는 TYPESAFE_API_KEY(TypeSafe SDK 와 같은 이름)가 먼저, 없으면 $AW_PICK_KEYFILE 입니다.
+# curl 의 인자에 넣으면 ps 로 보이므로 설정(-K -)을 표준 입력으로 넘깁니다.
+
+pick_agents() { printf '%s\n' claude codex agy devin kiro-cli; }
+
+recommended_pick() {
+  cat <<'P'
+# aw pick (실험용) 이 고를 에이전트·모델과 그 설명입니다.
+#   에이전트 줄:        '에이전트 설명'
+#   그 아래 들여 쓴 줄: '  모델[@수준] 설명'   그 에이전트를 고르면 이 중에서 모델·추론 수준을 고름
+# Jev 가 작업(프롬프트)을 읽고 설명이 가장 잘 맞는 줄을 고릅니다. 설명은 영어가 잘 듣습니다.
+# 코딩 에이전트 5종과 모델을 실측하고 codex·devin 의 검토와 Jev 시험(작업 50개)으로 다듬은 시작점입니다.
+# 써 보며 고치세요 (aw help pick). '#' 로 시작하는 줄은 보내지 않습니다.
+# PATH 에 있는 에이전트만 후보가 됩니다. 빼려면 줄을 지우거나 # 로 막고, 모델 줄을 지우면 기본값으로 돕니다.
+# 수준: claude·agy 는 --effort, codex 는 -c model_reasoning_effort=, devin 은 '이름-수준' 으로 붙습니다.
+#   kiro-cli 는 --effort 가 실측에서 먹지 않아 모델만 고릅니다.
+# 에이전트가 모델을 거부하면(없는 모델 등) 워커가 모델 옵션 없이 한 번 더 돕니다.
+# 끄기: aw pick off   (이 파일은 pick.off 로 남아 aw pick on 하면 돌아옵니다)
+claude Claude Code (Anthropic). For hands-on work in a repository that needs judgment: implementing a feature, finding and fixing a bug, debugging, refactoring, and writing or editing documentation. It is the general-purpose choice when no more specific description fits. It claims tasks that name Claude, Opus, Sonnet, or Fable.
+  claude-sonnet-5@low Claude Sonnet 5, low reasoning; fast and cheap. For obvious, low-risk work: a short answer or a small localized edit whose change is clear. Also choose this when the task names Sonnet.
+  claude-opus-5-5@xhigh Claude Opus 5.5, extra-high reasoning. The ordinary choice for repository work that needs judgment: a feature, a bug fix, debugging, a refactor, or a document edit, when nothing about it is unusually risky. Also choose this when the task names Opus.
+  claude-fable-5-1@xhigh Claude Fable 5.1, Anthropic's most capable model, extra-high reasoning; slow and expensive. Only for unusually hard or high-stakes work: a bug that earlier attempts failed to fix, an intermittent or concurrency bug, possible data loss or security impact, or a major architecture decision. Also choose this when the task names Fable.
+codex OpenAI Codex CLI (GPT-5.6). For reviewing and critiquing existing material without changing it: a code review, a security or correctness audit, a pull request or diff review, a critique of a plan or design, or a second opinion. Also for writing tests for behavior the task specifies. It claims tasks that name Codex, GPT, Luna, Terra, or Sol.
+  gpt-5.6-luna@medium GPT-5.6 Luna, fast and cheap, medium reasoning. For a quick, low-risk check or a brief suggestion. Also choose this when the task names Luna.
+  gpt-5.6-terra@high GPT-5.6 Terra, balanced, high reasoning. The ordinary choice: a normal code review, a design critique, or writing tests. Also choose this when the task names Terra.
+  gpt-5.6-sol@xhigh GPT-5.6 Sol, the strongest model this Codex offers, extra-high reasoning; slower and more expensive. For a review where a missed problem would be costly: security, authentication, payments, data integrity, or concurrency, or when the task asks for a thorough or careful review. Also choose this when the task names Sol.
+agy Antigravity CLI (Google Gemini). For quick, low-stakes work: answering a question, explaining or summarizing code, documents, or error messages, reading a very large file or log, converting a format, and small mechanical edits such as a rename or a typo fix. It claims tasks that name Gemini, Flash, Pro, or Antigravity, or that ask for the fastest or cheapest option.
+  gemini-3.8-flash-low Gemini 3.8 Flash, low reasoning; the fastest and cheapest. For trivial work: a one-line answer, a typo fix, a format conversion, or a short summary. Also choose this when the task asks for the fastest or cheapest option.
+  gemini-3.8-flash-high Gemini 3.8 Flash, high reasoning. The ordinary choice: explaining code, summarizing long documents or logs, a rename across a codebase, or a question that needs some thought. Also choose this when the task names Gemini or Flash without more detail.
+  gemini-3.1-pro-high Gemini 3.1 Pro, high reasoning; slower and more expensive than Flash. For a hard analysis or a careful opinion where a wrong conclusion would be costly. Also choose this when the task names Pro.
+devin Devin CLI (Cognition). For long unattended work that should run to completion without check-ins: building a whole project or a large feature from an existing spec or README, or carrying out a long multi-step plan, especially when the task says not to ask questions or that the user will be away. It claims tasks that name Devin or SWE-2.
+  swe-2-medium Cognition SWE-2, medium effort; free. For clear, well-scoped unattended work with simple steps.
+  swe-2-max Cognition SWE-2, maximum effort; free. The ordinary choice for an unattended project or feature built from a clear spec. Also choose this when the task names SWE-2.
+  claude-fable-5-1-xhigh Claude Fable 5.1 inside Devin, extra-high reasoning; paid per token and expensive. For unattended work that is unusually hard or high-stakes: complex architecture, subtle bugs, or a high cost of failure. Also choose this when the task names Fable.
+kiro-cli Kiro CLI (AWS). For spec-driven work that first turns requirements into a design document and a task list and then implements them, and for work whose main subject is AWS services or cloud infrastructure, such as Terraform, CloudFormation, or Lambda. It claims tasks that name Kiro.
+  claude-haiku-4.5 Claude Haiku 4.5, the cheapest of these three (0.4x credits). For obvious, low-risk changes.
+  claude-sonnet-5 Claude Sonnet 5 (1.3x credits). The ordinary choice for spec work, AWS implementation, or infrastructure changes of moderate size. Also choose this when the task names Sonnet.
+  claude-opus-5.5 Claude Opus 5.5 (2.0x credits). For a large system design, complex or security-critical infrastructure, or work where a wrong result is costly. Also choose this when the task names Opus.
+P
+}
+
+# 설명 파일의 에이전트 줄 → "에이전트<TAB>설명". 들여 쓴 줄(모델)은 뺍니다. 같은 에이전트가 또 나오면 첫 줄만.
+pick_lines() {
+  [ -f "$AW_PICK" ] || return 0
+  awk '/^[[:space:]]*#/ || NF == 0 || /^[[:space:]]/ { next }
+       { a = $1; $1 = ""; sub(/^[[:space:]]+/, ""); if (!(a in seen)) { seen[a] = 1; print a "\t" $0 } }' "$AW_PICK"
+}
+
+# 그 에이전트 줄 아래 들여 쓴 줄 → "모델[@수준]<TAB>설명"
+pick_models() { # <에이전트>
+  [ -f "$AW_PICK" ] || return 0
+  awk -v a="$1" '/^[[:space:]]*#/ || NF == 0 { next }
+       /^[^[:space:]]/ { cur = $1; next }
+       cur == a { m = $1; $1 = ""; sub(/^[[:space:]]+/, ""); if (!(m in seen)) { seen[m] = 1; print m "\t" $0 } }' "$AW_PICK"
+}
+
+# '모델[@수준]' → 그 에이전트에 붙일 옵션 (따옴표로 감싼 한 줄). 수준을 넘기는 법이 에이전트마다 다릅니다.
+# kiro-cli 는 기본 엔진(v2)이 --model 을 무시해서 v3 를 같이 붙입니다. --effort 는 실측에서 먹지 않았습니다
+# (모델을 바꾸면 세션이 high 로 잡힘). devin 은 수준이 모델 이름에 붙어 있어 '이름-수준' 으로 이어 줍니다.
+pick_model_opts() { # <에이전트> <모델[@수준]>
+  pm_m=${2%%@*}; pm_e=''
+  case "$2" in *@*) pm_e=${2#*@} ;; esac
+  if [ "$1" = devin ] && [ -n "$pm_e" ]; then pm_m="$pm_m-$pm_e"; pm_e=''; fi
+  printf '%s %s' --model "$(shquote "$pm_m")"
+  if [ -n "$pm_e" ]; then
+    case "$1" in
+      codex) printf ' -c %s' "$(shquote "model_reasoning_effort=$pm_e")" ;;
+      *)     printf ' --effort %s' "$(shquote "$pm_e")" ;;
+    esac
+  fi
+  if [ "$1" = kiro-cli ]; then printf ' --agent-engine v3'; fi
+  return 0
+}
+
+# 후보: 아는 에이전트 중 PATH 에 있는 것. 모르는 이름은 알리고 건너뜁니다.
+pick_candidates() {
+  pc_tab=$(printf '\t')
+  pick_lines | while IFS="$pc_tab" read -r pc_a pc_d; do
+    case "$pc_a" in
+      claude | codex | agy | devin | kiro-cli)
+        if command -v "$pc_a" >/dev/null 2>&1; then printf '%s\t%s\n' "$pc_a" "$pc_d"; fi ;;
+      *) warn "aw pick: 모르는 에이전트라 건너뜁니다: $pc_a  ($(tilde "$AW_PICK"))" ;;
+    esac
+  done
+}
+
+pick_key() { # → 키 (없으면 1)
+  if [ -n "${TYPESAFE_API_KEY:-}" ]; then printf '%s' "$TYPESAFE_API_KEY"; return 0; fi
+  [ -f "$AW_PICK_KEYFILE" ] || return 1
+  pk_k=$(tr -d '[:space:]' < "$AW_PICK_KEYFILE")
+  [ -n "$pk_k" ] || return 1
+  printf '%s' "$pk_k"
+}
+
+mask_key() { # <키>  → 앞 4자…끝 4자
+  if [ "${#1}" -le 12 ]; then printf '(%s자)' "${#1}"; return 0; fi
+  printf '%s…%s' "$(printf '%s' "$1" | cut -c1-4)" "$(printf '%s' "$1" | cut -c$((${#1} - 3))-)"
+}
+
+pick_key_ok() { # <키>  curl 설정의 따옴표 안에 넣을 수 있는지
+  case "$1" in '' | *[[:space:]\"\\]*) return 1 ;; esac
+  return 0
+}
+
+# 키를 받아 파일에 씁니다. 인자로 주면 그걸, 아니면 터미널에서는 화면에 안 보이게 묻고,
+# 터미널이 아니면 표준 입력의 한 줄을 읽습니다.
+pick_key_set() { # [키]
+  [ $# -le 1 ] || die "사용법: aw pick key [키]   (키를 빼면 물어보거나 표준 입력에서 읽음)"
+  pks_k=${1:-}
+  if [ $# -eq 1 ]; then
+    :
+  elif [ -t 0 ]; then
+    printf 'TypeSafe API 키 (console.typesafe.ai/keys, 입력은 화면에 안 보임): ' >&2
+    trap 'stty echo 2>/dev/null; exit 130' INT
+    stty -echo 2>/dev/null || true
+    read -r pks_k || true
+    stty echo 2>/dev/null || true
+    trap - INT
+    printf '\n' >&2
+  else
+    read -r pks_k || true
+  fi
+  pks_k=$(printf '%s' "$pks_k" | tr -d '[:space:]')
+  if [ -z "$pks_k" ]; then warn "키가 비어서 넣지 않았습니다. 나중에: aw pick key"; return 1; fi
+  pick_key_ok "$pks_k" || { warn "키에 쓸 수 없는 글자(따옴표, 역슬래시)가 있습니다."; return 1; }
+  mkdir -p "$(dirname "$AW_PICK_KEYFILE")" || { warn "폴더를 만들 수 없습니다: $(dirname "$AW_PICK_KEYFILE")"; return 1; }
+  ( umask 077; printf '%s\n' "$pks_k" > "$AW_PICK_KEYFILE" ) || { warn "키를 쓸 수 없습니다: $AW_PICK_KEYFILE"; return 1; }
+  chmod 600 "$AW_PICK_KEYFILE" 2>/dev/null || true
+  say "키를 넣었습니다: $(tilde "$AW_PICK_KEYFILE")  ($(mask_key "$pks_k"), 나만 읽기)"
+  [ -n "${TYPESAFE_API_KEY:-}" ] && say "  이 셸의 TYPESAFE_API_KEY 가 이 파일보다 먼저 쓰입니다."
+  return 0
+}
+
+pick_on() { # [--force] [--key 키]
+  po_force=0; po_key=''; po_haskey=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) po_force=1; shift ;;
+      --key) po_key="${2:?--key 에 키가 필요합니다}"; po_haskey=1; shift 2 ;;
+      *) die "사용법: aw pick on [--force] [--key 키]" ;;
+    esac
+  done
+  mkdir -p "$(dirname "$AW_PICK")" || die "폴더를 만들 수 없습니다: $(dirname "$AW_PICK")"
+  if [ -f "$AW_PICK" ] && [ "$po_force" -eq 0 ]; then
+    say "이미 켜져 있습니다: $(tilde "$AW_PICK")   (설명을 권장값으로 되돌리려면 aw pick on --force)"
+  elif [ -f "$AW_PICK.off" ] && [ "$po_force" -eq 0 ]; then
+    mv "$AW_PICK.off" "$AW_PICK" || die "되돌릴 수 없습니다: $AW_PICK.off"
+    say "aw pick 을 다시 켰습니다 (실험용): $(tilde "$AW_PICK")   (전에 쓰던 설명 그대로)"
+  else
+    recommended_pick > "$AW_PICK" || die "쓸 수 없습니다: $AW_PICK"
+    rm -f "$AW_PICK.off"
+    say "aw pick 을 켰습니다 (실험용): $(tilde "$AW_PICK")"
+    say "  에이전트와 모델마다 한 줄 설명이 있고, Jev 는 작업에 가장 맞는 설명을 고릅니다. 고쳐 써도 됩니다."
+  fi
+  if [ "$po_haskey" -eq 1 ]; then
+    pick_key_set "$po_key" | sed 's/^/  /' || true
+  elif ! pick_key >/dev/null; then
+    if [ -t 0 ]; then
+      pick_key_set || true
+    else
+      say "  키가 없습니다. 넣으려면: aw pick key <키>   (또는 TYPESAFE_API_KEY, 한 번만이면 aw pick --key)"
+    fi
+  fi
+  say "  쓰기: aw pick -- '작업'   미리 보기: aw pick --dry-run -- '작업'   끄기: aw pick off"
+}
+
+pick_off() {
+  if [ -f "$AW_PICK" ]; then
+    mv "$AW_PICK" "$AW_PICK.off" || die "옮길 수 없습니다: $AW_PICK"
+    say "aw pick 을 껐습니다. 설명은 $(tilde "$AW_PICK.off") 에 남겨 두고, 키도 그대로 둡니다."
+    say "  다시 켜려면: aw pick on"
+    [ -f "$AW_PICK_KEYFILE" ] && say "  키까지 지우려면: rm $(tilde "$AW_PICK_KEYFILE")"
+  else
+    say "이미 꺼져 있습니다."
+  fi
+  return 0
+}
+
+pick_status() {
+  if [ ! -f "$AW_PICK" ]; then
+    say "aw pick (실험용): 꺼져 있음"
+    say "  작업을 Jev(TypeSafe AI)에 보내 맞는 에이전트와 모델을 골라 워커를 띄우는 기능입니다."
+    say "  켜려면: aw pick on   (자세히: aw help pick)"
+    return 0
+  fi
+  say "aw pick (실험용): 켜져 있음  ($(tilde "$AW_PICK"))"
+  if [ -n "${TYPESAFE_API_KEY:-}" ]; then
+    say "  키      : TYPESAFE_API_KEY 환경변수 ($(mask_key "$TYPESAFE_API_KEY"))"
+  elif ps_k=$(pick_key); then
+    say "  키      : $(tilde "$AW_PICK_KEYFILE") ($(mask_key "$ps_k"))"
+  else
+    say "  키      : 없음. 넣으려면 aw pick key <키>   (또는 TYPESAFE_API_KEY, 한 번만이면 aw pick --key)"
+  fi
+  say "  모델    : ${TYPESAFE_DEFAULT_MODEL:-jev-latest}   확신 하한: ${AW_PICK_MIN_CONFIDENCE:-0.5}"
+  say "  후보    :"
+  ps_tab=$(printf '\t')
+  pick_lines | while IFS="$ps_tab" read -r ps_a ps_d; do
+    case "$ps_a" in
+      claude | codex | agy | devin | kiro-cli)
+        if command -v "$ps_a" >/dev/null 2>&1; then ps_s=있음; else ps_s='없음 (안 고름)'; fi ;;
+      *) ps_s='모름 (안 고름)' ;;
+    esac
+    say "    $(padw 10 "$ps_a")$(padw 16 "$ps_s")$(printf '%s' "$ps_d" | trunc_filter 60)"
+    pick_models "$ps_a" | while IFS="$ps_tab" read -r ps_m ps_md; do
+      say "      $(padw 30 "$ps_m")$(printf '%s' "$ps_md" | trunc_filter 50)"
+    done
+  done
+  if ! grep -q '^[[:space:]][[:space:]]*[^[:space:]#]' "$AW_PICK"; then
+    say "  (모델 줄이 없어 모델은 고르지 않고 기본값으로 돕니다. 모델까지 고르는 권장값: aw pick on --force)"
+  fi
+  say ""
+  say "쓰기: aw pick -- '작업'   미리 보기: aw pick --dry-run -- '작업'   끄기: aw pick off"
+}
+
+# 앞 N 바이트만 남깁니다. 끝에서 잘린 UTF-8 글자는 뺍니다 (JSON 이 깨지지 않게).
+head_bytes() { # <바이트>
+  head -c "$1" | LC_ALL=C awk '
+    { if (NR > 1) printf "%s\n", prev; prev = $0 }
+    END {
+      s = prev
+      for (i = length(s); i > 0 && i > length(s) - 4; i--) {
+        c = substr(s, i, 1)
+        if (c < "\200") break
+        if (c >= "\300") {
+          need = (c >= "\360") ? 4 : (c >= "\340") ? 3 : 2
+          if (length(s) - i + 1 < need) s = substr(s, 1, i - 1)
+          break
+        }
+      }
+      printf "%s", s
+    }'
+}
+
+# 여러 줄 글을 JSON 문자열 안에 넣을 모양으로. 줄바꿈은 \n, 탭은 공백, 다른 제어 문자는 뺍니다.
+json_text() {
+  tr -d '\000-\010\013-\037' | tr '\t' ' ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+    | awk 'NR > 1 { printf "%s", "\\n" } { printf "%s", $0 }'
+}
+
+# 모델이 거부됐다는 문구 (실측: claude, codex, agy, devin, kiro-cli). run.sh 가 이걸 보고 모델 없이 다시 돌립니다.
+PICK_MODEL_REJECTED='unrecognized_model|issue with the selected model|model is not supported|is not supported with the|unknown model|invalid model|not recognized as a known model|model .{0,80}is not available|model_not_found'
+PICK_FALLBACK_SECS=120
+PICK_AGENT_Q='Which coding agent is the best fit to carry out `task`? If `task` names an agent or a model family, choose the agent whose description claims that name. Otherwise choose by the kind of work `task` asks for, preferring the most specific matching description over the general-purpose one.'
+PICK_MODEL_Q='Which model and reasoning level should carry out `task`? If `task` names a model or a reasoning level, choose the option with that name. Otherwise choose the least costly option that can still do `task` well, judged by how difficult `task` is and how costly a mistake would be.'
+
+# Choice 질문 하나 (JSON)
+pick_choice_json() { # <질문> <"선택지<TAB>설명" 줄들>
+  pj_tab=$(printf '\t')
+  printf '{"type":"choice","instructions":"%s","criteria":{' "$(json_escape "$1")"
+  printf '%s\n' "$2" | {
+    pj_sep=''
+    while IFS="$pj_tab" read -r pj_o pj_d; do
+      [ -n "$pj_o" ] || continue
+      if [ -n "$pj_d" ]; then printf '%s"%s":"%s"' "$pj_sep" "$(json_escape "$pj_o")" "$(json_escape "$pj_d")"
+      else printf '%s"%s":null' "$pj_sep" "$(json_escape "$pj_o")"; fi
+      pj_sep=','
+    done
+  }
+  printf '}}'
+}
+
+# Jev 에 보낼 본문. 작업은 표준 입력으로 받습니다.
+# 에이전트 질문(후보가 둘 이상일 때)과, 모델 줄이 둘 이상인 후보마다 모델 질문을 한 요청에 담습니다.
+# 모델 답은 고른 에이전트의 것만 쓰고 나머지는 버립니다 (Jev 문서의 speculative fan-out).
+pick_body() { # <후보> <에이전트도 물을지 1/0>
+  printf '{"model":"%s","state":{"task":"' "$(json_escape "${TYPESAFE_DEFAULT_MODEL:-jev-latest}")"
+  head_bytes 12000 | json_text
+  printf '"},"questions":{'
+  pb_sep=''
+  if [ "$2" -eq 1 ]; then printf '"agent":'; pick_choice_json "$PICK_AGENT_Q" "$1"; pb_sep=','; fi
+  for pb_a in $(printf '%s\n' "$1" | cut -f1); do
+    pb_ms=$(pick_models "$pb_a")
+    [ "$(printf '%s\n' "$pb_ms" | grep -c .)" -ge 2 ] || continue
+    printf '%s"model_%s":' "$pb_sep" "$pb_a"; pick_choice_json "$PICK_MODEL_Q" "$pb_ms"; pb_sep=','
+  done
+  printf '}}\n'
+}
+
+# 응답에서 질문 하나의 답 → pan_choice, pan_conf, pan_confs(소수 둘째 자리), pan_dist("a 0.85 · b 0.10", 큰 순)
+# Choice 답은 {"type","choice","probabilities":{...},"confidence"} 라 안쪽 중괄호가 한 겹입니다.
+pick_answer() { # <응답 JSON 한 줄> <질문 이름>
+  pan_obj=$(printf '%s' "$1" | sed -n -E 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*(\{[^{}]*\{[^{}]*\}[^{}]*\}).*/\1/p')
+  pan_choice=$(printf '%s' "$pan_obj" | json_str choice)
+  pan_conf=$(printf '%s' "$pan_obj" | json_str confidence)
+  pan_confs=$(awk -v c="$pan_conf" 'BEGIN { printf "%.2f", c }')
+  pan_dist=$(printf '%s' "$pan_obj" \
+    | sed -n 's/.*"probabilities"[[:space:]]*:[[:space:]]*{\([^}]*\)}.*/\1/p' | tr ',' '\n' \
+    | sed -n 's/^[[:space:]]*"\([^"]*\)"[[:space:]]*:[[:space:]]*\([-0-9.eE+]*\).*/\1 \2/p' \
+    | awk '{ printf "%s %.2f\n", $1, $2 }' | sort -k2,2nr | awk '{ printf "%s%s %s", (NR > 1 ? " · " : ""), $1, $2 }')
+}
+
+# Jev 에 한 번 묻습니다. 429·529 는 조금 쉬었다가 두 번 더 해 봅니다.
+# Jev 에 한 번 묻습니다. 못 쓰면 1 과 함께 pa_reason 에 짧은 이유를 남깁니다 (경고는 부른 쪽이 찍음).
+# 429·529·5xx 는 조금 쉬었다가 두 번 더, 연결 실패는 한 번 더 해 봅니다. 서버가 멈춰 있어도 오래
+# 붙잡히지 않게 한 번에 연결 5초, 전체 20초에서 끊습니다 (Jev 는 보통 1초 안에 답합니다).
+pick_ask() { # <본문 파일> <응답 파일> <키>
+  pa_reason=''
+  command -v curl >/dev/null 2>&1 || { pa_reason='curl 이 없음'; return 1; }
+  pa_url="${TYPESAFE_BASE_URL:-https://api.typesafe.ai}"
+  pa_url="${pa_url%/}/v1/systemone"
+  pa_try=1
+  while :; do
+    pa_code=$(printf 'header = "Authorization: Bearer %s"\n' "$3" \
+      | curl -sS -K - --connect-timeout 5 --max-time 20 -H 'Content-Type: application/json' \
+          --data-binary "@$1" -o "$2" -w '%{http_code}' "$pa_url" 2>"$2.err") || pa_code=000
+    case "$pa_code" in
+      200) return 0 ;;
+      429 | 5??) if [ "$pa_try" -lt 3 ]; then sleep "$pa_try"; pa_try=$((pa_try + 1)); continue; fi ;;
+      000) if [ "$pa_try" -lt 2 ]; then sleep 1; pa_try=$((pa_try + 1)); continue; fi ;;
+    esac
+    break
+  done
+  case "$pa_code" in
+    000) pa_reason="닿지 못함: $(tail -n 1 "$2.err" 2>/dev/null | cut -c1-120)" ;;
+    401) pa_reason='401 키를 거절함 (키 확인: aw pick key)' ;;
+    402 | 403) pa_reason="$pa_code 권한 또는 예산 문제: $(head -c 200 "$2" 2>/dev/null | tr '\n' ' ')" ;;
+    429) pa_reason='429 사용량 한도' ;;
+    529) pa_reason='529 붐빔' ;;
+    *)   pa_reason="$pa_code: $(head -c 200 "$2" 2>/dev/null | tr '\n' ' ')" ;;
+  esac
+  return 1
+}
+
+# 고른 에이전트의 정석 호출 (aw help agents). eval "set -- ..." 로 되넣을 수 있게 따옴표로 감쌉니다.
+# 프롬프트가 인자면 맨 끝(agy 는 -p=), 파일이면 표준 입력(-f) 으로. devin 은 표준 입력을 안 받아 --prompt-file.
+# 모델 옵션은 프롬프트 앞에 둡니다. devin 만 프롬프트가 -p 바로 뒤여야 해서 맨 뒤에 둡니다.
+pick_argv() { # <에이전트> <파일(없으면 빈 값)> <프롬프트> <git 저장소면 1> [모델 옵션]
+  pv_m=${5:+ $5}
+  case "$1" in
+    claude)   pv="claude -p --output-format stream-json --verbose$pv_m" ;;
+    codex)    pv='codex exec --json'; [ "$4" -eq 1 ] || pv="$pv --skip-git-repo-check"; pv="$pv$pv_m" ;;
+    agy)      pv="agy --output-format stream-json$pv_m" ;;
+    devin)    pv='devin -p' ;;
+    kiro-cli) pv="kiro-cli chat --output-format stream-json$pv_m" ;;
+  esac
+  if [ -n "$2" ]; then
+    case "$1" in
+      codex) pv="$pv -" ;;
+      devin) pv="$pv --prompt-file $(shquote "$2")" ;;
+    esac
+  else
+    case "$1" in
+      agy) pv="$pv $(shquote "-p=$3")" ;;
+      *)   pv="$pv $(shquote "$3")" ;;
+    esac
+  fi
+  if [ "$1" = devin ]; then pv="$pv$pv_m"; fi
+  printf '%s' "$pv"
+}
+
+cmd_pick() {
+  case "${1:-}" in
+    '' | status) [ $# -le 1 ] && { pick_status; return 0; } ;;
+    on)  shift; pick_on "$@"; return $? ;;
+    off) pick_off; return $? ;;
+    key) shift; pick_key_set "$@"; return $? ;;
+  esac
+
+  pk_argkey=''; pk_fb="${AW_PICK_FALLBACK:-}"; pk_dry=0; pk_min="${AW_PICK_MIN_CONFIDENCE:-0.5}"; pk_file=''; pk_dir=$PWD; pk_git=0; pk_opts=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --) shift; break ;;
+      --dry-run) pk_dry=1; shift ;;
+      --key) pk_argkey="${2:?--key 에 키가 필요합니다}"; shift 2 ;;
+      --fallback) pk_fb="${2:?--fallback 에 에이전트 이름이나 none 이 필요합니다}"; shift 2 ;;
+      --min-confidence) pk_min="${2:?--min-confidence 에 0~1 사이 값이 필요합니다}"; shift 2 ;;
+      -f | --stdin-file) pk_file="${2:?-f 에 파일이 필요합니다}"; shift 2 ;;
+      -d | --dir) pk_dir="${2:?--dir 에 값이 필요합니다}"; pk_opts="$pk_opts -d $(shquote "$pk_dir")"; shift 2 ;;
+      -w | --worktree) pk_git=1; pk_opts="$pk_opts -w $(shquote "${2:?--worktree 에 브랜치 이름이 필요합니다}")"; shift 2 ;;
+      -n | --name | -e | --env | --tag | --profile | --max-input-tokens)
+        pk_opts="$pk_opts $1 $(shquote "${2:?$1 에 값이 필요합니다}")"; shift 2 ;;
+      --no-defaults | --no-brief) pk_opts="$pk_opts $1"; shift ;;
+      -h | --help) help_topic pick; return 0 ;;
+      -*) die "aw pick 이 모르는 옵션입니다: $1   (aw help pick)" ;;
+      *) break ;;
+    esac
+  done
+  awk -v m="$pk_min" 'BEGIN { exit !(m ~ /^([0-9]+\.?[0-9]*|\.[0-9]+)$/ && m + 0 <= 1) }' \
+    || die "--min-confidence 는 0 에서 1 사이 수입니다: $pk_min"
+  [ -f "$AW_PICK" ] || die "aw pick 은 실험용이라 꺼져 있습니다. 켜려면: aw pick on   (aw help pick)"
+
+  # 작업: 인자, 또는 -f 파일
+  pk_prompt=''
+  if [ -n "$pk_file" ]; then
+    [ $# -eq 0 ] || die "-f 와 프롬프트 인자는 같이 줄 수 없습니다."
+    [ -f "$pk_file" ] || die "파일이 없습니다: $pk_file"
+    pk_file=$(CDPATH= cd -- "$(dirname -- "$pk_file")" && pwd)/$(basename -- "$pk_file")
+  else
+    pk_prompt=$*
+    [ -n "$pk_prompt" ] || die "작업(프롬프트)이 없습니다.   예) aw pick -- '로그인 버그를 고쳐줘'"
+  fi
+  [ "$pk_git" -eq 1 ] || { git -C "$pk_dir" rev-parse --git-dir >/dev/null 2>&1 && pk_git=1; } || true
+
+  pk_cands=$(pick_candidates)
+  [ -n "$pk_cands" ] || die "고를 에이전트가 없습니다. $(tilde "$AW_PICK") 의 에이전트가 하나도 PATH 에 없습니다 (aw pick 으로 확인)."
+  pk_ask_agent=0
+  [ "$(printf '%s\n' "$pk_cands" | grep -c .)" -ge 2 ] && pk_ask_agent=1
+  # 물을 게 있나: 후보가 둘 이상이거나, 하나뿐인 후보에 모델 줄이 둘 이상
+  pk_need=$pk_ask_agent
+  if [ "$pk_need" -eq 0 ] && [ "$(pick_models "$(printf '%s\n' "$pk_cands" | cut -f1)" | grep -c .)" -ge 2 ]; then pk_need=1; fi
+
+  # Jev 를 못 쓰면(키 없음, 네트워크, 예산, 한도, 서버 오류, 읽을 수 없는 답) pk_jev_err 에 이유를 남기고
+  # 아래에서 대신 띄울 에이전트(--fallback, 없으면 설명 파일의 첫 후보)로 갑니다. none 이면 멈춥니다.
+  pk_json=''; pk_jev_err=''
+  if [ "$pk_need" -eq 1 ]; then
+    # 키: --key 가 먼저, 다음 TYPESAFE_API_KEY, 다음 aw pick key 로 넣은 파일
+    if [ -n "$pk_argkey" ]; then pk_key=$pk_argkey; else pk_key=$(pick_key) || pk_key=''; fi
+    if [ -z "$pk_key" ]; then
+      pk_jev_err='키가 없음 (aw pick key <키>, 또는 TYPESAFE_API_KEY)'
+    elif ! pick_key_ok "$pk_key"; then
+      pk_jev_err='키에 쓸 수 없는 글자(공백, 따옴표, 역슬래시)가 있음'
+    else
+      pk_tmp="$AW_HOME/.pick.$$"
+      trap 'rm -f "$pk_tmp.body" "$pk_tmp.resp" "$pk_tmp.resp.err"' EXIT
+      if [ -n "$pk_file" ]; then pick_body "$pk_cands" "$pk_ask_agent" < "$pk_file"
+      else printf '%s' "$pk_prompt" | pick_body "$pk_cands" "$pk_ask_agent"; fi > "$pk_tmp.body"
+      if pick_ask "$pk_tmp.body" "$pk_tmp.resp" "$pk_key"; then
+        pk_json=$(tr '\n' ' ' < "$pk_tmp.resp")
+      else
+        pk_jev_err=$pa_reason
+      fi
+    fi
+  fi
+  if [ -z "$pk_jev_err" ] && [ "$pk_ask_agent" -eq 1 ]; then
+    pick_answer "$pk_json" agent
+    printf '%s\n' "$pk_cands" | cut -f1 | grep -qFx -- "$pan_choice" \
+      || pk_jev_err="답을 읽지 못함 (고른 것: '${pan_choice}'): $(printf '%s' "$pk_json" | cut -c1-200)"
+  fi
+
+  # 에이전트
+  pk_conf=''; pk_confs=''
+  if [ -n "$pk_jev_err" ]; then
+    case "$pk_fb" in
+      none) die "Jev 를 쓸 수 없어 띄우지 않았습니다: $pk_jev_err" ;;
+      '')   pk_choice=$(printf '%s\n' "$pk_cands" | head -1 | cut -f1) ;;
+      *)    printf '%s\n' "$pk_cands" | cut -f1 | grep -qFx -- "$pk_fb" \
+              || die "Jev 를 쓸 수 없는데(${pk_jev_err}) 대신 띄울 $pk_fb 가 후보(설치된 에이전트)에 없습니다."
+            pk_choice=$pk_fb ;;
+    esac
+    warn "Jev 를 쓸 수 없어 대신 $pk_choice 로 띄웁니다: $pk_jev_err"
+    warn "  (대신 띄울 에이전트: --fallback <에이전트>, 멈추려면 --fallback none. 기본은 설명 파일의 첫 후보)"
+    say "고른 에이전트: $pk_choice   (Jev 를 못 써서 대신)"
+  elif [ "$pk_ask_agent" -eq 1 ]; then
+    pk_choice=$pan_choice; pk_conf=$pan_conf; pk_confs=$pan_confs
+    if ! awk -v c="$pk_conf" -v m="$pk_min" 'BEGIN { exit !(c + 0 >= m + 0) }'; then
+      warn "확신이 낮아 띄우지 않았습니다: 확신 $pk_confs < 하한 $pk_min   ($pan_dist)"
+      warn "  직접 고르려면 aw run (호출법: aw help agents), 1등($pk_choice)을 그대로 쓰려면 --min-confidence 0"
+      exit 3
+    fi
+    say "고른 에이전트: $pk_choice   확신 $pk_confs   ($pan_dist)"
+  else
+    pk_choice=$(printf '%s\n' "$pk_cands" | cut -f1)
+    say "고른 에이전트: $pk_choice   (후보가 이것 하나라 묻지 않았습니다)"
+  fi
+
+  # 모델과 추론 수준: 모델 줄이 없으면 기본값(aw defaults, 에이전트 설정)으로 돕니다.
+  # 확신이 낮거나 답을 못 읽으면 에이전트는 그대로 띄우고 모델만 기본값으로 둡니다.
+  pk_models=$(pick_models "$pk_choice")
+  pk_nm=$(printf '%s\n' "$pk_models" | grep -c . || true)
+  pk_model=''; pk_mconfs=''
+  if [ "$pk_nm" -eq 1 ]; then
+    pk_model=$(printf '%s\n' "$pk_models" | cut -f1)
+    say "고른 모델    : $pk_model   (모델 줄이 하나라 묻지 않았습니다)"
+  elif [ "$pk_nm" -ge 2 ] && [ -n "$pk_jev_err" ]; then
+    say "고른 모델    : 기본값   (Jev 를 못 써서)"
+  elif [ "$pk_nm" -ge 2 ]; then
+    pick_answer "$pk_json" "model_$pk_choice"
+    if ! printf '%s\n' "$pk_models" | cut -f1 | grep -qFx -- "$pan_choice"; then
+      say "고른 모델    : 기본값   (Jev 의 모델 답을 읽지 못했습니다: '${pan_choice}')"
+    elif ! awk -v c="$pan_conf" -v m="$pk_min" 'BEGIN { exit !(c + 0 >= m + 0) }'; then
+      say "고른 모델    : 기본값   (확신 $pan_confs < 하한 $pk_min: $pan_dist)"
+    else
+      pk_model=$pan_choice; pk_mconfs=$pan_confs
+      say "고른 모델    : $pk_model   확신 $pk_mconfs   ($pan_dist)"
+    fi
+  fi
+  pk_mopts=''
+  [ -n "$pk_model" ] && pk_mopts=$(pick_model_opts "$pk_choice" "$pk_model")
+
+  pk_argv=$(pick_argv "$pk_choice" "$pk_file" "$pk_prompt" "$pk_git" "$pk_mopts")
+  pk_fopt=''
+  [ -n "$pk_file" ] && [ "$pk_choice" != devin ] && pk_fopt=" -f $(shquote "$pk_file")"
+  if [ "$pk_dry" -eq 1 ]; then
+    say "aw run$pk_opts$pk_fopt -- $pk_argv"
+    return 0
+  fi
+  # 고른 모델을 에이전트가 거부하면 워커가 모델 옵션 없이 한 번 더 돌립니다 (cmd_run 의 run_fallback).
+  run_fallback=''
+  [ -n "$pk_model" ] && run_fallback=$(pick_argv "$pk_choice" "$pk_file" "$pk_prompt" "$pk_git" "")
+  eval "cmd_run $pk_opts$pk_fopt -- $pk_argv"
+  run_fallback=''
+  {
+    printf 'picked=%s\n' "$pk_choice"
+    [ -n "$pk_confs" ] && printf 'pick_confidence=%s\n' "$pk_confs"
+    [ -n "$pk_model" ] && printf 'pick_model=%s\n' "$pk_model"
+    [ -n "$pk_mconfs" ] && printf 'pick_model_confidence=%s\n' "$pk_mconfs"
+    [ -n "$pk_jev_err" ] && printf 'pick_jev_error=%s\n' "$(printf '%s' "$pk_jev_err" | tr '\n' ' ')"
+  } >> "$wd/meta"
+  return 0
+}
+
 # ---------------------------------------------------------------- 설치 점검
 
 ask() { # <질문> <기본값 y|n>  → 예면 0
@@ -2490,6 +3118,11 @@ aw rm review
 - **지시문**: `aw brief` 가 켜져 있으면 aw 가 프롬프트 앞에 지시문을 붙입니다 (권장값: 첫 줄에 예상 소요
   시간을 적고, 오래 걸리면 몇 분마다 진행을 한 줄씩 남기기). 그러니 같은 요청을 프롬프트에 또 적지 않습니다.
   `aw peek` 이 그 예상 소요 시간을 경과와 견줘 보여 줍니다. 지시문이 작업과 맞지 않으면 `--no-brief`.
+- **에이전트 고르기 (실험용)**: 사용자가 에이전트를 정하지 않았고 `aw pick` 이 켜져 있으면
+  `aw pick -n <이름> -- '작업'` 으로 Jev(TypeSafe AI)가 고른 에이전트로 띄울 수 있습니다. 고른 것과 확신이
+  첫 줄에 찍히니 사용자에게 전합니다. 코드 3 은 확신이 낮아 안 띄웠다는 뜻이라 직접 고릅니다.
+  Jev 를 못 쓰면 설명 파일의 첫 후보로 대신 띄우고 경고를 찍으니, 그 사실도 전합니다.
+  꺼져 있으면 켜지 말고 직접 고릅니다 (켜려면 사용자의 API 키가 필요합니다). 에이전트를 정해 줬으면 `aw run`.
 
 ## 오래 걸리는 작업
 
@@ -2611,7 +3244,7 @@ aw wait rv-codex rv-gemini --timeout 100
 
 `aw help` (전체 명령), `aw help agents` (에이전트별 주의할 점), `aw help limits` (프롬프트 크기와
 컨텍스트 한도), `aw help defaults` (권한·모델 옵션), `aw help files` (워커 기록 구조),
-`aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문).
+`aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문), `aw help pick` (실험용 에이전트 고르기).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.
 SKILL
 }
@@ -2639,6 +3272,7 @@ case "$sub" in
   contexts) cmd_contexts ;;
   defaults) cmd_defaults "$@" ;;
   brief)   cmd_brief "$@" ;;
+  pick)    cmd_pick "$@" ;;
   skill)   cmd_skill "$@" ;;
   setup)   cmd_setup "$@" ;;
   version|--version|-v) say "aw $AW_VERSION" ;;

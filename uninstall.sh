@@ -67,7 +67,9 @@ done
 [ "$found_skill" -eq 1 ] || say "  설치된 스킬 없음"
 
 say "== 설정 파일"
-for f in "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults" "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts"; do
+for f in "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults" "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts" \
+         "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/pick" "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/pick.off" \
+         "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/typesafe-key"; do
   [ -f "$f" ] && say "  남김: $f   (지우려면 rm \"$f\")"
 done
 

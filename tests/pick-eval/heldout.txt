@@ -1,0 +1,27 @@
+# 번호|작업|정답 에이전트|받아 줄 모델
+# 보류 세트: 정책(누가 무엇을 맡고 수준을 어떻게 나누는지)만 주고 codex(gpt-5.6-terra)가 따로 만든 24개.
+# 권장 설명을 쓸 때는 보지 않았고, 결과를 본 뒤 규칙 하나(Luna·Terra·Sol, Flash·Pro 이름을 에이전트가 가져감)만 고쳤습니다.
+1|src/auth/token.ts의 만료 시간 비교가 UTC 자정에 틀어진다. Sonnet으로 고쳐줘.|claude|claude-sonnet-5@low
+2|packages/api에서 사용자 초대 메일을 보내는 흐름을 완성하고 실패 시 재시도도 넣어줘.|claude|claude-opus-5-5@xhigh
+3|검색 결과가 페이지를 넘길 때 중복된다. PostgreSQL 쿼리와 cursor 처리까지 추적해서 바로잡아줘.|claude|claude-opus-5-5@xhigh
+4|Fable로 uploads/의 ZIP 추출 경로 탈출 가능성을 막아줘. 이미 고객 파일이 섞인 사례가 있다.|claude|claude-fable-5-1@xhigh
+5|worker가 가끔 같은 주문을 두 번 처리한다. Redis lock과 재시작 시나리오를 포함해 원인을 찾아 고쳐줘.|claude|claude-fable-5-1@xhigh
+6|README의 로컬 실행 명령이 pnpm 9 기준으로 틀렸다. 실제 스크립트에 맞게 정리해줘.|claude|claude-opus-5-5@xhigh
+7|이 함수가 null 입력에서 어떻게 동작하는지만 짧게 확인해줘. Luna로 해줘.|codex|gpt-5.6-luna@medium
+8|수정은 하지 말고 PR #418의 권한 상승 가능성을 줄 단위로 찾아줘. 관리자 초대 API가 바뀌었다.|codex|gpt-5.6-sol@xhigh
+9|CartService의 할인 우선순위가 사양과 맞는지 두 번째 의견을 줘. 특히 쿠폰 중첩 사례를 봐줘.|codex|gpt-5.6-terra@high
+10|Sol로 migrations/202609_add_ledger.sql을 꼼꼼히 봐줘. 중간 실패 뒤 잔액이 어긋날 여지가 있는지 알려줘.|codex|gpt-5.6-sol@xhigh
+11|parseIsoDate와 formatPrice에 대한 Vitest 케이스를 써줘. 입력·출력 표는 docs/examples.md에 있다.|codex|gpt-5.6-terra@high
+12|이 CSV의 `joined_at` 열을 ISO 문자열로 바꾼 JSON 배열로 내보내는 방법 알려줘. 가장 빠르고 싼 걸로.|agy|gemini-3.8-flash-low
+13|Gemini로 nginx-error.log 18만 줄을 읽고 502가 늘어난 시간대와 공통 메시지만 요약해줘.|agy|gemini-3.8-flash-high
+14|components/ 전체에서 `isModalOpen`을 `modalOpen`으로 바꿔야 한다. import와 호출부까지 빠짐없이 바꿔줘.|agy|gemini-3.8-flash-high
+15|이 스택트레이스에서 왜 `useEffect`가 반복 실행되는지 설명해줘.|agy|gemini-3.8-flash-low
+16|Pro로 Kafka consumer lag 그래프와 배포 기록을 비교해 장애 원인 가설을 신중하게 정리해줘.|agy|gemini-3.1-pro-high
+17|go.mod의 replace 지시자가 CI와 로컬에서 왜 다르게 해석되는지 Gemini로 설명해줘.|agy|gemini-3.8-flash-high
+18|README와 docs/api.md를 기준으로 빈 Go CLI 프로젝트를 완성해줘. 오후 동안 자리를 비울 테니 질문 없이 끝까지 진행해.|devin|swe-2-max
+19|SWE-2로 scripts/release.sh가 태그를 만들고 GitHub 릴리스 노트를 올리도록 끝까지 구성해줘.|devin|swe-2-max
+20|specs/import.md에 적힌 대로 대용량 CSV 가져오기 기능을 만들어줘. 실패하면 고객 데이터가 손상될 수 있으니 자동 복구까지 해두고 나는 자리를 비울게.|devin|claude-fable-5-1-xhigh
+21|Kiro로 S3 정적 사이트와 CloudFront 배포를 위한 설계 문서, 체크리스트, Terraform 구현을 순서대로 만들어줘.|kiro-cli|claude-sonnet-5
+22|AWS Lambda의 환경 변수 하나를 Parameter Store 참조로 옮기는 변경을 Kiro로 해줘.|kiro-cli|claude-haiku-4.5
+23|새 결제 정산 서비스를 위한 요구사항 문서와 작업 목록을 먼저 만들고, 승인 후 구현까지 이어가줘.|kiro-cli|claude-sonnet-5
+24|Opus로 멀티 계정 AWS 네트워크, IAM 경계, 비밀 회전 구조를 설계 문서와 IaC 작업 목록부터 잡아줘.|kiro-cli|claude-opus-5.5

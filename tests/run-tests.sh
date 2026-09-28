@@ -25,6 +25,9 @@ export AW_HOME="$TMPROOT/awhome"
 export AW_BRIEF="$TMPROOT/brief"
 NO_DEFAULTS="$TMPROOT/no-defaults"   # 만들지 않는 파일: 기본 옵션이 꺼진 상태
 export AW_DEFAULTS="$NO_DEFAULTS"
+# aw pick 도 이 컴퓨터의 설정·키를 읽지 않게 합니다. 네트워크에는 나가지 않습니다 (curl 을 가짜로 바꿈).
+export AW_PICK="$TMPROOT/pick" AW_PICK_KEYFILE="$TMPROOT/typesafe-key"
+unset TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL AW_PICK_MIN_CONFIDENCE
 
 head_ "1. 문법 검사"
 for s in sh bash zsh; do
@@ -403,7 +406,7 @@ for want in "aw run" "aw wait" "wait 종료 코드" "running / done" "aw help ag
 done
 lines=$(printf '%s\n' "$h" | wc -l)
 if [ "$lines" -lt 60 ]; then ok "개요가 짧음 (${lines}줄)"; else ng "개요가 너무 김 (${lines}줄)"; fi
-for topic in agents defaults files limits peek brief; do
+for topic in agents defaults files limits peek brief pick; do
   if "$AW" help "$topic" >/dev/null 2>&1; then ok "aw help $topic"; else ng "aw help $topic 실패"; fi
   case "$h" in *"aw help $topic"*) ok "개요의 자세히에 $topic 이 있음" ;; *) ng "개요에 aw help $topic 안내 없음" ;; esac
 done
@@ -415,7 +418,7 @@ hp=$("$AW" help peek)
 for want in "aw watch" "--idle" AW_QUIET "생각 중" "조용함" "마지막 활동" "예상 소요" devin agy; do
   case "$hp" in *"$want"*) ok "peek 주제에 '$want'" ;; *) ng "peek 주제에 '$want' 없음" ;; esac
 done
-for sub in "brief" "peek" "watch" "wait" "skill" "setup" "resume" "run"; do
+for sub in "brief" "peek" "watch" "wait" "skill" "setup" "resume" "run" "pick"; do
   if "$AW" $sub --help >/dev/null 2>&1; then ok "aw $sub --help"; else ng "aw $sub --help 실패"; fi
 done
 case "$("$AW" wait --help)" in *"3 "*"--idle"*) ok "aw wait --help 에 코드 3 과 --idle" ;; *) ng "aw wait --help 에 코드 3 설명 없음" ;; esac
@@ -1144,6 +1147,270 @@ has "예상보다 오래 걸리면 알림" "$("$AW" peek eta-over)" "예상보�
 "$AW" wait eta-text eta-claude eta-agy eta-kiro eta-user eta-over --timeout 20 >/dev/null 2>&1
 has "끝난 워커는 실제 걸린 시간과 견줌" "$("$AW" peek eta-text)" "(실제 "
 "$AW" clean >/dev/null 2>&1
+
+head_ "21. 에이전트 고르기 (aw pick, 실험용)"
+# 가짜 curl: 인자·표준 입력(설정)·본문을 남기고 정해 둔 응답을 돌려줍니다. 가짜 에이전트는 인자를 찍습니다.
+# PATH 를 좁혀 이 컴퓨터에 깔린 진짜 에이전트가 후보에 끼지 않게 합니다.
+PK="$TMPROOT/pick-t"; mkdir -p "$PK/bin" "$PK/stub" "$PK/nogit"
+cat > "$PK/bin/curl" <<'STUB'
+#!/bin/sh
+d=$PICK_STUB
+printf '%s\n' "$@" > "$d/args"
+cat > "$d/config"
+out=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift 2 ;;
+    --data-binary) cp "${2#@}" "$d/body"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+code=$(cat "$d/code" 2>/dev/null || echo 200)
+if [ "$code" = 000 ]; then echo "curl: (7) Failed to connect to api.typesafe.ai" >&2; printf 000; exit 7; fi
+cat "$d/resp" > "$out"
+printf '%s' "$code"
+STUB
+for a in claude codex; do printf '#!/bin/sh\nprintf "%%s\\n" "$0" "$@"\n' > "$PK/bin/$a"; done
+chmod +x "$PK/bin/"*
+export PICK_STUB="$PK/stub"
+PKPATH="$PK/bin:/usr/bin:/bin"
+awp() { PATH="$PKPATH" "$AW" "$@"; }
+resp() { # <고른 것> <확신>
+  printf '{"model":"jev-1.13.0","answers":{"agent":{"type":"choice","choice":"%s","probabilities":{"claude":0.1,"codex":0.9},"confidence":%s}},"usage":{"input_tokens":300,"output_tokens":30}}\n' "$1" "$2" > "$PK/stub/resp"
+}
+resp codex 0.8
+
+out=$(awp pick)
+has "꺼져 있으면 상태에 켜는 법" "$out" "aw pick on"
+out=$(awp pick -- 리뷰해줘 2>&1); code=$?
+check "꺼져 있으면 띄우지 않음 (코드 1)" 1 "$code"
+has "꺼져 있다고 알림" "$out" "꺼져 있습니다"
+
+out=$(awp pick on < /dev/null)
+if [ -f "$AW_PICK" ]; then ok "aw pick on 이 설명 파일을 만듦"; else ng "aw pick on 이 파일을 안 만듦"; fi
+has "권장값에 모델·수준 줄" "$(cat "$AW_PICK")" "  claude-opus-5-5@xhigh "
+has "키가 없으면 넣는 법을 알림" "$out" "aw pick key"
+out=$(awp pick --dry-run -- 리뷰해줘 2>&1); code=$?
+check "키가 없으면 첫 후보로 대신 (코드 0)" 0 "$code"
+has "키가 없다고 알림" "$out" "키가 없음"
+has "대신 띄운다고 알림" "$out" "고른 에이전트: claude   (Jev 를 못 써서 대신)"
+out=$(awp pick --fallback none --dry-run -- 리뷰해줘 2>&1); code=$?
+check "--fallback none 이면 멈춤 (코드 1)" 1 "$code"
+
+KEY=tsk_test_0123456789abcdef
+out=$(printf '%s\n' "$KEY" | awp pick key)
+check "키 파일은 나만 읽기 (600)" 600 "$(stat -c %a "$AW_PICK_KEYFILE" 2>/dev/null || stat -f %Lp "$AW_PICK_KEYFILE")"
+hasnt "키를 넣을 때 키 전체를 찍지 않음" "$out" "$KEY"
+out=$(awp pick)
+has "상태에 가린 키" "$out" "tsk_…cdef"
+hasnt "상태에 키 전체가 없음" "$out" "$KEY"
+has "설치된 후보는 있음" "$out" "codex     있음"
+
+out=$(awp pick --dry-run -n rv -- 'src/auth 를 "검토"해줘 \ 끝
+둘째 줄'); code=$?
+check "dry-run 은 코드 0" 0 "$code"
+has "고른 에이전트와 확신" "$out" "고른 에이전트: codex   확신 0.80"
+has "띄울 명령이 정석 호출" "$out" "aw run -n 'rv' -- codex exec --json 'src/auth"
+if [ -d "$AW_HOME/workers/rv" ]; then ng "dry-run 인데 워커가 생김"; else ok "dry-run 은 워커를 안 띄움"; fi
+hasnt "키가 curl 의 인자에 없음" "$(cat "$PK/stub/args")" "$KEY"
+has "키는 표준 입력의 설정으로" "$(cat "$PK/stub/config")" "Bearer $KEY"
+has "주소는 systemone" "$(cat "$PK/stub/args")" "https://api.typesafe.ai/v1/systemone"
+body=$(cat "$PK/stub/body")
+has "본문에 Choice 질문" "$body" '"type":"choice"'
+has "본문의 작업은 이스케이프됨" "$body" 'src/auth 를 \"검토\"해줘 \\ 끝\n둘째 줄'
+has "설치된 claude 는 후보" "$body" '"claude":"Claude Code'
+if ! PATH=/usr/bin:/bin command -v devin >/dev/null 2>&1; then
+  hasnt "없는 devin 은 후보에서 빠짐" "$body" '"devin"'
+fi
+if command -v python3 >/dev/null 2>&1; then
+  if python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$PK/stub/body" 2>/dev/null; then ok "본문이 올바른 JSON"; else ng "본문이 JSON 이 아님"; fi
+  long=$(python3 -c 'print("가나다 \"q\" \\ " * 3000)')
+  awp pick --dry-run -- "$long" >/dev/null 2>&1
+  n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1], encoding="utf-8"))["state"]["task"].encode()))' "$PK/stub/body" 2>/dev/null)
+  if [ -n "$n" ] && [ "$n" -le 12000 ]; then ok "긴 작업은 앞 12KB 만, 글자가 깨지지 않게 ($n 바이트)"; else ng "긴 작업 자르기 ($n)"; fi
+fi
+env TYPESAFE_API_KEY=envkey_987 PATH="$PKPATH" "$AW" pick --dry-run -- x >/dev/null 2>&1
+has "TYPESAFE_API_KEY 가 파일보다 먼저" "$(cat "$PK/stub/config")" "Bearer envkey_987"
+env TYPESAFE_API_KEY=envkey_987 PATH="$PKPATH" "$AW" pick --key argkey_654 --dry-run -- x >/dev/null 2>&1
+has "--key 가 환경변수보다 먼저" "$(cat "$PK/stub/config")" "Bearer argkey_654"
+hasnt "--key 도 curl 의 인자에는 안 실림" "$(cat "$PK/stub/args")" "argkey_654"
+check "--key 는 저장하지 않음" "$KEY" "$(cat "$AW_PICK_KEYFILE")"
+out=$(awp pick --fallback none --key 'bad"key' --dry-run -- x 2>&1); code=$?
+check "따옴표가 든 키는 Jev 에 안 보냄 (none 이면 코드 1)" 1 "$code"
+has "따옴표가 든 키라고 알림" "$out" "쓸 수 없는 글자"
+awp pick key tsk_arg_saved_1234567 >/dev/null
+check "aw pick key <키> 로 저장" tsk_arg_saved_1234567 "$(cat "$AW_PICK_KEYFILE")"
+printf '%s\n' "$KEY" | awp pick key >/dev/null
+
+# 실제로 띄움: git 저장소 밖이면 codex 에 --skip-git-repo-check
+out=$(awp pick -n pk-run -d "$PK/nogit" -- 로그인 버그 고쳐줘); code=$?
+check "띄우면 코드 0" 0 "$code"
+awp wait pk-run --timeout 10 >/dev/null 2>&1
+check "고른 에이전트의 정석 호출로 돎" "$(printf '%s\n' "$PK/bin/codex" exec --json --skip-git-repo-check '로그인 버그 고쳐줘')" "$(awp result pk-run)"
+check "meta 에 고른 에이전트" codex "$(sed -n 's/^picked=//p' "$AW_HOME/workers/pk-run/meta")"
+has "aw status 에 보임" "$(awp status pk-run)" "codex 를 고름 (확신 0.80)"
+hasnt "워커 기록에 키가 없음" "$(cat "$AW_HOME/workers/pk-run/"* 2>/dev/null)" "$KEY"
+if ls -a "$AW_HOME" | grep -q '^\.pick\.'; then ng "임시 파일이 남음"; else ok "임시 파일을 치움"; fi
+
+printf '큰 작업\n' > "$PK/task.md"
+out=$(cd "$PK" && PATH="$PKPATH" "$AW" pick --dry-run -f task.md)
+has "-f 면 에이전트에도 파일로 (codex 는 -)" "$out" "-f '$PK/task.md' -- codex exec --json --skip-git-repo-check -"
+
+resp codex 0.3
+out=$(awp pick -n pk-low -- 뭔가 2>&1); code=$?
+check "확신이 하한보다 낮으면 코드 3" 3 "$code"
+has "확신이 낮다고 알림" "$out" "확신이 낮아"
+if [ -d "$AW_HOME/workers/pk-low" ]; then ng "확신이 낮은데 띄움"; else ok "확신이 낮으면 안 띄움"; fi
+out=$(awp pick --min-confidence 0 --dry-run -- 뭔가 2>&1); code=$?
+check "--min-confidence 0 이면 1등을 씀" 0 "$code"
+out=$(awp pick --min-confidence 2 -- 뭔가 2>&1); code=$?
+check "--min-confidence 가 1 을 넘으면 코드 1" 1 "$code"
+
+resp gpt 0.9
+out=$(awp pick --dry-run -- 뭔가 2>&1); code=$?
+check "후보에 없는 답이면 첫 후보로 대신 (코드 0)" 0 "$code"
+has "답을 못 읽었다고 알림" "$out" "답을 읽지 못함"
+resp codex 0.8
+echo 401 > "$PK/stub/code"
+out=$(awp pick --fallback none --dry-run -- 뭔가 2>&1); code=$?
+check "401 이고 --fallback none 이면 코드 1" 1 "$code"
+has "401 은 키를 확인하라고" "$out" "aw pick key"
+# Jev 가 안 될 때 (예산, 서버, 네트워크): 대신 띄울 에이전트로
+echo 402 > "$PK/stub/code"; echo '{"detail":"credit balance is too low"}' > "$PK/stub/resp"
+out=$(awp pick --dry-run -- 뭔가 2>&1); code=$?
+check "402(예산)면 대신 띄움 (코드 0)" 0 "$code"
+has "402 의 이유를 알림" "$out" "credit balance is too low"
+has "기본은 설명 파일의 첫 후보" "$out" "claude -p --output-format stream-json --verbose '뭔가'"
+echo 503 > "$PK/stub/code"
+out=$(env AW_PICK_FALLBACK=codex PATH="$PKPATH" "$AW" pick --dry-run -- 뭔가 2>&1); code=$?
+check "5xx 면 AW_PICK_FALLBACK 으로 (코드 0)" 0 "$code"
+has "AW_PICK_FALLBACK 의 에이전트" "$out" "고른 에이전트: codex   (Jev 를 못 써서 대신)"
+echo 000 > "$PK/stub/code"
+out=$(awp pick --fallback codex --dry-run -- 뭔가 2>&1); code=$?
+check "연결 실패면 --fallback 으로 (코드 0)" 0 "$code"
+has "연결 실패 이유" "$out" "닿지 못함"
+out=$(awp pick --fallback devin --dry-run -- 뭔가 2>&1); code=$?
+check "대신 띄울 에이전트가 없으면 코드 1" 1 "$code"
+out=$(awp pick -n pk-jevdown -d "$PK/nogit" -- 뭔가 2>/dev/null); code=$?
+check "Jev 가 안 돼도 실제로 띄움" 0 "$code"
+has "meta 에 Jev 오류" "$(cat "$AW_HOME/workers/pk-jevdown/meta")" "pick_jev_error=닿지 못함"
+has "aw status 에 보임" "$(awp status pk-jevdown)" "Jev 를 못 써서 대신 띄움"
+awp wait pk-jevdown --timeout 10 >/dev/null 2>&1
+rm -f "$PK/stub/code"; resp codex 0.8
+
+# 모델과 추론 수준: 들여 쓴 줄이 그 에이전트의 모델. 한 요청에 에이전트와 모델 질문을 같이 보냄
+cp "$AW_PICK" "$PK/pick.agents-only"
+cat > "$AW_PICK" <<'P'
+# 시험용
+claude Claude Code.
+  claude-sonnet-5@medium Simple work.
+  claude-opus-5-5@xhigh Ordinary work.
+codex Codex CLI.
+  gpt-5.6-luna@medium Simple work.
+  gpt-5.6-sol@xhigh Hard work.
+P
+printf '%s\n' '{"model":"jev-1.13.0","answers":{"agent":{"type":"choice","choice":"codex","probabilities":{"claude":0.1,"codex":0.9},"confidence":0.8},"model_claude":{"type":"choice","choice":"claude-opus-5-5@xhigh","probabilities":{"claude-sonnet-5@medium":0.2,"claude-opus-5-5@xhigh":0.8},"confidence":0.6},"model_codex":{"type":"choice","probabilities":{"gpt-5.6-luna@medium":0.05,"gpt-5.6-sol@xhigh":0.95},"choice":"gpt-5.6-sol@xhigh","confidence":0.9}},"usage":{"input_tokens":400,"output_tokens":60}}' > "$PK/stub/resp"
+out=$(awp pick --dry-run -d "$PK/nogit" -- '보안 검토'); code=$?
+check "모델까지 고르면 코드 0" 0 "$code"
+has "고른 모델과 확신" "$out" "고른 모델    : gpt-5.6-sol@xhigh   확신 0.90"
+has "codex 는 --model 과 -c model_reasoning_effort" "$out" "codex exec --json --skip-git-repo-check --model 'gpt-5.6-sol' -c 'model_reasoning_effort=xhigh' '보안 검토'"
+body=$(cat "$PK/stub/body")
+has "본문에 에이전트 질문" "$body" '"agent":{"type":"choice"'
+has "본문에 후보마다 모델 질문" "$body" '"model_claude":{"type":"choice"'
+has "모델 선택지는 모델@수준" "$body" '"gpt-5.6-sol@xhigh":"Hard work."'
+hasnt "에이전트 선택지에 모델 줄이 섞이지 않음" "$(printf '%s' "$body" | sed 's/"model_claude".*//')" 'claude-sonnet-5@medium'
+if command -v python3 >/dev/null 2>&1; then
+  if python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$PK/stub/body" 2>/dev/null; then ok "모델 질문이 든 본문도 올바른 JSON"; else ng "모델 질문이 든 본문이 JSON 이 아님"; fi
+fi
+out=$(awp pick -n pk-model -d "$PK/nogit" -- '보안 검토'); code=$?
+awp wait pk-model --timeout 10 >/dev/null 2>&1
+has "모델 옵션이 실제 명령에" "$(awp result pk-model)" "model_reasoning_effort=xhigh"
+check "meta 에 고른 모델" "gpt-5.6-sol@xhigh" "$(sed -n 's/^pick_model=//p' "$AW_HOME/workers/pk-model/meta")"
+has "aw status 에 모델" "$(awp status pk-model)" "모델 gpt-5.6-sol@xhigh (확신 0.90)"
+# 모델 확신이 낮으면 에이전트는 띄우되 모델은 기본값
+sed 's/"choice":"gpt-5.6-sol@xhigh","confidence":0.9/"choice":"gpt-5.6-sol@xhigh","confidence":0.2/' "$PK/stub/resp" > "$PK/stub/r.low" && cp "$PK/stub/r.low" "$PK/stub/resp"
+out=$(awp pick --dry-run -d "$PK/nogit" -- '보안 검토'); code=$?
+check "모델 확신이 낮아도 코드 0" 0 "$code"
+has "모델 확신이 낮으면 기본값" "$out" "고른 모델    : 기본값   (확신 0.20"
+hasnt "모델 확신이 낮으면 --model 을 안 붙임" "$out" "--model"
+# 에이전트별로 수준을 넘기는 법
+for c in "claude:claude-opus-5-5@xhigh:--model 'claude-opus-5-5' --effort 'xhigh'" \
+         "agy:gemini-3.8-flash@low:--model 'gemini-3.8-flash' --effort 'low'" \
+         "devin:swe-2@max:--model 'swe-2-max'" \
+         "kiro-cli:claude-sonnet-5:--model 'claude-sonnet-5' --agent-engine v3" \
+         "codex:gpt-5.6-luna:--model 'gpt-5.6-luna'"; do
+  ag=${c%%:*}; rest=${c#*:}; spec=${rest%%:*}; want=${rest#*:}
+  printf '%s Agent.\n  %s Only model.\n' "$ag" "$spec" > "$AW_PICK"
+  [ -x "$PK/bin/$ag" ] || { printf '#!/bin/sh\n' > "$PK/bin/$ag"; chmod +x "$PK/bin/$ag"; }
+  out=$(awp pick --dry-run -- 작업 2>&1)
+  has "$ag 의 모델 옵션 ($spec)" "$out" "$want"
+done
+has "모델 줄이 하나면 묻지 않고 씀" "$out" "모델 줄이 하나라 묻지 않았습니다"
+printf 'devin Agent.\n  swe-2-max M.\n' > "$AW_PICK"
+has "devin 은 모델 옵션을 프롬프트 뒤에" "$(awp pick --dry-run -- 작업 2>&1)" "devin -p '작업' --model 'swe-2-max'"
+rm -f "$PK/bin/agy" "$PK/bin/devin" "$PK/bin/kiro-cli"
+
+# 모델이 거부되면(없는 모델 등) 워커가 모델 옵션 없이 한 번 더 돎. 지시문과 기본 옵션은 두 번째에도 붙음
+cp "$PK/bin/codex" "$PK/codex.orig"
+cat > "$PK/bin/codex" <<'F'
+#!/bin/sh
+case " $* " in *" bogus-1 "*) echo "Error: Unknown model: 'bogus-1'" >&2; exit 1 ;; esac
+printf '%s\n' "$0" "$@"
+F
+chmod +x "$PK/bin/codex"
+printf 'codex Codex.\n  bogus-1@high Only.\n' > "$AW_PICK"
+printf 'codex --sandbox workspace-write\ncodex --model good-default\n' > "$PK/defaults"
+printf '지시문 한 줄.\n' > "$PK/brief"
+env AW_DEFAULTS="$PK/defaults" AW_BRIEF="$PK/brief" PATH="$PKPATH" "$AW" pick -n pk-fb -d "$PK/nogit" -- '작업 해줘' >/dev/null 2>&1
+awp wait pk-fb --timeout 10 >/dev/null 2>&1; code=$?
+check "모델이 거부돼도 다시 돌아 성공" 0 "$code"
+out=$(awp result pk-fb)
+hasnt "다시 돌 때는 고른 모델을 빼고" "$out" "bogus-1"
+has "기본 옵션의 모델이 붙음" "$out" "good-default"
+has "기본 옵션의 권한도 붙음" "$out" "workspace-write"
+has "지시문도 붙음" "$out" "지시문 한 줄."
+has "첫 시도의 오류를 남김" "$(cat "$AW_HOME/workers/pk-fb/err.model" 2>/dev/null)" "Unknown model"
+check "meta 에 되돌아간 기록" 1 "$(sed -n 's/^pick_fallback=//p' "$AW_HOME/workers/pk-fb/meta")"
+hasnt "cmd.orig 도 되돌아간 명령 (aw resume 이 없는 모델을 다시 안 씀)" "$(cat "$AW_HOME/workers/pk-fb/cmd.orig")" "bogus-1"
+has "aw status 에 보임" "$(awp status pk-fb)" "모델이 거부돼"
+# 모델과 상관없는 실패는 다시 돌리지 않음
+cat > "$PK/bin/codex" <<'F'
+#!/bin/sh
+echo "network down" >&2; exit 2
+F
+env AW_DEFAULTS="$PK/defaults" PATH="$PKPATH" "$AW" pick -n pk-nofb -d "$PK/nogit" -- '작업' >/dev/null 2>&1
+awp wait pk-nofb --timeout 10 >/dev/null 2>&1
+check "모델과 상관없는 실패는 그대로 (코드 2)" 2 "$(cat "$AW_HOME/workers/pk-nofb/exit")"
+if [ -f "$AW_HOME/workers/pk-nofb/out.model" ]; then ng "모델 탓이 아닌데 다시 돌림"; else ok "모델 탓이 아니면 다시 안 돌림"; fi
+# 모델을 안 골랐으면 되돌아갈 스크립트도 없음
+if [ -f "$AW_HOME/workers/pk-run/fallback.sh" ]; then ng "모델이 없는데 fallback.sh 를 만듦"; else ok "모델을 안 골랐으면 fallback.sh 없음"; fi
+mv "$PK/codex.orig" "$PK/bin/codex"
+cp "$PK/pick.agents-only" "$AW_PICK"
+resp codex 0.8
+
+# 후보가 하나면 묻지 않음
+rm -f "$PK/stub/args"
+grep -v '^[[:space:]]' "$AW_PICK" | sed 's/^codex /#codex /' > "$AW_PICK.new" && mv "$AW_PICK.new" "$AW_PICK"
+out=$(awp pick --dry-run -- 뭔가 2>&1)
+has "후보가 하나면 그걸 씀" "$out" "claude -p --output-format stream-json --verbose '뭔가'"
+if [ -f "$PK/stub/args" ]; then ng "후보가 하나인데 Jev 에 물음"; else ok "후보가 하나면 Jev 에 묻지 않음"; fi
+
+# 끄고 켜기: 고친 설명과 키는 남음
+awp pick off >/dev/null
+if [ -f "$AW_PICK.off" ] && [ ! -f "$AW_PICK" ]; then ok "aw pick off 는 설명을 .off 로 옮김"; else ng "aw pick off"; fi
+out=$(awp pick -- 뭔가 2>&1); code=$?
+check "끄면 다시 코드 1" 1 "$code"
+if [ -f "$AW_PICK_KEYFILE" ]; then ok "꺼도 키는 남음"; else ng "끄면서 키를 지움"; fi
+awp pick on < /dev/null >/dev/null
+has "다시 켜면 고친 설명이 돌아옴" "$(cat "$AW_PICK")" "#codex "
+awp pick on --force < /dev/null >/dev/null
+hasnt "--force 면 권장값으로" "$(cat "$AW_PICK")" "#codex "
+rm -f "$AW_PICK" "$AW_PICK_KEYFILE"
+out=$(awp pick on --key tsk_on_key_7654321 < /dev/null)
+if [ -f "$AW_PICK" ]; then ok "aw pick on --key 가 켬"; else ng "aw pick on --key 가 안 켬"; fi
+check "aw pick on --key 가 키를 저장" tsk_on_key_7654321 "$(cat "$AW_PICK_KEYFILE" 2>/dev/null)"
+hasnt "aw pick on --key 가 키 전체를 찍지 않음" "$out" tsk_on_key_7654321
+awp clean >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

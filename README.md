@@ -107,10 +107,11 @@ cd agent-worker
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
 | `aw defaults [get\|set\|unset]` | [기본 옵션](#기본-옵션-권한-우회-모델)(권한, 모델) 보기 / 바꾸기. `--init` 은 권장값으로 켜기 |
 | `aw brief [--init]` | [워커 지시문](#워커-지시문-brief) 확인 / 권장값으로 켜기 |
+| `aw pick [on\|off\|key]` / `aw pick -- '작업'` | (실험용) Jev 가 [작업에 맞는 에이전트·모델을 골라](#에이전트-고르기-aw-pick-실험용) 워커를 띄움 |
 | `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
 | `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
 | `aw version` | 버전 |
-| `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` |
+| `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` `peek` `brief` `pick` |
 
 `aw ls` 는 `aw list` 의 별칭입니다. `aw logs` 의 `-n` 기본값은 40줄입니다.
 
@@ -655,6 +656,91 @@ rm ~/.config/agent-worker/brief   # 아예 끄기
 `aw resume` 으로 이어할 때도 새 프롬프트에 한 번 붙어서, 추가 작업의 예상 시간을 다시 받습니다.
 워커 기록의 `cmd.orig` 에는 붙이기 전 인자가, `cmd` 에는 실제로 넘긴 인자가 남습니다.
 
+## 에이전트 고르기 (aw pick, 실험용)
+
+작업을 [TypeSafe AI](https://typesafe.ai/) 의 **Jev** 에 보내 어느 에이전트가 맞는지, 그 에이전트의 어느 모델·추론 수준이
+맞는지 고르게 하고 그대로 워커를 띄웁니다. Jev 는 글을 짓지 않고 정해 준 선택지 중 하나를 확신도와 함께 고르는 모델이라, 에이전트 고르기처럼
+좁은 결정에 빠르고 쌉니다. 고른 뒤에는 그 에이전트의 정석 호출(`aw help agents`)로 `aw run` 을 부르므로
+기본 옵션, 지시문, `-w` worktree 가 평소처럼 붙습니다. **실험용이라 꺼져 있고, 켜야 씁니다.**
+
+```sh
+aw pick on --key "$KEY"                       # 켜기 + 키 저장 (--key 를 빼면 터미널에서 가려서 물어봄)
+aw pick --dry-run -- 'src/auth 를 검토해줘'    # 고르기만: 고른 것, 확신, 띄울 aw run 명령
+aw pick -n review -- 'src/auth 를 검토해줘'    # 골라서 띄움
+aw pick -n spec -w feat/x -f task.md          # 파일의 작업으로 (에이전트에도 파일로 넘김)
+aw pick                                       # 상태: 켜짐, 키, 후보
+aw pick off                                   # 끄기 (고친 설명과 키는 남겨 둠, aw pick on 으로 돌아옴)
+```
+
+```
+고른 에이전트: codex   확신 0.99   (codex 1.00 · agy 0.00 · claude 0.00 · devin 0.00 · kiro-cli 0.00)
+고른 모델    : gpt-5.6-sol@xhigh   확신 0.97   (gpt-5.6-sol@xhigh 0.98 · gpt-5.6-terra@high 0.02 · gpt-5.6-luna@medium 0.00)
+워커 시작: review
+  명령: codex exec --json --model gpt-5.6-sol -c model_reasoning_effort=xhigh src/auth 를 검토해줘
+```
+
+- **고르는 기준**은 `~/.config/agent-worker/pick` 의 설명입니다. 에이전트 줄 아래 들여 쓴 줄이 그 에이전트의
+  모델 선택지입니다.
+
+  ```
+  codex OpenAI Codex CLI (GPT-5.6). For reviewing and critiquing existing material without changing it ...
+    gpt-5.6-luna@medium GPT-5.6 Luna, fast and cheap, medium reasoning. For a quick, low-risk check ...
+    gpt-5.6-terra@high GPT-5.6 Terra, balanced, high reasoning. The ordinary choice ...
+    gpt-5.6-sol@xhigh GPT-5.6 Sol, ... For a review where a missed problem would be costly ...
+  ```
+
+  Jev 에는 요청 한 번에 Choice 질문을 여럿 보냅니다. 에이전트 하나, 그리고 모델 줄이 둘 이상인 후보마다 모델
+  하나이고, 고른 에이전트의 모델 답만 씁니다(Jev 문서의 speculative fan-out). 선택지는 PATH 에 있는 에이전트뿐입니다.
+  작업이 에이전트나 모델을 짚으면("codex 로 …") 그걸 고르라고 함께 보냅니다. 후보에서 빼려면 그 줄을 지우거나
+  `#` 로 막고, 모델까지 고를 필요가 없으면 들여 쓴 줄을 지웁니다(그 에이전트는 기본값으로 돔).
+  Jev 는 영어를 가장 잘 읽어 설명은 영어로 두는 편이 낫습니다.
+- **권장 설명**은 실측으로 다듬었습니다. 다섯 CLI 의 모델·수준 목록을 실측으로 모으고, 초안을 codex 와 devin 에게
+  `aw run` 으로 검토받은 뒤 네 가지 안을 실제 Jev 로 견줬습니다. 시험 작업은 `tests/pick-eval/` 에 있습니다.
+  - `tasks.txt` (26개, 다듬을 때 쓴 것): 에이전트 26/26, 모델까지 25/26.
+  - `heldout.txt` (24개, 정책만 주고 codex 가 따로 만든 것): 에이전트 24/24, 모델까지 19/24. 모델이 틀린 5개 중
+    3개는 확신이 낮아 기본값으로 갔고 2개는 옆 단계를 골랐습니다. 권장 설명을 쓸 때 이 세트는 보지 않았지만, 결과를 본
+    뒤 규칙 하나(Luna·Terra·Sol, Flash·Pro 라는 이름을 codex·agy 가 가져감)를 고쳤습니다. 고치기 전 에이전트는 22/24 였습니다.
+  - 다시 재려면 `tests/pick-eval/run.sh [설명 파일]` (실제 Jev 에 작업마다 한 번 요청, 키 필요).
+
+  정답표는 "누가 무엇을 맡는가" 라는 정책을 따른 것이라, Jev 가 그 정책대로 고르는지만 잽니다. 그 정책이 실제로 최선인지
+  (예: 리뷰는 정말 codex 가 나은지, Gemini Pro 가 Flash 보다 나은지)는 재지 않습니다. 설명은 써 보며 고치세요.
+- **추론 수준**은 `모델@수준` 으로 적고, aw 가 에이전트마다 맞는 옵션으로 바꿉니다: claude·agy `--effort`,
+  codex `-c model_reasoning_effort=`, devin 은 이름에 이어 붙임(`swe-2@max` → `swe-2-max`). kiro-cli 는
+  `--agent-engine v3` 를 같이 붙입니다(기본 엔진은 `--model` 을 무시). kiro-cli 의 `--effort` 는 실측에서 먹지
+  않아서(모델을 바꾸면 세션이 `high` 로 잡힘) 권장값에는 수준을 적지 않았습니다.
+- **확신이 낮으면 띄우지 않습니다.** 에이전트 확신이 `--min-confidence`(기본 0.5)보다 낮으면 분포만 보여 주고
+  코드 3 으로 끝납니다. 직접 `aw run` 으로 고르거나, 1등을 그대로 쓰려면 `--min-confidence 0`. 모델 확신이 낮으면
+  워커는 띄우고 모델만 기본값으로 둡니다.
+- 후보나 모델 줄이 하나뿐이면 묻지 않고 그걸 씁니다. 고른 결과는 워커 `meta` 의 `picked`, `pick_confidence`,
+  `pick_model`, `pick_model_confidence` 에 남고 `aw status` 에 보입니다.
+- 종료 코드: `0` 띄움 (Jev 를 못 써서 대신 띄운 것 포함) / `1` 오류 (꺼짐, `--fallback none`, 대신 띄울 에이전트가 없음) /
+  `3` 확신이 낮아 안 띄움.
+
+**안 될 때**
+
+- **Jev 를 못 쓰면** (키 없음, 네트워크, 402·403 권한·예산, 429 한도, 5xx 서버 오류, 읽을 수 없는 답) 일이 막히지 않게
+  설명 파일의 첫 후보(권장값에서는 claude)로 띄웁니다. 모델은 기본값이고, 이유는 경고와 `meta` 의 `pick_jev_error` 에
+  남습니다. 대신 띄울 에이전트는 `--fallback <에이전트>` 나 `AW_PICK_FALLBACK` 으로 바꾸고, `none` 이면 띄우지 않고
+  코드 1 로 끝납니다. 요청 한 번은 연결 5초·전체 20초에서 끊고, 429·5xx 는 두 번, 연결 실패는 한 번 더 해 봅니다.
+- **고른 모델을 에이전트가 거부하면** (없는 모델, 쓸 권한 없음) 같은 워커에서 모델 옵션만 빼고 한 번 더 돌립니다.
+  워커가 2분 안에 실패하고 출력에 모델 탓이라는 문구가 있을 때만입니다. 실측으로 claude, codex, agy, devin, kiro-cli
+  모두 없는 모델을 받으면 0~6초 안에 코드 1 과 그런 문구(`Unknown model`, `Invalid model ID` 등)를 냈습니다. 첫 시도는
+  `out.model`, `err.model` 에, `meta` 에는 `pick_fallback` 이 남고, `aw resume` 은 다시 돈 명령으로 이어 갑니다.
+
+**키**는 [console.typesafe.ai/keys](https://console.typesafe.ai/keys) 에서 받고, 셋 중 편한 방법으로 넘깁니다.
+찾는 순서는 `--key` 인자, `TYPESAFE_API_KEY` 환경변수(TypeSafe SDK 와 같은 이름), `aw pick key` 로 저장한 파일입니다.
+
+```sh
+TYPESAFE_API_KEY=... aw pick -- '작업'       # 환경변수
+aw pick --key ... -- '작업'                  # 이번만 인자로 (저장하지 않음)
+printf '%s\n' "$KEY" | aw pick key           # 저장 (~/.config/agent-worker/typesafe-key, 나만 읽기 권한)
+aw pick key "$KEY"                           # 인자로 저장
+```
+
+인자로 준 키는 셸 기록과 `aw` 프로세스의 `ps` 에 남을 수 있습니다. 기록이 걱정되면 환경변수나 표준 입력을 쓰세요.
+`aw` 는 키를 `curl` 의 명령 인자에 싣지 않고(설정을 표준 입력으로 넘김) 워커 기록에도 남기지 않습니다.
+Jev 로 보내는 것은 작업 글의 앞 12KB 와 후보 설명뿐이고, 저장소 파일은 보내지 않습니다. `curl` 이 필요합니다.
+
 ## 기본 옵션 (권한 우회, 모델)
 
 무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다. 그래서 에이전트별로
@@ -783,6 +869,7 @@ mytool 128000
 | `exit` | 종료 코드 (생기면 끝난 것) |
 | `input_tokens_est` / `context_limit` | 입력 크기 어림값과 적용된 한도 (meta 안) |
 | `run.sh` / `launch.sh` | 실제로 돌린 스크립트 (그대로 다시 실행 가능) |
+| `fallback.sh`, `out.model`, `err.model` | `aw pick` 이 고른 모델이 거부될 때 대신 돌리는 스크립트와 첫 시도의 출력 |
 
 상태는 `running`(pid 살아 있음), `done`(코드 0), `failed`(0 아님), `stopped`(`aw stop`),
 `lost`(종료 코드 없이 프로세스가 사라짐)입니다.
@@ -800,6 +887,12 @@ mytool 128000
 | `AW_QUIET` | `300` | `aw peek` 이 조용함을 알리는 기준(초) |
 | `AW_BRIEF` | `~/.config/agent-worker/brief` | 워커 지시문 파일 |
 | `AW_NO_BRIEF` | (없음) | `1` 이면 지시문을 붙이지 않음 |
+| `AW_PICK` | `~/.config/agent-worker/pick` | `aw pick` 의 후보 설명 파일 (있으면 켜짐) |
+| `AW_PICK_KEYFILE` | `~/.config/agent-worker/typesafe-key` | `aw pick key` 가 키를 저장하는 파일 |
+| `AW_PICK_MIN_CONFIDENCE` | `0.5` | `aw pick` 이 띄우는 확신 하한 |
+| `AW_PICK_FALLBACK` | (설명 파일의 첫 후보) | Jev 를 못 쓸 때 대신 띄울 에이전트. `none` 이면 멈춤 |
+| `TYPESAFE_API_KEY` | (없음) | Jev 키. 저장한 파일보다 먼저 쓰임 (`--key` 가 그보다 먼저) |
+| `TYPESAFE_DEFAULT_MODEL` / `TYPESAFE_BASE_URL` | `jev-latest` / `https://api.typesafe.ai` | `aw pick` 이 부르는 모델과 주소 |
 
 테스트나 임시 실험은 `AW_HOME` 만 바꾸면 평소 기록과 완전히 분리됩니다.
 

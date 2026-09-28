@@ -1,0 +1,28 @@
+# 번호|작업|정답 에이전트|받아 줄 모델 (쉼표로 여럿)
+# 설명을 다듬을 때 쓴 26개. 1~14 는 codex·devin 검토자에게도 보여 준 것, 정답은 둘의 답과 합의한 정책.
+1|src/auth 의 인증 코드를 검토해줘. 파일은 고치지 마.|codex|gpt-5.6-terra@high,gpt-5.6-sol@xhigh,gpt-5.6-sol@max
+2|README 를 영어로 요약해줘|agy|gemini-3.8-flash-low,gemini-3.8-flash-high
+3|결제 모듈을 새 API 에 맞게 여러 파일에 걸쳐 리팩터링해줘|claude|claude-opus-5-5@xhigh
+4|gemini 로 이 설계에 두 번째 의견을 줘|agy|gemini-3.8-flash-high,gemini-3.1-pro-high
+5|스펙 문서대로 새 프로젝트를 처음부터 세팅하고 기능을 끝까지 완성해줘. 중간에 묻지 말고.|devin|swe-2-max
+6|요구사항을 먼저 설계 문서와 작업 목록으로 정리한 다음 AWS Lambda 로 구현해줘|kiro-cli|claude-sonnet-5
+7|2+2 는?|agy|gemini-3.8-flash-low
+8|가끔만 재현되는 경쟁 상태(race condition) 버그를 찾아서 고쳐줘. 지난 두 번의 시도는 실패했어.|claude|claude-fable-5-1@xhigh,claude-fable-5-1@max
+9|이 함수 이름을 fetchUser 에서 loadUser 로 바꿔줘|agy|gemini-3.8-flash-low,gemini-3.8-flash-high
+10|이 PR diff 에 보안 문제가 없는지 꼼꼼히 봐줘|codex|gpt-5.6-sol@xhigh,gpt-5.6-sol@max
+11|이 로그 파일 20만 줄에서 에러 패턴을 정리해줘|agy|gemini-3.8-flash-high,gemini-3.1-pro-high
+12|테스트를 추가해줘: parse_date 함수의 경계 사례|codex|gpt-5.6-terra@high
+13|opus 로 이 문서를 다듬어줘|claude|claude-opus-5-5@xhigh
+14|셸 스크립트에서 zsh 호환성 문제를 찾아 고쳐줘|claude|claude-opus-5-5@xhigh
+15|이 에러 메시지가 무슨 뜻이야? TypeError: undefined is not a function|agy|gemini-3.8-flash-low,gemini-3.8-flash-high
+16|로그인 페이지에 비밀번호 재설정 기능을 추가해줘|claude|claude-opus-5-5@xhigh
+17|codex 로 이 함수의 리팩터링 방향만 제안해줘. 고치지는 마.|codex|gpt-5.6-luna@medium,gpt-5.6-terra@high
+18|Terraform 으로 AWS VPC 와 서브넷 구성을 만들어줘|kiro-cli|claude-sonnet-5
+19|이 설계 문서를 읽고 빠진 위험 요소를 비평해줘|codex|gpt-5.6-terra@high,gpt-5.6-sol@xhigh,gpt-5.6-sol@max
+20|변수 이름 오타 하나 고쳐줘: recieve → receive|agy|gemini-3.8-flash-low
+21|가장 빠르고 싼 걸로 이 JSON 을 YAML 로 바꿔줘|agy|gemini-3.8-flash-low
+22|fable 로 이 알고리즘의 시간 복잡도를 분석해줘|claude|claude-fable-5-1@xhigh,claude-fable-5-1@max
+23|이 PR 을 sol 로 꼼꼼히 리뷰해줘|codex|gpt-5.6-sol@xhigh,gpt-5.6-sol@max
+24|새 CLI 도구를 README 스펙대로 처음부터 만들어서 테스트까지 통과시켜 놔. 나 퇴근할 거야.|devin|swe-2-max
+25|DB 마이그레이션 중에 데이터가 가끔 유실되는 원인을 찾아 고쳐줘. 운영 데이터라 실수하면 큰일 나.|claude|claude-fable-5-1@xhigh,claude-fable-5-1@max
+26|sonnet 으로 이 함수에 주석 달아줘|claude|claude-sonnet-5@low,claude-sonnet-5@medium

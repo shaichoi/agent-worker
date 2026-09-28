@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.13.0"
+  version: "0.14.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -71,6 +71,11 @@ aw rm review
 - **지시문**: `aw brief` 가 켜져 있으면 aw 가 프롬프트 앞에 지시문을 붙입니다 (권장값: 첫 줄에 예상 소요
   시간을 적고, 오래 걸리면 몇 분마다 진행을 한 줄씩 남기기). 그러니 같은 요청을 프롬프트에 또 적지 않습니다.
   `aw peek` 이 그 예상 소요 시간을 경과와 견줘 보여 줍니다. 지시문이 작업과 맞지 않으면 `--no-brief`.
+- **에이전트 고르기 (실험용)**: 사용자가 에이전트를 정하지 않았고 `aw pick` 이 켜져 있으면
+  `aw pick -n <이름> -- '작업'` 으로 Jev(TypeSafe AI)가 고른 에이전트로 띄울 수 있습니다. 고른 것과 확신이
+  첫 줄에 찍히니 사용자에게 전합니다. 코드 3 은 확신이 낮아 안 띄웠다는 뜻이라 직접 고릅니다.
+  Jev 를 못 쓰면 설명 파일의 첫 후보로 대신 띄우고 경고를 찍으니, 그 사실도 전합니다.
+  꺼져 있으면 켜지 말고 직접 고릅니다 (켜려면 사용자의 API 키가 필요합니다). 에이전트를 정해 줬으면 `aw run`.
 
 ## 오래 걸리는 작업
 
@@ -192,5 +197,5 @@ aw wait rv-codex rv-gemini --timeout 100
 
 `aw help` (전체 명령), `aw help agents` (에이전트별 주의할 점), `aw help limits` (프롬프트 크기와
 컨텍스트 한도), `aw help defaults` (권한·모델 옵션), `aw help files` (워커 기록 구조),
-`aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문).
+`aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문), `aw help pick` (실험용 에이전트 고르기).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.
