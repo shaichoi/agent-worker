@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.11.1
+AW_VERSION=0.12.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -39,7 +39,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw stop|rm <이름...>                 중단 / 기록 삭제
   aw clean [--all]                     끝난 워커 일괄 정리
   aw contexts                          컨텍스트 한도표
-  aw defaults [--init]                 기본 옵션표 / 권한 우회 켜기
+  aw defaults [get|set|unset]          기본 옵션(권한, 모델) 보기 / 바꾸기
   aw brief [--init]                    워커 프롬프트 앞에 붙는 지시문 (예상 소요 시간 등)
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
@@ -63,8 +63,8 @@ wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 /
   wait --idle N  N초 동안 출력·새 명령·파일 변경·생각 신호가 없으면 3 (끊지는 않음)
 
 자세히
-  aw help agents    에이전트별 호출법과 함정 (claude, agy, devin, codex)
-  aw help defaults  자동으로 붙는 권한 옵션
+  aw help agents    에이전트별 호출법과 주의할 점 (claude, agy, devin, codex, kiro-cli)
+  aw help defaults  자동으로 붙는 옵션 (권한, 모델)
   aw help files     워커 기록 파일 구조
   aw help limits    프롬프트 크기와 컨텍스트 한도
   aw help peek      진행 상황 보기: 각 줄의 뜻, 생각 중·조용함, wait --idle
@@ -79,10 +79,13 @@ help_topic() {
 
 대화 이어하기는 aw resume <워커> -- '프롬프트' 로 합니다. 세션 ID 는 aw 가
 끝난 워커의 출력에서 찾아 meta 에 적어 둡니다 (aw status 에서 볼 수 있습니다).
-claude/codex 는 프롬프트를 맨 끝 인자로 둬야 이어할 때 제대로 걷어냅니다.
+claude/codex/kiro-cli 는 프롬프트를 맨 끝 인자로 둬야 이어할 때 제대로 걷어냅니다.
 
-진행을 보려면 claude·agy 는 stream-json 으로 띄우세요. 도중 사건이 출력에 쌓여
+진행을 보려면 claude·agy·kiro-cli 는 stream-json 으로 띄우세요. 도중 사건이 출력에 쌓여
 aw peek / aw logs -f 로 보이고, 끝난 뒤 --field 는 json 과 똑같이 됩니다.
+
+모델을 안 고르면 기본 옵션(aw defaults)이 agy 에 gemini-3.8-flash, devin 에 swe-2-max,
+kiro-cli 에 claude-opus-5.5 를 붙입니다. 바꾸려면 aw defaults set <명령> --model ...
 
 claude — Claude Code
   aw run -n c1 -- claude -p --output-format stream-json --verbose "작업"
@@ -93,20 +96,24 @@ claude — Claude Code
   계정 분리: aw run --profile work-sub -- claude -p "작업"
 
 agy — Antigravity CLI (Gemini)
-  aw run -n a1 -- agy --output-format stream-json --model gemini-3.8-flash-high -p='작업'
-  aw run -n a2 -f spec.md -- agy --output-format stream-json --model ...   # -p 를 빼야 함
+  aw run -n a1 -- agy --output-format stream-json -p='작업'
+  aw run -n a2 -f spec.md -- agy --output-format stream-json   # -p 를 빼야 함
+  aw run -n a3 -- agy --output-format stream-json --model gemini-3.1-pro-high -p='작업'
   aw result a1 --field response      # 상태: --field status (SUCCESS)
   --output-format json 이면 끝날 때까지 출력이 없고 aw peek 은 지금 도는 명령만 보여 줍니다.
   이어하기: --conversation <conversation_id>
-  함정: -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
+  주의: -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
         -p='작업' 형태로 붙이면 플래그 순서와 무관합니다.
         -p 와 stdin 을 같이 주면 -p 가 이기고 stdin 은 무시됩니다.
+        --model gemini-3.8-flash 처럼 수준을 뺀 이름은 --effort 가 있어야 합니다.
+        gemini-3.8-flash-high 에 --effort low 를 같이 주면 부딪쳐 실패합니다.
   모델 목록: agy models
 
 devin
-  aw run -n d1 -- devin -p "작업" --model gemini-3-8-flash-high
-  aw run -n d2 -- devin -p --prompt-file spec.md --model ...   # -f 가 아니라 이것
-  함정: 프롬프트는 -p 바로 뒤에 와야 합니다.
+  aw run -n d1 -- devin -p "작업"
+  aw run -n d2 -- devin -p --prompt-file spec.md   # -f 가 아니라 이것
+  aw run -n d3 -- devin -p "작업" --model claude-opus-5-5-high
+  주의: 프롬프트는 -p 바로 뒤에 와야 합니다.
         stdin 은 안 받습니다. 파일은 --prompt-file 로 넣습니다.
         -p 없이 돌리면 대화형으로 들어가 아무것도 안 하고 0 으로 끝납니다.
         신뢰 안 된 디렉터리에서 -p 는 코드 1 로 실패합니다. 기본 옵션을
@@ -124,9 +131,24 @@ codex — OpenAI Codex CLI
   aw run -n x2 -f spec.md -- codex exec --json -    # stdin 을 - 로 받습니다
   이어하기: codex exec resume <thread_id>. 이 서브명령은 --sandbox 를 안 받아서
             aw resume 이 기본 옵션을 자동으로 끕니다.
-  함정: git 저장소 밖에서는 --skip-git-repo-check 가 필요합니다 (프롬프트 앞에).
+  주의: git 저장소 밖에서는 --skip-git-repo-check 가 필요합니다 (프롬프트 앞에).
         codex 의 workspace-write 샌드박스 안에서는 aw 를 못 돌립니다. 워커
         기록을 ~/.local/share 에 쓰고, 띄운 에이전트가 네트워크를 써야 해서입니다.
+
+kiro-cli — Kiro CLI
+  aw run -n k1 -- kiro-cli chat --output-format stream-json "작업"
+  aw run -n k2 -f spec.md -- kiro-cli chat --output-format stream-json   # 프롬프트 인자 생략
+  aw result k1 --field finalText     # 상태: --field status (success)
+  stream-json 이면 사람 입력을 기다리지 않습니다 (--no-interactive 가 따라옴).
+  이어하기: chat --resume-id <sessionId>  (aw resume 이 알아서 붙입니다)
+  주의: 프롬프트는 chat 뒤, 맨 끝 인자로 둡니다.
+        --trust-all-tools(-a) 가 없으면 파일 쓰기·명령을 거부당하고도 코드 0 으로
+        끝납니다. 답(finalText)에만 못 했다고 적힙니다. 기본 옵션을 켜 두면 붙습니다.
+        기본 엔진(v2)은 --model 을 무시합니다 (경고 "failed to set model ... Method
+        not found" 뒤 Auto 로 돎). 모델을 고르려면 --agent-engine v3 가 필요하고,
+        기본 옵션을 켜 두면 둘 다 붙습니다. 엔진을 직접 고르면(--agent-engine v2,
+        --v2) aw 는 엔진 옵션을 붙이지 않습니다. 이때 --model 은 무시됩니다.
+  모델 목록: kiro-cli chat --list-models
 
 GUI 도구(Antigravity IDE, Cursor)는 창만 열려서 워커로 쓸 수 없습니다.
 T
@@ -146,6 +168,7 @@ T
 
 붙는 곳 (프롬프트 위치를 아는 에이전트만. 빌드 스크립트 같은 모르는 명령에는 안 붙음)
   claude, codex  맨 끝 인자, 또는 -f 로 넣은 표준 입력 (codex 는 -)
+  kiro-cli       chat 뒤 맨 끝 인자, 또는 -f 로 넣은 표준 입력
   agy            -p='...' / -p ... 의 값, 또는 -f 로 넣은 표준 입력
   devin          -p 바로 뒤 프롬프트, 또는 --prompt-file (지시문을 앞에 붙인 새 파일로 넘김)
   aw resume 은 새 프롬프트에 한 번 붙입니다. 워커 기록의 cmd.orig 는 붙이기 전,
@@ -180,7 +203,8 @@ peek 의 줄
   마지막 활동   가장 최근 신호와 그 출처: 출력, claude 기록, codex 기록, 새 명령, 파일 변경
                 (끝난 워커는 끝난 뒤의 신호를 세지 않음)
   조용함        그 신호가 모두 AW_QUIET 초(기본 300) 넘게 없으면 알림
-  최근 활동     출력을 풀어 봄: 도구 호출, 명령, 말, 바뀐 파일. claude 를 json 으로 띄웠으면
+  최근 활동     출력을 풀어 봄: 도구 호출, 명령, 말, 바뀐 파일 (claude·agy·kiro-cli stream-json,
+                codex --json). claude 를 json 으로 띄웠으면
                 claude 대화 기록에서 읽음. 모르는 형식은 마지막 줄(긴 줄은 끝)을 그대로
   worktree      -w 로 띄웠으면 바뀐 파일 수
   답            끝난 워커의 최종 답 한 줄
@@ -220,9 +244,10 @@ T
 
 파일로 프롬프트 넣기 (크기 제한 없음)
   claude   aw run -f spec.md -- claude -p --output-format stream-json --verbose
-  agy      aw run -f spec.md -- agy --output-format stream-json --model ...   (-p 빼기)
+  agy      aw run -f spec.md -- agy --output-format stream-json   (-p 빼기)
   codex    aw run -f spec.md -- codex exec --json -
-  devin    aw run -- devin -p --prompt-file spec.md --model ...   (stdin 안 받음)
+  devin    aw run -- devin -p --prompt-file spec.md   (stdin 안 받음)
+  kiro-cli aw run -f spec.md -- kiro-cli chat --output-format stream-json
 
 컨텍스트 한도
   -f 로 넣는 입력이 에이전트 한도의 80% 를 넘으면 경고합니다 (막지는 않음).
@@ -370,7 +395,7 @@ json_escape() {
 # 에이전트들은 대화를 이어갈 수 있게 세션 ID 를 내놓습니다. 이름만 제각각입니다.
 # 끝난 워커의 출력에서 한 번 찾아 meta 에 적어 두고, 다음부터는 그걸 씁니다.
 # 텍스트만 내놓는 에이전트(devin)는 찾을 게 없고, 그건 빈 값으로 둡니다.
-session_keys() { printf '%s\n' session_id conversation_id thread_id; }
+session_keys() { printf '%s\n' session_id conversation_id thread_id sessionId; }
 
 session_of() { # <워커디렉터리>
   d=$1
@@ -437,6 +462,15 @@ resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <인
           --prompt-file=*)  continue ;;
         esac
         ;;
+      kiro-cli)
+        case "$ra" in
+          --resume-id) rskip=1; continue ;;
+          --resume-id=*) continue ;;
+          -r | --resume | --resume-picker) continue ;;
+        esac
+        # 프롬프트는 맨 끝 인자입니다.
+        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then continue; fi
+        ;;
     esac
     printf '%s\n' "$ra"
   done
@@ -489,6 +523,15 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
       if [ -n "$rsid" ]; then printf -- '-r\n%s\n' "$rsid"; else printf -- '-c\n'; fi
       resume_rest devin "$rhas" "$@"
       ;;
+    kiro-cli)
+      # v3 엔진은 v2 로 시작한 세션도 이어받습니다 (실측). 엔진이 바뀌어도 됩니다.
+      [ -n "$rsid" ] || return 3
+      [ "${1:-}" = chat ] || return 4
+      shift
+      printf '%s\nchat\n--resume-id\n%s\n' "$rprog" "$rsid"
+      resume_rest kiro-cli "$rhas" "$@"
+      printf '%s\n' "$rp"
+      ;;
     *) return 2 ;;
   esac
   return 0
@@ -499,61 +542,252 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
 # 무인 워커는 승인 프롬프트가 뜨면 그대로 멈추거나 조용히 거부됩니다.
 # 그래서 에이전트별로 "사람 없이 돌 때" 필요한 옵션을 뒤에 붙일 수 있습니다.
 # devin 의 작업 공간 신뢰 검사처럼 사람이 있어야만 통과되는 관문도 여기서 다룹니다.
+# 따로 말하지 않았을 때 쓸 모델(agy, devin, kiro-cli)도 여기 둡니다.
 #
-# 다만 이건 권한을 올리는 일이라 aw 가 마음대로 하지 않습니다.
+# 다만 권한을 올리는 일이라 aw 가 마음대로 하지 않습니다.
 # $AW_DEFAULTS 파일이 있을 때만 적용합니다 (install.sh 가 설치 때 만들어 주고,
 # aw defaults --init 로도 만듭니다). 파일이 없으면 아무 옵션도 붙지 않습니다.
 # 붙인 내용은 실행할 때 화면에 찍고, --no-defaults 로 그때그때 끌 수 있습니다.
+#
+# 한 줄이 한 묶음입니다. 한 명령의 줄을 모두 붙이되, 그 줄의 옵션 중 하나라도 이미
+# 있으면(사용자가 줬거나 앞 줄이 붙였으면) 그 줄 전체를 건너뜁니다. 값이 딸린 옵션이
+# 반쪽만 붙거나, 같은 옵션이 두 번 들어가 에이전트가 오류를 내는 사고를 막습니다.
+
+defaults_header() {
+  cat <<'DEF'
+# aw 가 명령 뒤에 붙일 옵션입니다. 한 줄에 '명령이름 옵션...' 형식입니다.
+#
+# 한 명령에 여러 줄을 적으면 모두 붙습니다. 다만 그 줄의 옵션 중 하나라도
+# 직접 넘기면 그 줄 전체를 건너뜁니다. 그러니 한 줄의 옵션은 전부 같이
+# 붙거나 전부 같이 빠집니다. 따로 붙고 빠져야 하는 옵션은 줄을 나누세요.
+# 고치기: aw defaults set <명령> <옵션...>   빼기: aw defaults unset <명령> [옵션]
+DEF
+}
 
 # 권장값. 그대로 적용되지는 않고 --init 로 파일에 써야 효력이 생깁니다.
 recommended_defaults() {
+  defaults_header
   cat <<'DEF'
-# aw 가 명령 뒤에 붙일 옵션입니다. 한 줄에 '명령이름 옵션...' 형식입니다.
-# 이 옵션들은 에이전트의 승인 절차를 건너뜁니다. 지우면 그 에이전트는
-# 승인이 필요한 작업에서 멈추거나 조용히 거부됩니다.
 #
-# 한 명령에 여러 줄을 적으면 마지막 줄만 씁니다. 또 그 줄의 첫 옵션을
-# 직접 넘기면 그 줄 전체를 건너뜁니다. 그러니 한 줄에 여러 옵션이 있으면
-# 전부 같이 붙거나 전부 같이 빠집니다.
+# 권한: 에이전트의 승인 절차를 건너뜁니다. 지우면 그 에이전트는
+# 승인이 필요한 작업에서 멈추거나 조용히 거부됩니다.
 agy --dangerously-skip-permissions
 claude --permission-mode bypassPermissions
 devin --permission-mode dangerous --respect-workspace-trust false
 codex --sandbox workspace-write
+kiro-cli --trust-all-tools
+#
+# 모델: 따로 말하지 않았을 때 쓸 모델입니다. --model 을 직접 주면 그 줄은 빠집니다.
+# agy 의 gemini-3.8-flash 는 --effort(low, medium, high)가 있어야 합니다.
+agy --model gemini-3.8-flash --effort high
+# devin 의 SWE-2 는 swe-2-medium, swe-2-high, swe-2-max 가 있습니다 (swe-2 만 주면 high).
+devin --model swe-2-max
+kiro-cli --model claude-opus-5.5
+# kiro-cli 의 기본 엔진(v2)은 --model 을 무시하고 Auto 로 돕니다. v3 는 따릅니다.
+kiro-cli --agent-engine v3
 DEF
 }
 
-defaults_for() { # <명령 이름>
+defaults_for() { # <명령 이름>  → 붙일 옵션 묶음, 한 줄에 하나
   [ -f "$AW_DEFAULTS" ] || return 0
-  cmd=${1##*/}
   sed 's/#.*//' "$AW_DEFAULTS" \
-    | awk -v c="$cmd" '$1 == c { $1 = ""; sub(/^ +/, ""); v = $0 } END { if (v != "") print v }'
+    | awk -v c="${1##*/}" '$1 == c { $1 = ""; sub(/^ +/, ""); if ($0 != "") print }'
+}
+
+# 이름은 달라도 같은 설정을 고르는 옵션들입니다. 기본 옵션을 붙일지 볼 때 같은 것으로 칩니다.
+# kiro-cli 는 둘을 같이 주면 오류로 끝납니다 (실측: --v3 와 --agent-engine, -a 와 --trust-all-tools).
+flag_family() { # <명령 이름> <옵션>
+  case "${1##*/}:$2" in
+    kiro-cli:--agent-engine | kiro-cli:--v[123]) printf '%s\n' --agent-engine --v1 --v2 --v3 ;;
+    kiro-cli:--trust-all-tools | kiro-cli:-a)    printf '%s\n' --trust-all-tools -a ;;
+    *) printf '%s\n' "$2" ;;
+  esac
+}
+
+# 묶음의 옵션 중 하나라도 인자에 이미 있으면 0. --opt 와 --opt=값 을 모두 셉니다.
+# 인자는 하나씩 봅니다. 프롬프트에 '--model' 같은 글이 들어 있어도 옵션으로 치지 않습니다.
+group_given() { # <명령 이름> <묶음> <인자...>
+  gg_c=$1; gg_rest=$2; shift 2
+  while [ -n "$gg_rest" ]; do
+    gg_t=${gg_rest%% *}
+    case "$gg_rest" in *' '*) gg_rest=${gg_rest#* } ;; *) gg_rest='' ;; esac
+    case "$gg_t" in -?*) ;; *) continue ;; esac
+    for gg_f in $(flag_family "$gg_c" "${gg_t%%=*}"); do
+      for gg_a in "$@"; do
+        case "$gg_a" in "$gg_f" | "$gg_f"=*) return 0 ;; esac
+      done
+    done
+  done
+  return 1
+}
+
+# 파일의 묶음끼리 옵션이 겹치는지 봅니다 (파일의 값에는 공백이 없습니다).
+groups_overlap() { # <명령 이름> <묶음 A> <묶음 B>
+  go_c=$1; go_a=$2; go_b=$3
+  set --
+  while [ -n "$go_b" ]; do
+    go_t=${go_b%% *}
+    case "$go_b" in *' '*) go_b=${go_b#* } ;; *) go_b='' ;; esac
+    [ -n "$go_t" ] && set -- "$@" "$go_t"
+  done
+  group_given "$go_c" "$go_a" "$@"
 }
 
 defaults_init() { # [--force]
   if [ -f "$AW_DEFAULTS" ] && [ "${1:-}" != --force ]; then
     say "이미 있습니다: $AW_DEFAULTS   (덮어쓰려면 aw defaults --init --force)"
+    di_miss=$(defaults_missing | grep -c . || true)
+    [ "$di_miss" -gt 0 ] && say "  권장값 중 이 파일에 없는 줄이 ${di_miss}개 있습니다. 보기: aw defaults"
     return 0
   fi
   mkdir -p "$(dirname "$AW_DEFAULTS")" || return 1
   recommended_defaults > "$AW_DEFAULTS" || return 1
   say "기본 옵션을 켰습니다: $AW_DEFAULTS"
   say "  이제 워커가 에이전트의 승인 절차를 건너뜁니다."
+  say "  모델을 안 고르면 agy 는 gemini-3.8-flash, devin 은 swe-2-max, kiro-cli 는 claude-opus-5.5 로 돕니다."
   say "  끄려면 그 파일을 지우거나 해당 줄을 주석 처리하세요."
   return 0
+}
+
+defaults_usage() {
+  cat <<'U'
+사용법
+  aw defaults                        적용 중인 기본 옵션 (파일 내용과 빠진 권장값)
+  aw defaults get [명령] [옵션]       적용될 줄만. 명령을 주면 그 명령의 옵션 묶음을 한 줄에 하나씩,
+                                     옵션까지 주면 그 옵션이 든 묶음만   예) aw defaults get agy --model
+  aw defaults set <명령> <옵션...>    옵션이 겹치는 줄을 이 줄로 바꿈 (없으면 넣음)
+                                     예) aw defaults set agy --model gemini-3.1-pro-high
+                                     한 줄이 통째로 바뀌니 수준만 바꿀 때도 모델을 같이 적음
+                                         aw defaults set agy --model gemini-3.8-flash --effort medium
+  aw defaults unset <명령> [옵션...]  그 옵션이 든 줄을 뺌 (옵션을 빼면 그 명령의 줄 전부)
+  aw defaults --init [--force]       권장값으로 켜기 (있으면 그대로 두고, --force 면 되돌림)
+U
+}
+
+# 파일을 한 줄씩 읽으며 고칩니다. 주석과 다른 명령의 줄은 그대로 둡니다.
+# 인자로 준 옵션과 겹치는 그 명령의 줄(unset 에서 옵션을 안 주면 그 명령의 줄 전부)을
+# 찾아, set 은 첫 줄을 새 줄로 바꾸고 나머지는 지웁니다 (없으면 끝에 넣음). unset 은 지웁니다.
+# 바꾼 줄은 de_old 에 남깁니다.
+defaults_rewrite() { # <set|unset> <명령> <새 줄(unset 이면 빈 값)> [옵션...]
+  de_mode=$1; de_c=$2; de_new=$3; shift 3
+  de_tmp="$AW_DEFAULTS.new"; de_done=0; de_old=''
+  : > "$de_tmp" || die "쓸 수 없습니다: $de_tmp"
+  while IFS= read -r de_l || [ -n "$de_l" ]; do
+    de_b=${de_l%%#*}
+    if [ "$(printf '%s\n' "$de_b" | awk '{ print $1 }')" = "$de_c" ]; then
+      de_o=$(printf '%s\n' "$de_b" | awk '{ $1 = ""; sub(/^ +/, ""); print }')
+      if { [ "$de_mode" = unset ] && [ $# -eq 0 ]; } || group_given "$de_c" "$de_o" "$@"; then
+        de_old="$de_old  $de_c $de_o
+"
+        if [ "$de_mode" = set ] && [ "$de_done" -eq 0 ]; then printf '%s\n' "$de_new" >> "$de_tmp"; fi
+        de_done=1
+        continue
+      fi
+    fi
+    printf '%s\n' "$de_l" >> "$de_tmp"
+  done < "$AW_DEFAULTS"
+  [ "$de_mode" = set ] && [ "$de_done" -eq 0 ] && printf '%s\n' "$de_new" >> "$de_tmp"
+  mv "$de_tmp" "$AW_DEFAULTS"
+}
+
+defaults_get() { # [명령] [옵션]
+  [ -f "$AW_DEFAULTS" ] || return 0
+  if [ $# -eq 0 ]; then
+    sed 's/#.*//' "$AW_DEFAULTS" | awk 'NF { $1 = $1; print }'
+    return 0
+  fi
+  defaults_for "$1" | while IFS= read -r dg_g; do
+    if [ $# -lt 2 ] || group_given "$1" "$dg_g" "$2"; then printf '%s\n' "$dg_g"; fi
+  done
+}
+
+defaults_set() { # <명령> <옵션...>
+  [ $# -ge 2 ] || die "사용법: aw defaults set <명령> <옵션...>   예) aw defaults set agy --model gemini-3.1-pro-high"
+  ds_c=${1##*/}; shift
+  case "$ds_c" in '' | -* | *[[:space:]#]*) die "명령 이름이 잘못됐습니다: $ds_c" ;; esac
+  case "$1" in -?*) ;; *) die "첫 옵션은 - 로 시작해야 합니다: $1" ;; esac
+  ds_g=''
+  for ds_a in "$@"; do
+    # 파일은 공백으로 나눠 읽고 '#' 뒤를 주석으로 버립니다. 그런 값은 적으면 깨집니다.
+    case "$ds_a" in '' | *[[:space:]#]*) die "빈 값이나 공백·# 이 든 값은 기본 옵션 파일에 적을 수 없습니다: '$ds_a'" ;; esac
+    ds_g="${ds_g:+$ds_g }$ds_a"
+  done
+  if [ ! -f "$AW_DEFAULTS" ]; then
+    # 권장값을 통째로 켜지 않고 이 줄만 둡니다. 권한 옵션은 aw defaults --init 로 따로 켭니다.
+    mkdir -p "$(dirname "$AW_DEFAULTS")" && defaults_header > "$AW_DEFAULTS" \
+      || die "기본 옵션 파일을 만들 수 없습니다: $AW_DEFAULTS"
+  fi
+  defaults_rewrite set "$ds_c" "$ds_c $ds_g" "$@"
+  if [ -z "$de_old" ]; then
+    say "넣음: $ds_c $ds_g"
+  elif [ "$de_old" = "  $ds_c $ds_g
+" ]; then
+    say "그대로: $ds_c $ds_g   (이미 같은 줄이 있습니다)"
+  else
+    say "바꿈:"
+    printf '%s' "$de_old" | sed 's/^  /  - /'
+    say "  + $ds_c $ds_g"
+  fi
+  say "  ($(tilde "$AW_DEFAULTS"))"
+}
+
+defaults_unset() { # <명령> [옵션...]
+  [ $# -ge 1 ] || die "사용법: aw defaults unset <명령> [옵션...]   예) aw defaults unset agy --model"
+  du_c=${1##*/}; shift
+  [ -f "$AW_DEFAULTS" ] || { say "기본 옵션 파일이 없습니다: $(tilde "$AW_DEFAULTS")"; return 0; }
+  defaults_rewrite unset "$du_c" '' "$@"
+  if [ -z "$de_old" ]; then
+    say "뺄 줄이 없습니다: $du_c $*"
+  else
+    say "뺌:"
+    printf '%s' "$de_old"
+    say "  ($(tilde "$AW_DEFAULTS"))"
+  fi
+}
+
+# 권장값 중 파일에 없는 줄. 같은 명령에 옵션이 겹치는 줄이 있으면 값이 달라도 있는 것으로
+# 봅니다. 주석 처리한 줄도 사용자가 고른 것이라 있는 것으로 칩니다. 예전에 만든 파일에
+# 새 권장값(kiro-cli, agy 모델 등)이 생겼다고 알려 주려고 씁니다.
+defaults_missing() {
+  [ -f "$AW_DEFAULTS" ] || return 0
+  recommended_defaults | sed 's/#.*//' | awk 'NF { $1 = $1; print }' | while IFS= read -r dm_l; do
+    dm_c=${dm_l%% *}; dm_o=${dm_l#* }
+    # 주석 줄은 '#명령 -옵션...' 꼴만 줄로 봅니다. 설명 주석에 든 명령 이름은 세지 않습니다.
+    dm_have=$(awk -v c="$dm_c" '
+        { k = 0; if ($0 ~ /^[ \t]*#/) { sub(/^[ \t]*#+[ \t]*/, ""); k = 1 }
+          sub(/#.*/, "")
+          if ($1 != c || (k && $2 !~ /^-/)) next
+          $1 = ""; sub(/^ +/, ""); if ($0 != "") print }' "$AW_DEFAULTS" \
+      | while IFS= read -r dm_g; do
+          if groups_overlap "$dm_c" "$dm_o" "$dm_g"; then printf 1; break; fi
+        done)
+    [ -n "$dm_have" ] || printf '%s\n' "$dm_l"
+  done
 }
 
 cmd_defaults() {
   case "${1:-}" in
     --init) defaults_init "${2:-}"; return $? ;;
+    get)    shift; defaults_get "$@"; return $? ;;
+    set)    shift; defaults_set "$@"; return $? ;;
+    unset)  shift; defaults_unset "$@"; return $? ;;
+    -h | --help) defaults_usage; return 0 ;;
     '') ;;
-    *) warn "알 수 없는 옵션: $1   (쓸 수 있는 것: --init [--force])"; return 1 ;;
+    *) warn "알 수 없는 하위 명령: $1   (aw defaults --help)"; return 1 ;;
   esac
 
   if [ -f "$AW_DEFAULTS" ]; then
     say "적용 중인 기본 옵션  ($AW_DEFAULTS)"
     say ""
     sed 's/^/  /' "$AW_DEFAULTS"
+    df_miss=$(defaults_missing)
+    if [ -n "$df_miss" ]; then
+      say ""
+      say "권장값 중 이 파일에 없는 줄 (넣으려면 aw defaults set <명령> <옵션...>):"
+      printf '%s\n' "$df_miss" | sed 's/^/  /'
+    fi
     say ""
+    say "고치려면: aw defaults set <명령> <옵션...> / aw defaults unset <명령> [옵션]  (aw defaults --help)"
     say "끄려면: 이 파일을 지우거나 해당 줄을 주석 처리하세요."
     say "한 번만 끄려면: aw run --no-defaults ...   (또는 AW_NO_DEFAULTS=1)"
   else
@@ -561,12 +795,14 @@ cmd_defaults() {
     say ""
     say "무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다."
     say "아래 권장값을 켜려면: aw defaults --init"
+    say "권한은 두고 한 줄만 켜려면: aw defaults set <명령> <옵션...>"
     say ""
     recommended_defaults | sed 's/^/  /'
   fi
   say ""
   say "권한 우회는 그 에이전트가 승인 없이 파일을 고치고 명령을 실행한다는 뜻입니다."
   say "무인으로 돌릴 때는 -w 로 worktree 를 떼어 놓는 편을 권합니다."
+  say "kiro-cli 는 --trust-all-tools 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로 끝납니다."
   say ""
   say "devin 줄의 --respect-workspace-trust false 는 작업 공간 신뢰 검사를 끕니다."
   say "-w 가 만드는 worktree 는 실행 시점에 새로 생기는 경로라 미리 신뢰 등록을"
@@ -580,12 +816,13 @@ cmd_defaults() {
 default_contexts() {
   cat <<'CTX'
 # 명령이름 토큰수   (# 은 주석)
-# devin 자체 모델(SWE-2, SWE-1.7)은 262K 입니다.
+# devin 자체 모델(SWE-2, SWE-1.7)은 262K 입니다. 기본 옵션을 켜 두면 SWE-2 로 돕니다.
 # --model 로 Claude/GPT/Gemini 를 고르면 1M 이므로 그때는 --max-input-tokens 로 덮어쓰세요.
 devin 262000
 claude 1000000
 agy 1000000
 codex 400000
+kiro-cli 1000000
 aider 200000
 CTX
 }
@@ -731,26 +968,25 @@ cmd_run() {
   # 에이전트별 기본 옵션을 뒤에 붙입니다.
   # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
   if [ "$no_defaults" -ne 1 ]; then
-    added=$(defaults_for "$1")
-    if [ -n "$added" ]; then
-      # 첫 토큰(플래그 이름)을 사용자가 이미 줬으면 그 줄 전체를 건너뜁니다.
-      # --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
-      # 붙는 사고를 막습니다.
-      first=${added%% *}
-      for a in "$@"; do
-        case "$a" in "$first" | "$first"=*) added=''; break ;; esac
-      done
-    fi
-    if [ -n "$added" ]; then
+    dgroups=$(defaults_for "$1")
+    while IFS= read -r dg; do
+      [ -n "$dg" ] || continue
+      # 그 줄의 옵션 중 하나라도 이미 있으면(사용자가 줬거나 앞 줄이 붙였으면) 줄 전체를
+      # 건너뜁니다. --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
+      # 붙거나, agy 의 --effort 처럼 사용자 값과 부딪치는 사고를 막습니다.
+      group_given "$1" "$dg" "$@" && continue
+      added="${added:+$added }$dg"
       # 공백으로 직접 쪼갭니다. 셸의 단어 분리에 기대지 않습니다
       # (zsh 는 따옴표 없는 변수를 분리하지 않습니다).
-      rest=$added
+      rest=$dg
       while [ -n "$rest" ]; do
         tok=${rest%% *}
         case "$rest" in *' '*) rest=${rest#* } ;; *) rest='' ;; esac
         [ -n "$tok" ] && set -- "$@" "$tok"
       done
-    fi
+    done <<DG
+$dgroups
+DG
   fi
 
   # setsid 가 있으면 워커를 새 프로세스 그룹의 리더로 띄울 수 있습니다.
@@ -1102,11 +1338,11 @@ cmd_resume() {
   sid=$(session_of "$sd")
   argv=$(resume_argv "$sd" "$sid" "$prompt") || case $? in
     2) die "이어하기를 아는 에이전트가 아닙니다: $(meta_get "$sd" cmdline | cut -d' ' -f1)
-   claude, agy, codex, devin 만 지원합니다. 직접 명령을 써서 aw run 으로 돌리세요." ;;
+   claude, agy, codex, devin, kiro-cli 만 지원합니다. 직접 명령을 써서 aw run 으로 돌리세요." ;;
     3) die "$src 의 출력에서 세션 ID 를 찾지 못했습니다.
    JSON 출력 옵션 없이 돌렸을 수 있습니다 (예: --output-format stream-json).
    aw status $src 로 확인하세요." ;;
-    4) die "codex 는 exec 로 시작한 워커만 이어할 수 있습니다." ;;
+    4) die "codex 는 exec, kiro-cli 는 chat 으로 시작한 워커만 이어할 수 있습니다." ;;
     *) die "원래 명령을 읽을 수 없습니다: $src" ;;
   esac
 
@@ -1150,7 +1386,7 @@ ARGV
 recommended_brief() {
   cat <<'B'
 # aw 가 워커의 프롬프트 앞에 붙이는 지시문입니다. '#' 로 시작하는 줄은 붙지 않습니다.
-# claude, codex, agy, devin 의 프롬프트에만 붙습니다 (인자, -f 파일, devin 의 --prompt-file).
+# claude, codex, agy, devin, kiro-cli 의 프롬프트에만 붙습니다 (인자, -f 파일, devin 의 --prompt-file).
 # 고쳐 써도 됩니다. aw peek 은 답에서 "예상 소요: 약 15분" 같은 줄을 찾아 경과와 견줘 보여 줍니다.
 # 끄려면 이 파일을 지우세요. 한 번만 끄려면 aw run --no-brief (또는 AW_NO_BRIEF=1).
 작업을 시작하기 전에, 첫 줄에 예상 소요 시간을 이 형식으로 적으세요: "예상 소요: 약 N분" (범위면 "예상 소요: 약 M~N분").
@@ -1164,7 +1400,7 @@ brief_text() { # 붙일 지시문 ('#' 줄과 앞쪽 빈 줄을 뺌)
 }
 
 # 지시문을 붙일 자리를 찾습니다: bkind(arg / eq / pfile / pfileeq / stdin), bpos(몇 번째 인자).
-# 프롬프트 위치를 아는 에이전트(claude, codex, agy, devin)만 합니다. 모르면 1 을 돌려줍니다.
+# 프롬프트 위치를 아는 에이전트(claude, codex, agy, devin, kiro-cli)만 합니다. 모르면 1 을 돌려줍니다.
 brief_where() { # <표준 입력 파일> <인자...>
   bw_stdin=$1; shift
   bkind=''; bpos=0
@@ -1174,6 +1410,13 @@ brief_where() { # <표준 입력 파일> <인자...>
       [ $# -gt 1 ] || return 1
       eval "bw_last=\${$#}"
       case "$bw_last" in -* | '') return 1 ;; esac
+      bkind=arg; bpos=$#; return 0 ;;
+    kiro-cli)
+      # kiro-cli chat [옵션] "프롬프트". chat 을 프롬프트로 알면 안 됩니다.
+      if [ "$bw_stdin" != /dev/null ]; then bkind=stdin; return 0; fi
+      [ $# -gt 2 ] || return 1
+      eval "bw_last=\${$#}"
+      case "$bw_last" in -* | '' | chat) return 1 ;; esac
       bkind=arg; bpos=$#; return 0 ;;
     agy)
       bw_i=0; bw_next=0
@@ -1215,7 +1458,7 @@ brief_init() { # [--force]
   mkdir -p "$(dirname "$AW_BRIEF")" || return 1
   recommended_brief > "$AW_BRIEF" || return 1
   say "지시문을 켰습니다: $AW_BRIEF"
-  say "  이제 claude, codex, agy, devin 워커의 프롬프트 앞에 붙습니다."
+  say "  이제 claude, codex, agy, devin, kiro-cli 워커의 프롬프트 앞에 붙습니다."
   say "  끄려면 그 파일을 지우고, 한 번만 끄려면 aw run --no-brief"
   return 0
 }
@@ -1249,10 +1492,15 @@ cmd_brief() {
 eta_of() { # <워커디렉터리>
   {
     tail -c 262144 "$1/out" 2>/dev/null | activity_lines | sed -n "s/^말$(printf '\t')//p"
-    # agy stream-json 은 답을 text_delta 조각으로 나눠 보냅니다. 이어 붙입니다.
+    # agy stream-json 은 답을 text_delta 조각으로, kiro-cli 는 agent_message_chunk 조각으로
+    # 나눠 보냅니다 (한 조각이 몇 글자). 이어 붙입니다.
     tail -c 262144 "$1/out" 2>/dev/null | LC_ALL=C awk '
       match($0, /"text_delta":"([^"\\]|\\.)*"/) {
         v = substr($0, RSTART + 14, RLENGTH - 15); gsub(/\\n/, "\n", v); gsub(/\\"/, "\"", v); printf "%s", v
+        next
+      }
+      /"sessionUpdate":"agent_message_chunk"/ && match($0, /"text":"([^"\\]|\\.)*"/) {
+        v = substr($0, RSTART + 8, RLENGTH - 9); gsub(/\\n/, "\n", v); gsub(/\\"/, "\"", v); printf "%s", v
       }
       END { print "" }'
     tail -c 262144 "$1/out" 2>/dev/null | grep -v '^[[:space:]]*{'
@@ -1322,6 +1570,7 @@ proc_leaves() { # <pid>  → "경과초<TAB>명령" 줄들
 #   claude  stream-json, 그리고 claude 의 대화 기록: "role":"assistant" 줄의 tool_use / text
 #   codex   --json: command_execution 시작, agent_message, file_change
 #   agy     stream-json: step_update 의 도구 단계 (ACTIVE)
+#   kiro-cli stream-json: tool_call 의 제목과 첫 입력값 (답은 조각으로 와서 풀지 않음)
 # 모르는 형식이면 아무것도 내지 않습니다 (부르는 쪽이 마지막 줄들을 보여 줍니다).
 activity_lines() {
   LC_ALL=C awk '
@@ -1361,6 +1610,7 @@ activity_lines() {
     /"event":"step_update"/ && /"step_type":"tool"/ && /"state":"ACTIVE"/ {
       print str($0, "tool_name") "\t" first_str($0, "parameters"); next
     }
+    /"sessionUpdate":"tool_call"/ { print str($0, "title") "\t" first_str($0, "rawInput"); next }
   '
 }
 
@@ -1636,9 +1886,9 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
     # 모르는 형식(텍스트, 빌드 로그 등)은 마지막 줄들을 그대로 보여 줍니다.
     # 끝난 워커의 출력이 JSON 한 덩어리면 날것 대신 아래에서 답만 보여 줍니다.
     pk_lab='최근 출력'
-    # claude·codex·agy 의 JSON 사건은 위에서 풀었으니, 남은 JSON 줄(thread.started 등)은 날것으로 보이지 않습니다.
+    # claude·codex·agy·kiro-cli 의 JSON 사건은 위에서 풀었으니, 남은 JSON 줄(thread.started 등)은 날것으로 보이지 않습니다.
     pk_json='^$'
-    case "$pk_agent" in claude | codex | agy) pk_json='^[[:space:]]*{' ;; esac
+    case "$pk_agent" in claude | codex | agy | kiro-cli) pk_json='^[[:space:]]*{' ;; esac
     pk_tl=$(tail -c 65536 "$pk_d/out" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | grep -v "$pk_json" | tail -"$pk_n")
     [ "$pk_st" != running ] && [ -n "$(printf '%s' "$pk_tl" | tail -1 | grep '^[[:space:]]*{')" ] && pk_tl=''
     if [ -z "$pk_tl" ]; then
@@ -1672,9 +1922,10 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
     say "$(peek_label 'worktree')$pk_sum   $(tilde "$pk_wt")"
   fi
   if [ "$pk_brief" -eq 0 ] && [ "$pk_st" != running ]; then
-    # JSON 결과면 최종 답을 한 줄로 (claude result / agy response / codex 마지막 text)
+    # JSON 결과면 최종 답을 한 줄로 (claude result / agy response / kiro-cli finalText / codex 마지막 text)
+    # kiro-cli 도 text 가 있지만 답의 마지막 조각이라 finalText 를 먼저 봅니다.
     pk_ans=''
-    for pk_k in result response text; do
+    for pk_k in result response finalText text; do
       pk_ans=$(json_str "$pk_k" < "$pk_d/out" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
       [ -n "$pk_ans" ] && break
     done
@@ -1792,6 +2043,7 @@ agent_hint() { # <에이전트>  설치 안내 한 줄
     agy)    printf '%s' 'curl -fsSL https://antigravity.google/cli/install.sh | bash   (로그인: agy 를 한 번 실행)' ;;
     devin)  printf '%s' 'Devin 공식 설치 프로그램   (로그인: devin auth login)' ;;
     hermes) printf '%s' 'https://hermes-agent.nousresearch.com 의 설치 안내' ;;
+    kiro-cli) printf '%s' 'Kiro 공식 설치 안내 (kiro.dev)   (로그인: kiro-cli login)' ;;
   esac
 }
 
@@ -2005,9 +2257,11 @@ cmd_setup() {
   [ "$st_tty" -eq 1 ] || say "(터미널이 아니라 점검만 하고 아무것도 바꾸지 않습니다)"
 
   say ""
-  say "[1/5] 권한 옵션"
+  say "[1/5] 기본 옵션 (권한, 모델)"
   if [ -f "$AW_DEFAULTS" ]; then
     say "  켜져 있음: $(tilde "$AW_DEFAULTS")   (내용: aw defaults)"
+    st_miss=$(defaults_missing | grep -c . || true)
+    [ "$st_miss" -gt 0 ] && say "  권장값 중 이 파일에 없는 줄이 ${st_miss}개 있습니다. 보기: aw defaults"
   else
     say "  꺼져 있음. 무인 워커가 승인 프롬프트에서 멈추거나 조용히 거부될 수 있습니다."
     say "  켜면 워커가 승인 없이 파일을 고치고 명령을 실행합니다 (자세히: aw help defaults)."
@@ -2033,7 +2287,8 @@ cmd_setup() {
 
   say ""
   say "[3/5] 에이전트 CLI"
-  for st_a in $(skill_agents); do
+  # kiro-cli 는 스킬을 읽는 폴더를 확인하지 않아 스킬 목록(skill_agents)에는 없습니다.
+  for st_a in $(skill_agents) kiro-cli; do
     if command -v "$st_a" >/dev/null 2>&1; then
       say "  $(padw 10 "$st_a")있음  $(tilde "$(command -v "$st_a")")"
     else
@@ -2087,7 +2342,7 @@ skill_text() {
   sed "s/@AW_VERSION@/$AW_VERSION/" <<'SKILL'
 ---
 name: agent-worker
-description: aw(agent-worker)로 다른 CLI 코딩 에이전트(claude, codex, agy/Gemini, devin)나 아무 명령을 백그라운드 워커로 띄우고, 기다리고, 결과를 꺼내고, 대화를 이어 갑니다. 다른 모델에게 작업·검토·두 번째 의견을 맡길 때, 긴 작업을 떼어 놓거나 여러 개를 병렬로 돌릴 때, git worktree 로 격리해 돌릴 때, 앞서 띄운 워커의 대화를 이어 갈 때 씁니다. Use when asked to delegate a task to another coding agent or model (Codex, Claude Code, Gemini/Antigravity, Devin), run agents in the background or in parallel, get a second opinion or cross-model review, or resume an aw worker.
+description: aw(agent-worker)로 다른 CLI 코딩 에이전트(claude, codex, agy/Gemini, devin, kiro-cli)나 아무 명령을 백그라운드 워커로 띄우고, 기다리고, 결과를 꺼내고, 대화를 이어 갑니다. 다른 모델에게 작업·검토·두 번째 의견을 맡길 때, 긴 작업을 떼어 놓거나 여러 개를 병렬로 돌릴 때, git worktree 로 격리해 돌릴 때, 앞서 띄운 워커의 대화를 이어 갈 때 씁니다. Use when asked to delegate a task to another coding agent or model (Codex, Claude Code, Gemini/Antigravity, Devin, Kiro), run agents in the background or in parallel, get a second opinion or cross-model review, or resume an aw worker.
 license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
@@ -2100,7 +2355,7 @@ metadata:
 
 `aw` 는 아무 CLI 명령이나 백그라운드 워커로 띄우고 상태·출력·종료 코드를 추적합니다.
 명령은 그대로 넘기므로 에이전트를 가리지 않습니다. 이 문서는 요점만 담았고,
-자세한 호출법과 함정은 도구 안에 있습니다 (`aw help`, `aw help agents`).
+자세한 호출법과 주의할 점은 도구 안에 있습니다 (`aw help`, `aw help agents`).
 
 ## 쓸 때와 안 쓸 때
 
@@ -2116,7 +2371,7 @@ metadata:
 
 ```sh
 aw version     # 없으면 사용자에게 알리고 설치할지 묻습니다 (아래 한 줄)
-aw defaults    # 권한 우회 옵션이 켜져 있는지
+aw defaults    # 권한 우회 옵션과 기본 모델이 켜져 있는지
 ```
 
 설치: `curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/install.sh | sh`
@@ -2181,7 +2436,7 @@ aw rm review
    (가정을 적고 계속할지, 멈추고 보고할지).
 3. **`-w` 로 격리하고**, 진행 상황과 결론을 worktree 안의 파일 (예: `PROGRESS.md`, `REPORT.md`) 에 적게 합니다.
    끝나기 전에도 그 파일로 어디까지 했는지 볼 수 있습니다.
-4. **도중 진행은 `aw peek <이름>` 으로** 봅니다. 위 표대로 claude·agy 를 `stream-json` 으로 띄우면 출력에
+4. **도중 진행은 `aw peek <이름>` 으로** 봅니다. 위 표대로 claude·agy·kiro-cli 를 `stream-json` 으로 띄우면 출력에
    바로 쌓입니다. `json` 으로 띄웠다면 claude 는 대화 기록에서 읽고, agy 는 지금 도는 명령만 보입니다.
 
    ```sh
@@ -2200,17 +2455,23 @@ aw rm review
 | --- | --- | --- |
 | claude | `aw run -n c -- claude -p --output-format stream-json --verbose "작업"` | `aw result c --field result` |
 | codex | `aw run -n x -- codex exec --json "작업"` | `aw result x --field text` |
-| agy (Gemini) | `aw run -n a -- agy --output-format stream-json --model gemini-3.8-flash-high -p='작업'` | `aw result a --field response` |
-| devin | `aw run -n d -- devin -p "작업" --model gemini-3-8-flash-high` | `aw result d` (텍스트) |
+| agy (Gemini) | `aw run -n a -- agy --output-format stream-json -p='작업'` | `aw result a --field response` |
+| devin | `aw run -n d -- devin -p "작업"` | `aw result d` (텍스트) |
+| kiro-cli | `aw run -n k -- kiro-cli chat --output-format stream-json "작업"` | `aw result k --field finalText` |
 
-- **claude·agy 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
+- **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: agy
+  `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
+  바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
+- **claude·agy·kiro-cli 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
   `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.
-- **claude·codex 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.
+- **claude·codex·kiro-cli 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.
 - **codex 는 git 저장소 밖에서** `--skip-git-repo-check` 가 필요합니다 (프롬프트 앞에):
   `codex exec --json --skip-git-repo-check "작업"`
 - **agy** 는 `-p='작업'` 처럼 붙여 씁니다. `-p` 가 바로 다음 토큰을 프롬프트로 먹습니다.
 - **devin** 은 프롬프트가 `-p` 바로 뒤에 와야 합니다.
-- 모델 목록: `agy models`, `devin models list`. 함정 전체: `aw help agents`.
+- **kiro-cli** 는 `chat` 을 꼭 붙입니다. `--trust-all-tools` 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로
+  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다.
+- 모델 목록: `agy models`, `devin models list`, `kiro-cli chat --list-models`. 주의할 점 전체: `aw help agents`.
 
 ## 긴 프롬프트
 
@@ -2219,15 +2480,16 @@ aw rm review
 ```sh
 aw run -n c -f task.md -- claude -p --output-format stream-json --verbose
 aw run -n x -f task.md -- codex exec --json -
-aw run -n a -f task.md -- agy --output-format stream-json --model gemini-3.8-flash-high   # -p 빼기
-aw run -n d -- devin -p --prompt-file task.md --model gemini-3-8-flash-high        # stdin 안 받음
+aw run -n a -f task.md -- agy --output-format stream-json                         # -p 빼기
+aw run -n d -- devin -p --prompt-file task.md                                    # stdin 안 받음
+aw run -n k -f task.md -- kiro-cli chat --output-format stream-json
 ```
 
 ## 파일을 고치는 작업
 
 - `aw defaults` 가 켜져 있으면 워커는 **승인 없이** 파일을 고치고 명령을 실행합니다
   (claude `bypassPermissions`, agy `--dangerously-skip-permissions`, devin `dangerous`,
-  codex `workspace-write`). 붙은 옵션은 `aw run` 출력에 찍힙니다.
+  codex `workspace-write`, kiro-cli `--trust-all-tools`). 붙은 옵션은 `aw run` 출력에 찍힙니다.
 - git 저장소에서 파일을 고칠 작업은 **`-w <새 브랜치>` 로 worktree 를 떼어** 돌립니다.
   워커 여럿이 같은 저장소를 고칠 때는 각자 `-w` 를 씁니다.
 
@@ -2255,7 +2517,7 @@ aw resume review-r1 -- '테스트도 추가해줘'             # → review-r2
 
 ```sh
 aw run -n rv-codex -- codex exec --json "이 설계를 검토해줘: ..."
-aw run -n rv-gemini -- agy --output-format stream-json --model gemini-3.8-flash-high -p='이 설계를 검토해줘: ...'
+aw run -n rv-gemini -- agy --output-format stream-json -p='이 설계를 검토해줘: ...'
 aw wait rv-codex rv-gemini --timeout 100
 ```
 
@@ -2268,8 +2530,8 @@ aw wait rv-codex rv-gemini --timeout 100
 
 ## 더 보기
 
-`aw help` (전체 명령), `aw help agents` (에이전트별 함정), `aw help limits` (프롬프트 크기와
-컨텍스트 한도), `aw help defaults` (권한 옵션), `aw help files` (워커 기록 구조),
+`aw help` (전체 명령), `aw help agents` (에이전트별 주의할 점), `aw help limits` (프롬프트 크기와
+컨텍스트 한도), `aw help defaults` (권한·모델 옵션), `aw help files` (워커 기록 구조),
 `aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.
 SKILL

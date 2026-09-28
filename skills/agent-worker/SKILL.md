@@ -1,11 +1,11 @@
 ---
 name: agent-worker
-description: aw(agent-worker)로 다른 CLI 코딩 에이전트(claude, codex, agy/Gemini, devin)나 아무 명령을 백그라운드 워커로 띄우고, 기다리고, 결과를 꺼내고, 대화를 이어 갑니다. 다른 모델에게 작업·검토·두 번째 의견을 맡길 때, 긴 작업을 떼어 놓거나 여러 개를 병렬로 돌릴 때, git worktree 로 격리해 돌릴 때, 앞서 띄운 워커의 대화를 이어 갈 때 씁니다. Use when asked to delegate a task to another coding agent or model (Codex, Claude Code, Gemini/Antigravity, Devin), run agents in the background or in parallel, get a second opinion or cross-model review, or resume an aw worker.
+description: aw(agent-worker)로 다른 CLI 코딩 에이전트(claude, codex, agy/Gemini, devin, kiro-cli)나 아무 명령을 백그라운드 워커로 띄우고, 기다리고, 결과를 꺼내고, 대화를 이어 갑니다. 다른 모델에게 작업·검토·두 번째 의견을 맡길 때, 긴 작업을 떼어 놓거나 여러 개를 병렬로 돌릴 때, git worktree 로 격리해 돌릴 때, 앞서 띄운 워커의 대화를 이어 갈 때 씁니다. Use when asked to delegate a task to another coding agent or model (Codex, Claude Code, Gemini/Antigravity, Devin, Kiro), run agents in the background or in parallel, get a second opinion or cross-model review, or resume an aw worker.
 license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.11.1"
+  version: "0.12.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -13,7 +13,7 @@ metadata:
 
 `aw` 는 아무 CLI 명령이나 백그라운드 워커로 띄우고 상태·출력·종료 코드를 추적합니다.
 명령은 그대로 넘기므로 에이전트를 가리지 않습니다. 이 문서는 요점만 담았고,
-자세한 호출법과 함정은 도구 안에 있습니다 (`aw help`, `aw help agents`).
+자세한 호출법과 주의할 점은 도구 안에 있습니다 (`aw help`, `aw help agents`).
 
 ## 쓸 때와 안 쓸 때
 
@@ -29,7 +29,7 @@ metadata:
 
 ```sh
 aw version     # 없으면 사용자에게 알리고 설치할지 묻습니다 (아래 한 줄)
-aw defaults    # 권한 우회 옵션이 켜져 있는지
+aw defaults    # 권한 우회 옵션과 기본 모델이 켜져 있는지
 ```
 
 설치: `curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/install.sh | sh`
@@ -94,7 +94,7 @@ aw rm review
    (가정을 적고 계속할지, 멈추고 보고할지).
 3. **`-w` 로 격리하고**, 진행 상황과 결론을 worktree 안의 파일 (예: `PROGRESS.md`, `REPORT.md`) 에 적게 합니다.
    끝나기 전에도 그 파일로 어디까지 했는지 볼 수 있습니다.
-4. **도중 진행은 `aw peek <이름>` 으로** 봅니다. 위 표대로 claude·agy 를 `stream-json` 으로 띄우면 출력에
+4. **도중 진행은 `aw peek <이름>` 으로** 봅니다. 위 표대로 claude·agy·kiro-cli 를 `stream-json` 으로 띄우면 출력에
    바로 쌓입니다. `json` 으로 띄웠다면 claude 는 대화 기록에서 읽고, agy 는 지금 도는 명령만 보입니다.
 
    ```sh
@@ -113,17 +113,23 @@ aw rm review
 | --- | --- | --- |
 | claude | `aw run -n c -- claude -p --output-format stream-json --verbose "작업"` | `aw result c --field result` |
 | codex | `aw run -n x -- codex exec --json "작업"` | `aw result x --field text` |
-| agy (Gemini) | `aw run -n a -- agy --output-format stream-json --model gemini-3.8-flash-high -p='작업'` | `aw result a --field response` |
-| devin | `aw run -n d -- devin -p "작업" --model gemini-3-8-flash-high` | `aw result d` (텍스트) |
+| agy (Gemini) | `aw run -n a -- agy --output-format stream-json -p='작업'` | `aw result a --field response` |
+| devin | `aw run -n d -- devin -p "작업"` | `aw result d` (텍스트) |
+| kiro-cli | `aw run -n k -- kiro-cli chat --output-format stream-json "작업"` | `aw result k --field finalText` |
 
-- **claude·agy 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
+- **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: agy
+  `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
+  바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
+- **claude·agy·kiro-cli 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
   `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.
-- **claude·codex 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.
+- **claude·codex·kiro-cli 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.
 - **codex 는 git 저장소 밖에서** `--skip-git-repo-check` 가 필요합니다 (프롬프트 앞에):
   `codex exec --json --skip-git-repo-check "작업"`
 - **agy** 는 `-p='작업'` 처럼 붙여 씁니다. `-p` 가 바로 다음 토큰을 프롬프트로 먹습니다.
 - **devin** 은 프롬프트가 `-p` 바로 뒤에 와야 합니다.
-- 모델 목록: `agy models`, `devin models list`. 함정 전체: `aw help agents`.
+- **kiro-cli** 는 `chat` 을 꼭 붙입니다. `--trust-all-tools` 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로
+  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다.
+- 모델 목록: `agy models`, `devin models list`, `kiro-cli chat --list-models`. 주의할 점 전체: `aw help agents`.
 
 ## 긴 프롬프트
 
@@ -132,15 +138,16 @@ aw rm review
 ```sh
 aw run -n c -f task.md -- claude -p --output-format stream-json --verbose
 aw run -n x -f task.md -- codex exec --json -
-aw run -n a -f task.md -- agy --output-format stream-json --model gemini-3.8-flash-high   # -p 빼기
-aw run -n d -- devin -p --prompt-file task.md --model gemini-3-8-flash-high        # stdin 안 받음
+aw run -n a -f task.md -- agy --output-format stream-json                         # -p 빼기
+aw run -n d -- devin -p --prompt-file task.md                                    # stdin 안 받음
+aw run -n k -f task.md -- kiro-cli chat --output-format stream-json
 ```
 
 ## 파일을 고치는 작업
 
 - `aw defaults` 가 켜져 있으면 워커는 **승인 없이** 파일을 고치고 명령을 실행합니다
   (claude `bypassPermissions`, agy `--dangerously-skip-permissions`, devin `dangerous`,
-  codex `workspace-write`). 붙은 옵션은 `aw run` 출력에 찍힙니다.
+  codex `workspace-write`, kiro-cli `--trust-all-tools`). 붙은 옵션은 `aw run` 출력에 찍힙니다.
 - git 저장소에서 파일을 고칠 작업은 **`-w <새 브랜치>` 로 worktree 를 떼어** 돌립니다.
   워커 여럿이 같은 저장소를 고칠 때는 각자 `-w` 를 씁니다.
 
@@ -168,7 +175,7 @@ aw resume review-r1 -- '테스트도 추가해줘'             # → review-r2
 
 ```sh
 aw run -n rv-codex -- codex exec --json "이 설계를 검토해줘: ..."
-aw run -n rv-gemini -- agy --output-format stream-json --model gemini-3.8-flash-high -p='이 설계를 검토해줘: ...'
+aw run -n rv-gemini -- agy --output-format stream-json -p='이 설계를 검토해줘: ...'
 aw wait rv-codex rv-gemini --timeout 100
 ```
 
@@ -181,7 +188,7 @@ aw wait rv-codex rv-gemini --timeout 100
 
 ## 더 보기
 
-`aw help` (전체 명령), `aw help agents` (에이전트별 함정), `aw help limits` (프롬프트 크기와
-컨텍스트 한도), `aw help defaults` (권한 옵션), `aw help files` (워커 기록 구조),
+`aw help` (전체 명령), `aw help agents` (에이전트별 주의할 점), `aw help limits` (프롬프트 크기와
+컨텍스트 한도), `aw help defaults` (권한·모델 옵션), `aw help files` (워커 기록 구조),
 `aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.

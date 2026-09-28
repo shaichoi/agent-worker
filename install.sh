@@ -20,7 +20,7 @@ usage() {
 사용법: ./install.sh [옵션]
 
   --prefix DIR   설치 위치 (기본: ~/.local/bin)
-  --no-defaults  무인 실행용 권한 옵션을 켜지 않음 (아래 설명 참고)
+  --no-defaults  무인 실행용 기본 옵션(권한 우회, 기본 모델)을 켜지 않음
   --no-brief     워커 지시문(예상 소요 시간 먼저 등)을 켜지 않음
   --skill        찾은 에이전트 전부에 스킬을 묻지 않고 넣음
   --skill=A,B    고른 에이전트에만 넣음 (claude, codex, devin, agy, hermes)
@@ -91,7 +91,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
   say "  완료: $("$PREFIX/aw" version)"
 fi
 
-say "== 3. 무인 실행용 권한 옵션"
+say "== 3. 무인 실행용 기본 옵션 (권한, 모델)"
 if [ "$WITH_DEFAULTS" -eq 0 ]; then
   say "  건너뜀 (--no-defaults). 나중에 켜려면: aw defaults --init"
 elif [ "$DRY_RUN" -eq 1 ]; then
@@ -165,6 +165,6 @@ cat <<DONE
 
 도움말: aw help          에이전트별 호출법: aw help agents
 설치 점검: aw setup      에이전트 스킬: aw skill
-권한 옵션 확인/끄기: aw defaults   지시문 확인/고치기: aw brief
+기본 옵션 확인/바꾸기: aw defaults   지시문 확인/고치기: aw brief
 제거: ./uninstall.sh   (워커 기록은 남습니다)
 DONE

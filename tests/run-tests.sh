@@ -15,6 +15,8 @@ ok()    { PASS=$((PASS+1)); printf '  \033[32mOK\033[0m   %s\n' "$1"; }
 ng()    { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
 head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 check() { if [ "$2" = "$3" ]; then ok "$1"; else ng "$1 (기대: [$2] 실제: [$3])"; fi; }
+has() { case "$2" in *"$3"*) ok "$1" ;; *) ng "$1 (출력: $(printf '%s' "$2" | head -12 | tr '\n' '|'))" ;; esac; }
+hasnt() { case "$2" in *"$3"*) ng "$1" ;; *) ok "$1" ;; esac; }
 
 TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/aw-test.XXXXXX")
 trap 'rm -rf "$TMPROOT"' EXIT
@@ -232,7 +234,7 @@ case "$("$AW" contexts)" in *devin*262000*) ok "aw contexts 가 표를 보여줌
 head_ "12. 에이전트별 기본 옵션 (옵트인)"
 DSTUB="$TMPROOT/dstub"
 mkdir -p "$DSTUB"
-for n in agy claude devin myagent; do printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$DSTUB/$n"; chmod +x "$DSTUB/$n"; done
+for n in agy claude devin kiro-cli myagent; do printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$DSTUB/$n"; chmod +x "$DSTUB/$n"; done
 PATH="$DSTUB:$PATH"; export PATH
 AW_DEFAULTS="$TMPROOT/defaults"; export AW_DEFAULTS
 rm -f "$AW_DEFAULTS"
@@ -255,7 +257,39 @@ if grep -q 'myagent --keep' "$AW_DEFAULTS"; then ng "--force 인데 안 덮어�
 out=$("$AW" run -n def-agy -- agy -p=질문 2>&1)
 case "$out" in *"기본 옵션이 붙었습니다"*) ok "기본 옵션을 붙였다고 알려 줌" ;; *) ng "알림 없음" ;; esac
 "$AW" wait def-agy >/dev/null 2>&1
-check "agy 에 권한 우회가 붙음" "$(printf -- '-p=질문\n--dangerously-skip-permissions')" "$("$AW" result def-agy)"
+check "agy 에 권한 우회와 기본 모델이 붙음 (줄마다 한 묶음)" \
+  "$(printf -- '-p=질문\n--dangerously-skip-permissions\n--model\ngemini-3.8-flash\n--effort\nhigh')" "$("$AW" result def-agy)"
+# 모델을 직접 고르면 모델 줄만 빠지고 권한 줄은 남습니다
+"$AW" run -n def-agy-model -- agy -p=질문 --model gemini-3.1-pro-high >/dev/null 2>&1
+"$AW" wait def-agy-model >/dev/null 2>&1
+check "--model 을 직접 주면 모델 줄만 빠짐" \
+  "$(printf -- '-p=질문\n--model\ngemini-3.1-pro-high\n--dangerously-skip-permissions')" "$("$AW" result def-agy-model)"
+# 첫 옵션이 아니어도 겹치면 그 줄이 빠집니다. agy 는 gemini-3.8-flash-high 와 --effort low 가 부딪칩니다 (실측).
+"$AW" run -n def-agy-effort -- agy -p=질문 --effort=low >/dev/null 2>&1
+"$AW" wait def-agy-effort >/dev/null 2>&1
+check "줄의 둘째 옵션(--effort=값)을 직접 줘도 그 줄이 빠짐" \
+  "$(printf -- '-p=질문\n--effort=low\n--dangerously-skip-permissions')" "$("$AW" result def-agy-effort)"
+# 프롬프트에 옵션 이름이 들어 있어도 옵션으로 치지 않습니다
+"$AW" run -n def-agy-prompt -- agy '-p=--model 을 설명해줘' '--model 뒤에 공백' >/dev/null 2>&1
+"$AW" wait def-agy-prompt >/dev/null 2>&1
+check "프롬프트 속 옵션 이름은 옵션으로 치지 않음" \
+  "$(printf -- '-p=--model 을 설명해줘\n--model 뒤에 공백\n--dangerously-skip-permissions\n--model\ngemini-3.8-flash\n--effort\nhigh')" \
+  "$("$AW" result def-agy-prompt)"
+
+# kiro-cli: 권한, 모델, 엔진이 따로 붙습니다. 기본 엔진(v2)은 --model 을 무시해서 v3 가 필요합니다 (실측).
+"$AW" run -n def-kiro -- kiro-cli chat 질문 >/dev/null 2>&1
+"$AW" wait def-kiro >/dev/null 2>&1
+check "kiro-cli 에 권한, 모델, 엔진이 붙음" \
+  "$(printf -- 'chat\n질문\n--trust-all-tools\n--model\nclaude-opus-5.5\n--agent-engine\nv3')" "$("$AW" result def-kiro)"
+# --v2 는 --agent-engine 과 같이 주면 kiro-cli 가 오류를 냅니다 (실측). 같은 옵션으로 칩니다.
+"$AW" run -n def-kiro-v2 -- kiro-cli chat --v2 -a 질문 >/dev/null 2>&1
+"$AW" wait def-kiro-v2 >/dev/null 2>&1
+check "kiro-cli: --v2 면 엔진 줄, -a 면 권한 줄이 빠짐" \
+  "$(printf -- 'chat\n--v2\n-a\n질문\n--model\nclaude-opus-5.5')" "$("$AW" result def-kiro-v2)"
+"$AW" run -n def-kiro-m -- kiro-cli chat --model=claude-sonnet-5 질문 >/dev/null 2>&1
+"$AW" wait def-kiro-m >/dev/null 2>&1
+check "kiro-cli: 모델을 직접 줘도 엔진 줄은 남음" \
+  "$(printf -- 'chat\n--model=claude-sonnet-5\n질문\n--trust-all-tools\n--agent-engine\nv3')" "$("$AW" result def-kiro-m)"
 
 "$AW" run -n def-claude -- claude -p 질문 >/dev/null 2>&1
 "$AW" wait def-claude >/dev/null 2>&1
@@ -264,11 +298,15 @@ check "값이 딸린 옵션도 온전히 붙음" "$(printf -- '-p\n질문\n--per
 # -w 가 만드는 worktree 는 실행 시점에 생기는 경로라 미리 신뢰 등록을 할 수 없습니다.
 "$AW" run -n def-devin -- devin -p 질문 >/dev/null 2>&1
 "$AW" wait def-devin >/dev/null 2>&1
-check "devin 에 신뢰 검사 끄기까지 붙음" "$(printf -- '-p\n질문\n--permission-mode\ndangerous\n--respect-workspace-trust\nfalse')" "$("$AW" result def-devin)"
-# 줄 단위 판단이라, 그 줄의 첫 옵션을 직접 주면 줄 전체가 빠집니다 (문서화된 함정).
+check "devin 에 신뢰 검사 끄기와 기본 모델(SWE-2)까지 붙음" "$(printf -- '-p\n질문\n--permission-mode\ndangerous\n--respect-workspace-trust\nfalse\n--model\nswe-2-max')" "$("$AW" result def-devin)"
+# 줄 단위 판단이라, 그 줄의 첫 옵션을 직접 주면 줄 전체가 빠집니다 (문서화된 주의할 점).
 "$AW" run -n def-devin-own -- devin -p 질문 --permission-mode smart >/dev/null 2>&1
 "$AW" wait def-devin-own >/dev/null 2>&1
-check "첫 옵션을 직접 주면 그 줄이 통째로 빠짐" "$(printf -- '-p\n질문\n--permission-mode\nsmart')" "$("$AW" result def-devin-own)"
+check "첫 옵션을 직접 주면 그 줄이 통째로 빠짐" "$(printf -- '-p\n질문\n--permission-mode\nsmart\n--model\nswe-2-max')" "$("$AW" result def-devin-own)"
+"$AW" run -n def-devin-model -- devin -p 질문 --model claude-opus-5-5-high >/dev/null 2>&1
+"$AW" wait def-devin-model >/dev/null 2>&1
+check "devin 에 --model 을 직접 주면 SWE-2 는 안 붙음" \
+  "$(printf -- '-p\n질문\n--model\nclaude-opus-5-5-high\n--permission-mode\ndangerous\n--respect-workspace-trust\nfalse')" "$("$AW" result def-devin-model)"
 
 "$AW" run -n def-user -- claude -p 질문 --permission-mode acceptEdits >/dev/null 2>&1
 "$AW" wait def-user >/dev/null 2>&1
@@ -284,6 +322,62 @@ printf 'myagent --yolo --quiet\n' >> "$AW_DEFAULTS"
 check "사용자가 새 에이전트를 추가할 수 있음" "$(printf '작업\n--yolo\n--quiet')" "$("$AW" result def-custom)"
 case "$("$AW" defaults)" in *dangerously-skip-permissions*) ok "aw defaults 가 적용 중인 표를 보여줌" ;; *) ng "aw defaults 출력 이상" ;; esac
 case "$(cat "$AW_DEFAULTS")" in *"--respect-workspace-trust false"*) ok "권장값에 devin 신뢰 검사 끄기가 들어 있음" ;; *) ng "권장값에 신뢰 검사 옵션 없음" ;; esac
+# 같은 옵션을 여러 줄에 적으면 앞 줄만 붙습니다 (앞 줄이 붙인 것도 이미 있는 것으로 봄)
+printf 'myagent --dup 1\nmyagent --dup 2\n' >> "$AW_DEFAULTS"
+"$AW" run -n def-dup -- myagent 작업 >/dev/null 2>&1
+"$AW" wait def-dup >/dev/null 2>&1
+check "같은 옵션이 여러 줄이면 앞 줄만" "$(printf '작업\n--yolo\n--quiet\n--dup\n1')" "$("$AW" result def-dup)"
+
+# 읽기: aw defaults get
+"$AW" defaults --init --force >/dev/null 2>&1
+check "get <명령>: 묶음을 한 줄에 하나씩" \
+  "$(printf -- '--dangerously-skip-permissions\n--model gemini-3.8-flash --effort high')" "$("$AW" defaults get agy)"
+check "get <명령> <옵션>: 그 옵션이 든 묶음만" "--model claude-opus-5.5" "$("$AW" defaults get kiro-cli --model)"
+check "get <명령> <별칭>: kiro-cli 의 --v3 는 --agent-engine 과 같은 것" "--agent-engine v3" "$("$AW" defaults get kiro-cli --v3)"
+case "$("$AW" defaults get)" in "agy --dangerously-skip-permissions"*) ok "get: 주석 없이 적용될 줄 전부" ;; *) ng "get 출력 이상" ;; esac
+check "get: 없는 명령은 빈 출력" "" "$("$AW" defaults get nobody)"
+
+# 바꾸기: aw defaults set / unset
+out=$("$AW" defaults set agy --model gemini-3.1-pro-high)
+has "set: 바꾼 줄을 보여 줌" "$out" "- agy --model gemini-3.8-flash --effort high"
+check "set: 옵션이 겹치는 줄을 제자리에서 바꿈" \
+  "$(printf -- '--dangerously-skip-permissions\n--model gemini-3.1-pro-high')" "$("$AW" defaults get agy)"
+if grep -q '^# 모델:' "$AW_DEFAULTS"; then ok "set: 주석은 그대로"; else ng "set 이 주석을 지움"; fi
+"$AW" run -n def-set -- agy -p=질문 >/dev/null 2>&1
+"$AW" wait def-set >/dev/null 2>&1
+check "set 한 값이 다음 워커에 붙음" \
+  "$(printf -- '-p=질문\n--dangerously-skip-permissions\n--model\ngemini-3.1-pro-high')" "$("$AW" result def-set)"
+has "set: 같은 줄이면 그대로라고 알림" "$("$AW" defaults set agy --model gemini-3.1-pro-high)" "그대로"
+hasnt "값만 바꾼 줄은 빠진 권장값으로 안 봄" "$("$AW" defaults | sed -n '/권장값 중/,$p')" "agy --model"
+"$AW" defaults set kiro-cli --v2 >/dev/null 2>&1
+check "set: 별칭(--v2)도 겹치는 줄(--agent-engine v3)을 바꿈" "--v2" "$("$AW" defaults get kiro-cli --agent-engine)"
+hasnt "별칭(--v2)으로 바꾼 줄도 빠진 권장값으로 안 봄" "$("$AW" defaults | sed -n '/권장값 중/,$p')" "kiro-cli --agent-engine"
+"$AW" defaults set myagent --new 1 >/dev/null 2>&1
+check "set: 겹치는 줄이 없으면 끝에 넣음" "myagent --new 1" "$(tail -1 "$AW_DEFAULTS")"
+printf 'myagent --x 1\nmyagent --y 2\n' >> "$AW_DEFAULTS"
+"$AW" defaults set myagent --x 9 --y 9 >/dev/null 2>&1
+check "set: 겹치는 줄이 여럿이면 하나로" "$(printf -- '--new 1\n--x 9 --y 9')" "$("$AW" defaults get myagent)"
+cp "$AW_DEFAULTS" "$TMPROOT/defaults.before"
+if "$AW" defaults set agy --model '공백 있는 값' >/dev/null 2>&1; then ng "set 이 공백 든 값을 받음"; else ok "set: 공백 든 값은 거절"; fi
+if "$AW" defaults set agy model >/dev/null 2>&1; then ng "set 이 - 없는 옵션을 받음"; else ok "set: 첫 옵션이 - 로 시작하지 않으면 거절"; fi
+if [ "$(cat "$AW_DEFAULTS")" = "$(cat "$TMPROOT/defaults.before")" ]; then ok "거절하면 파일을 안 건드림"; else ng "거절했는데 파일이 바뀜"; fi
+"$AW" defaults unset agy --model >/dev/null 2>&1
+check "unset <명령> <옵션>: 그 줄만 뺌" "--dangerously-skip-permissions" "$("$AW" defaults get agy)"
+"$AW" defaults unset kiro-cli >/dev/null 2>&1
+check "unset <명령>: 그 명령의 줄 전부" "" "$("$AW" defaults get kiro-cli)"
+has "unset: 뺄 게 없으면 알림" "$("$AW" defaults unset kiro-cli)" "뺄 줄이 없습니다"
+# 빠진 권장값을 알려 줌 (예전에 만든 파일에 새 권장값을 알리려고)
+out=$("$AW" defaults)
+has "aw defaults 가 빠진 권장값을 알려 줌" "$out" "권장값 중 이 파일에 없는 줄"
+has "빠진 권장값: kiro-cli" "$out" "  kiro-cli --model claude-opus-5.5"
+printf '# agy --model gemini-3.8-flash --effort high\n' >> "$AW_DEFAULTS"
+hasnt "주석 처리한 권장 줄은 빠진 것으로 안 봄 (사용자가 끈 것)" "$("$AW" defaults | sed -n '/권장값 중/,$p')" "agy --model"
+"$AW" defaults --init --force >/dev/null 2>&1
+hasnt "권장값 그대로면 빠진 줄 안내가 없음" "$("$AW" defaults)" "권장값 중 이 파일에 없는 줄"
+# 파일이 없을 때 set 은 권장값(권한 우회)을 켜지 않고 그 줄만 둡니다
+rm -f "$AW_DEFAULTS"
+"$AW" defaults set agy --model gemini-3.8-flash --effort low >/dev/null 2>&1
+check "파일이 없으면 set 한 줄만 (권한 우회는 안 켬)" "agy --model gemini-3.8-flash --effort low" "$("$AW" defaults get)"
 "$AW" clean --all >/dev/null 2>&1
 
 # 설치 스크립트가 켜 주는지 / --no-defaults 로 건너뛰는지
@@ -325,12 +419,13 @@ done
 case "$("$AW" wait --help)" in *"3 "*"--idle"*) ok "aw wait --help 에 코드 3 과 --idle" ;; *) ng "aw wait --help 에 코드 3 설명 없음" ;; esac
 case "$("$AW" peek --help)" in *"aw help peek"*) ok "aw peek --help 가 자세한 도움말을 가리킴" ;; *) ng "aw peek --help 에 안내 없음" ;; esac
 case "$("$AW" help agents)" in *codex*agy*|*agy*codex*) ok "agents 주제가 에이전트들을 다룸" ;; *) ng "agents 주제 내용 부족" ;; esac
+case "$("$AW" help agents)" in *"kiro-cli chat"*"--agent-engine v3"*) ok "agents 주제에 kiro-cli 와 엔진 주의할 점" ;; *) ng "agents 주제에 kiro-cli 없음" ;; esac
 if "$AW" help nosuchtopic >/dev/null 2>&1; then ng "없는 주제를 받아들임"; else ok "없는 주제는 0이 아닌 코드"; fi
 if "$AW" run --help >/dev/null 2>&1; then ok "aw run --help"; else ng "aw run --help 실패"; fi
 case "$("$AW" help files)" in *"$AW_HOME"*) ok "files 주제가 실제 경로를 보여줌" ;; *) ng "files 주제 경로 이상" ;; esac
 # 파일로 프롬프트 넣는 법은 에이전트마다 다릅니다. 넷 다 적혀 있어야 합니다.
 lim=$("$AW" help limits)
-for want in claude agy codex devin; do
+for want in claude agy codex devin kiro-cli; do
   case "$lim" in *"$want"*) ok "limits 주제에 $want 파일 입력법 있음" ;; *) ng "limits 주제에 $want 없음" ;; esac
 done
 case "$lim" in *--prompt-file*) ok "devin 은 -f 가 아니라 --prompt-file 이라고 적힘" ;; *) ng "devin 의 --prompt-file 언급 없음" ;; esac
@@ -351,6 +446,8 @@ printf '#!/bin/sh\nprintf "{\\"conversation_id\\":\\"CID1\\",\\"response\\":\\"o
 printf '#!/bin/sh\nprintf "{\\"thread_id\\":\\"TID1\\"}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RSTUB/codex"
 # devin 은 텍스트만 내놓습니다 (세션 ID 를 못 뽑는 쪽)
 printf '#!/bin/sh\necho 텍스트만\nprintf "%%s\\n" "$@" >&2\n' > "$RSTUB/devin"
+# kiro-cli stream-json 은 모든 사건에 sessionId(낙타 표기)를 싣습니다 (실측)
+printf '#!/bin/sh\nprintf "{\\"type\\":\\"metadata\\",\\"data\\":{\\"sessionId\\":\\"KSID1\\"}}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RSTUB/kiro-cli"
 chmod +x "$RSTUB"/*
 PATH="$RSTUB:$PATH"; export PATH
 AW_DEFAULTS="$TMPROOT/rdefaults"; export AW_DEFAULTS
@@ -426,6 +523,29 @@ case "$out" in *"-c"*) ok "devin 은 -c 로 간다고 알려 줌" ;; *) ng "devi
 check "devin: -p 뒤에 프롬프트를 두고 -c 를 붙임" \
   "$(printf -- '-p\n이어서\n-c\n--model\nM')" \
   "$("$AW" errs r-devin-r1)"
+
+# kiro-cli: chat 뒤에 --resume-id 를 붙이고, 맨 끝 프롬프트를 갈아 끼움
+"$AW" run -n r-kiro -- kiro-cli chat --output-format stream-json 원래 >/dev/null 2>&1
+"$AW" wait r-kiro >/dev/null 2>&1
+check "kiro-cli: sessionId 를 세션으로 찾음" KSID1 "$("$AW" list --json | sed -n 's/.*"name":"r-kiro","state":"done","exit":"0",.*"session":"\([^"]*\)".*/\1/p')"
+"$AW" resume r-kiro -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-kiro-r1 >/dev/null 2>&1
+check "kiro-cli: chat --resume-id 를 붙이고 옛 프롬프트를 걷어냄" \
+  "$(printf -- 'chat\n--resume-id\nKSID1\n--output-format\nstream-json\n새프롬프트')" \
+  "$("$AW" errs r-kiro-r1)"
+"$AW" resume r-kiro-r1 -- 세번째 >/dev/null 2>&1
+"$AW" wait r-kiro-r2 >/dev/null 2>&1
+check "kiro-cli: 이어하기를 또 이어해도 --resume-id 가 하나" 1 "$("$AW" errs r-kiro-r2 | grep -c -- '--resume-id')"
+"$AW" run -n r-kiro-f -f "$TMPROOT/rspec.md" -- kiro-cli chat --output-format stream-json >/dev/null 2>&1
+"$AW" wait r-kiro-f >/dev/null 2>&1
+"$AW" resume r-kiro-f -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-kiro-f-r1 >/dev/null 2>&1
+check "kiro-cli: -f 로 돌린 워커는 인자를 안 잃음" \
+  "$(printf -- 'chat\n--resume-id\nKSID1\n--output-format\nstream-json\n새프롬프트')" \
+  "$("$AW" errs r-kiro-f-r1)"
+"$AW" run -n r-kiro-nochat -- kiro-cli --output-format stream-json 질문 >/dev/null 2>&1
+"$AW" wait r-kiro-nochat >/dev/null 2>&1
+if "$AW" resume r-kiro-nochat -- 이어서 >/dev/null 2>&1; then ng "chat 아닌 kiro-cli 를 이어함"; else ok "chat 으로 시작하지 않은 kiro-cli 는 거절"; fi
 
 # 오류 경로
 printf '#!/bin/sh\necho 텍스트만\n' > "$RSTUB/plain"; chmod +x "$RSTUB/plain"
@@ -594,7 +714,7 @@ fi
 head_ "17. 설치 점검 (aw setup)"
 fresh; fake codex
 out=$(env HOME="$IH" PATH="$IH/fakebin:/usr/bin:/bin" AW_DEFAULTS="$IH/defaults" "$AW" setup < /dev/null 2>&1)
-for want in "[1/5] 권한 옵션" "[2/5] 워커 지시문" "[3/5] 에이전트 CLI" "[4/5] 에이전트 스킬" "[5/5] PATH" "아무것도 바꾸지 않습니다"; do
+for want in "[1/5] 기본 옵션" "[2/5] 워커 지시문" "[3/5] 에이전트 CLI" "[4/5] 에이전트 스킬" "[5/5] PATH" "아무것도 바꾸지 않습니다"; do
   case "$out" in *"$want"*) ok "점검 출력에 '$want'" ;; *) ng "점검 출력에 '$want' 없음" ;; esac
 done
 if [ -e "$IH/defaults" ] || [ -e "$IH/.agents" ]; then ng "터미널이 아닌데 무언가를 바꿈"; else ok "터미널이 아니면 아무것도 바꾸지 않음"; fi
@@ -619,8 +739,6 @@ else
 fi
 
 head_ "18. 진행 상황 (aw peek / aw watch)"
-has() { case "$2" in *"$3"*) ok "$1" ;; *) ng "$1 (출력: $(printf '%s' "$2" | head -12 | tr '\n' '|'))" ;; esac; }
-hasnt() { case "$2" in *"$3"*) ng "$1" ;; *) ok "$1" ;; esac; }
 
 # 에이전트는 명령을 따로 떼어 띄웁니다. 프로세스 그룹이 아니라 부모-자식으로 따라가야 보입니다.
 "$AW" run -n pk-tree -- sh -c 'sh -c "sleep 7; true"; true' >/dev/null 2>&1
@@ -644,6 +762,13 @@ cx='{"type":"item.started","item":{"id":"item_1","type":"command_execution","com
 "$AW" run -n pk-codex -- sh -c 'printf "%s\n" "$1"; sleep 5; true' sh "$cx" >/dev/null 2>&1
 ag='{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"go test ./..."}}}}'
 "$AW" run -n pk-agy -- sh -c 'printf "%s\n" "$1"; sleep 5; true' sh "$ag" >/dev/null 2>&1
+# kiro-cli stream-json (실측한 모양): tool_call 의 제목과 첫 입력값. tool_call_update 는 같은 호출이라 뺌
+kr='{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Creating a.txt","kind":"edit","rawInput":{"__tool_use_purpose":"a.txt 를 만듦","command":"create","path":"a.txt"}}}}
+{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","title":"Creating a.txt"}}}
+{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"다 "}}}}
+{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"했"}}}}'
+kf='{"type":"runFinished","data":{"sessionId":"K1","status":"success","stopReason":"end_turn","finalText":"다 했습니다","finalTextTruncated":false}}'
+"$AW" run -n pk-kiro -- sh -c 'printf "%s\n" "$1"; sleep 4; printf "%s\n" "$2"' sh "$kr" "$kf" >/dev/null 2>&1
 sleep 1
 out=$("$AW" peek pk-claude)
 has "claude: 도구 호출" "$out" "npm test -- auth"
@@ -655,6 +780,12 @@ has "codex: 바뀐 파일" "$out" "/r/src/a.py"
 has "codex: 말" "$out" "고쳤습니다"
 out=$("$AW" peek pk-agy)
 has "agy: 도구 단계" "$out" "run_command go test ./..."
+out=$("$AW" peek pk-kiro)
+has "kiro-cli: 도구 호출의 제목과 입력" "$out" "Creating a.txt a.txt 를 만듦"
+check "kiro-cli: tool_call_update 는 따로 안 셈" 1 "$(printf '%s\n' "$out" | grep -c 'Creating a.txt')"
+hasnt "kiro-cli: JSON 을 날것으로 보이지 않음" "$out" '"sessionUpdate"'
+"$AW" wait pk-kiro --timeout 20 >/dev/null 2>&1
+has "kiro-cli: 끝나면 답은 finalText (text 조각이 아니라)" "$("$AW" peek pk-kiro)" "답          : 다 했습니다"
 
 # claude 를 json 으로 띄우면 출력이 끝날 때까지 비어 있습니다. 도는 동안 claude 가
 # sessions/<pid>.json 에 적는 세션 ID 로 대화 기록을 찾아 읽습니다.
@@ -750,7 +881,7 @@ kill "$wpid" 2>/dev/null
 check "watch 는 워커가 끝나면 0 으로 멈춤" 0 "$(cat "$TMPROOT/watch.rc" 2>/dev/null || echo 시간초과)"
 has "watch 가 끝났다고 알림" "$(cat "$TMPROOT/watch.out")" "모두 끝났습니다"
 "$AW" stop pk-long >/dev/null 2>&1
-"$AW" wait pk-tree pk-claude pk-codex pk-agy pk-text pk-oneline pk-wt pk-mac --timeout 20 >/dev/null 2>&1
+"$AW" wait pk-tree pk-claude pk-codex pk-agy pk-kiro pk-text pk-oneline pk-wt pk-mac --timeout 20 >/dev/null 2>&1
 [ -n "$(command -v bash)" ] && "$AW" wait pk-mcp --timeout 20 >/dev/null 2>&1
 "$AW" clean >/dev/null 2>&1
 
@@ -831,7 +962,7 @@ hasnt "끝난 뒤의 파일 변경은 세지 않음" "$out" "(파일 변경)"
 head_ "20. 워커 지시문 (brief)"
 fresh
 # 가짜 에이전트: 받은 인자와 표준 입력을 그대로 찍습니다 (devin 은 --prompt-file 내용도)
-for a in claude codex agy; do
+for a in claude codex agy kiro-cli; do
   printf '%s\n' '#!/bin/sh' 'printf "[%s]\n" "$@"' 'cat' 'printf "%s\n" "{\"session_id\":\"S1\"}"' > "$IH/fakebin/$a"
 done
 cat > "$IH/fakebin/devin" <<'FAKE'
@@ -869,6 +1000,12 @@ bw run -n br-stdin --no-defaults -f "$TMPROOT/spec.md" -- claude -p >/dev/null 2
 check "-f 로 넣은 표준 입력 앞에 붙음" "$(printf '[-p]\n%s\n\n사양 내용' "$B")" "$(bres br-stdin | sed '$d')"
 bw run -n br-codex --no-defaults -f "$TMPROOT/spec.md" -- codex exec --json - >/dev/null 2>&1
 has "codex: - (표준 입력) 앞에 붙음" "$(bres br-codex)" "$B"
+bw run -n br-kiro --no-defaults -- kiro-cli chat --output-format stream-json "작업" >/dev/null 2>&1
+check "kiro-cli: 맨 끝 프롬프트 앞에 붙음" "$(printf '[chat]\n[--output-format]\n[stream-json]\n[%s\n\n작업]' "$B")" "$(bres br-kiro | sed '$d')"
+out=$(bw run -n br-kiro-none --no-defaults -- kiro-cli chat 2>&1)
+hasnt "kiro-cli: chat 을 프롬프트로 알지 않음" "$out" "지시문이 붙었습니다"
+bw run -n br-kiro-f --no-defaults -f "$TMPROOT/spec.md" -- kiro-cli chat --output-format stream-json >/dev/null 2>&1
+has "kiro-cli: -f 로 넣은 표준 입력 앞에 붙음" "$(bres br-kiro-f)" "$(printf '%s\n\n사양 내용' "$B")"
 bw run -n br-off --no-defaults --no-brief -- claude -p "작업" >/dev/null 2>&1
 check "--no-brief 면 안 붙음" "$(printf '[-p]\n[작업]')" "$(bres br-off | sed '$d')"
 AW_NO_BRIEF=1 bw run -n br-off2 --no-defaults -- claude -p "작업" >/dev/null 2>&1
@@ -903,6 +1040,10 @@ ag='{"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_re
 {"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"요: 약 3"}}
 {"event":"step_update","step_update":{"state":"ACTIVE","step_type":"agent_response","text_delta":"0분\n"}}'
 "$AW" run -n eta-agy -- sh -c 'printf "%s\n" "$1"; sleep 6; true' sh "$ag" >/dev/null 2>&1
+kc='{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"예상 소"}}}}
+{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"요: 약 2"}}}}
+{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"5분\\n"}}}}'
+"$AW" run -n eta-kiro -- sh -c 'printf "%s\n" "$1"; sleep 6; true' sh "$kc" >/dev/null 2>&1
 us='{"type":"user","message":{"role":"user","content":"예상 소요: 약 5분 이라고 적으세요"}}'
 "$AW" run -n eta-user -- sh -c 'printf "%s\n" "$1"; sleep 6; true' sh "$us" >/dev/null 2>&1
 "$AW" run -n eta-over -- sh -c 'echo "예상 소요: 약 1분"; sleep 6; true' >/dev/null 2>&1
@@ -911,12 +1052,13 @@ has "텍스트 출력의 예상 소요" "$("$AW" peek eta-text)" "예상 소요 
 has "경과와 견줌" "$("$AW" peek eta-text)" "지남)"
 has "claude 말의 범위" "$("$AW" peek eta-claude)" "약 10~20분"
 has "agy 의 조각난 답을 이어 붙여 읽음" "$("$AW" peek eta-agy)" "약 30분"
+has "kiro-cli 의 조각난 답을 이어 붙여 읽음" "$("$AW" peek eta-kiro)" "약 25분"
 hasnt "프롬프트(사용자 말)의 예시는 답으로 읽지 않음" "$("$AW" peek eta-user)" "예상 소요   :"
 # 시작 시각을 3분 전으로 돌려 예상(1분)을 넘긴 것처럼
 m="$AW_HOME/workers/eta-over/meta"
 sed "s/^started=.*/started=$(( $(date +%s) - 180 ))/" "$m" > "$m.new" && mv "$m.new" "$m"
 has "예상보다 오래 걸리면 알림" "$("$AW" peek eta-over)" "예상보다 2m"
-"$AW" wait eta-text eta-claude eta-agy eta-user eta-over --timeout 20 >/dev/null 2>&1
+"$AW" wait eta-text eta-claude eta-agy eta-kiro eta-user eta-over --timeout 20 >/dev/null 2>&1
 has "끝난 워커는 실제 걸린 시간과 견줌" "$("$AW" peek eta-text)" "(실제 "
 "$AW" clean >/dev/null 2>&1
 

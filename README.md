@@ -20,7 +20,7 @@ $ aw wait refactor && aw result refactor --field result
 ## 빠른 시작
 
 도구 안에 필요한 내용이 다 들어 있습니다. README 없이 `aw help` 만 봐도 쓸 수 있고,
-에이전트별 호출법과 함정은 `aw help agents` 에 있습니다.
+에이전트별 호출법과 주의할 점은 `aw help agents` 에 있습니다.
 
 
 ```sh
@@ -51,9 +51,9 @@ aw rm job
 curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/install.sh | sh
 ```
 
-실행 파일을 `~/.local/bin` 에 놓고, 무인 실행용 권한 옵션을 켜고, 에이전트들이 `aw` 를 쓸 수 있게 하는
+실행 파일을 `~/.local/bin` 에 놓고, 무인 실행용 [기본 옵션](#기본-옵션-권한-우회-모델)(권한 우회, 기본 모델)을 켜고, 에이전트들이 `aw` 를 쓸 수 있게 하는
 [스킬](#에이전트가-aw-를-쓰게-하기-스킬)을 넣을지 에이전트마다 묻고, PATH 를 확인합니다. 셸 설정은 건드리지 않습니다.
-다시 돌리면 최신으로 덮어씁니다(권한 옵션 파일은 그대로 둡니다).
+다시 돌리면 최신으로 덮어씁니다(기본 옵션 파일은 그대로 둡니다. 새로 생긴 권장값은 `aw defaults` 가 알려 줍니다).
 설치한 뒤 무엇이 갖춰졌는지는 `aw setup` 으로 점검합니다.
 
 | 옵션 | 스킬 |
@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/install.
 curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/install.sh | sh -s -- --skill=claude,codex
 ```
 
-`--no-defaults` 를 주면 권한 옵션은, `--no-brief` 를 주면 [워커 지시문](#워커-지시문-brief)은 켜지 않습니다.
+`--no-defaults` 를 주면 기본 옵션은, `--no-brief` 를 주면 [워커 지시문](#워커-지시문-brief)은 켜지 않습니다.
 
 실행 파일 하나만 원하면 이것으로 충분합니다. `source` 도 필요 없습니다.
 
@@ -105,7 +105,7 @@ cd agent-worker
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
-| `aw defaults [--init]` | 기본 옵션 확인 / 권장값으로 켜기 |
+| `aw defaults [get\|set\|unset]` | [기본 옵션](#기본-옵션-권한-우회-모델)(권한, 모델) 보기 / 바꾸기. `--init` 은 권장값으로 켜기 |
 | `aw brief [--init]` | [워커 지시문](#워커-지시문-brief) 확인 / 권장값으로 켜기 |
 | `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
 | `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
@@ -192,7 +192,7 @@ review  running  3m12s  claude
 | --- | --- |
 | 지금 실행 중 | 워커가 띄운 하위 프로세스 중 가장 최근 것. 에이전트는 명령을 새 세션이나 샌드박스로 떼어 띄워서(실측: claude, codex) 프로세스 그룹이 아니라 부모-자식 관계로 따라갑니다. MCP 서버 같은 상주 도우미는 뺍니다. Linux 와 macOS(26.5) 에서 확인했습니다 |
 | 마지막 활동 | 아래 신호 중 가장 최근 것과 그 출처: 출력, claude 대화 기록, codex 세션 파일, 새로 뜬 하위 명령, 작업 폴더에서 바뀐 파일 |
-| 최근 활동 | 에이전트 출력을 읽을 수 있게 풉니다: claude `stream-json`, codex `--json`, agy `--output-format stream-json`. 모르는 형식(텍스트, 빌드 로그)은 마지막 줄들을 그대로 보여 줍니다 |
+| 최근 활동 | 에이전트 출력을 읽을 수 있게 풉니다: claude `stream-json`, codex `--json`, agy·kiro-cli `--output-format stream-json`. 모르는 형식(텍스트, 빌드 로그)은 마지막 줄들을 그대로 보여 줍니다 |
 | 예상 소요 | [지시문](#워커-지시문-brief)대로 에이전트가 적은 예상 소요 시간을 경과와 견줌. 넘기면 "예상보다 N 더 걸리는 중" |
 | 생각 중 | claude(`stream-json`)는 지금까지 생각한 토큰 수, codex 는 추론 단계 수. 생각 내용은 숨겨져 있어도 양은 보입니다 |
 | 조용함 | 출력, 새 명령, 파일 변경, 생각 신호가 모두 멈춘 지 `AW_QUIET` 초(기본 300)가 넘으면 알립니다 |
@@ -247,7 +247,7 @@ lv-d  running  6m12s  devin
 ## 에이전트 연동 (처음 설정)
 
 `aw`는 에이전트를 설치해 주지 않습니다. 각 CLI를 설치·로그인한 뒤 `aw`로 감싸 쓰면 됩니다.
-아래는 이 도구로 실제 돌려 본 네 가지입니다.
+아래는 이 도구로 실제 돌려 본 다섯 가지입니다.
 
 | | 설치 | 인증 | 프롬프트 | JSON 결과 필드 |
 | --- | --- | --- | --- | --- |
@@ -255,8 +255,10 @@ lv-d  running  6m12s  devin
 | **claude** (Claude Code) | `curl -fsSL https://claude.ai/install.sh \| bash` | `claude auth login` | `-p "..."` | `result`, `is_error` |
 | **devin** | 공식 설치 프로그램 | `devin auth login` | `-p "..."` (바로 뒤) | 텍스트 |
 | **codex** | `npm i -g @openai/codex` | ChatGPT 계정 또는 `CODEX_API_KEY` | `codex exec "..."` 또는 stdin `-` | JSONL(`--json`) |
+| **kiro-cli** (Kiro) | Kiro 공식 설치 안내 (kiro.dev) | `kiro-cli login` | `kiro-cli chat "..."` (맨 끝) 또는 stdin | `finalText`, `status` (`stream-json`) |
 
-무인 실행에 필요한 권한 옵션은 `aw`가 **자동으로 붙입니다** (아래 "기본 옵션" 참고).
+무인 실행에 필요한 권한 옵션과 기본 모델(agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`)은
+`aw`가 **자동으로 붙입니다** ([기본 옵션](#기본-옵션-권한-우회-모델) 참고).
 
 ### agy — Antigravity CLI (Gemini)
 
@@ -269,11 +271,17 @@ agy models                                                     # gemini-3.8-flas
 설치 프로그램이 `~/.bashrc`와 `~/.bash_profile`에 PATH 줄을 덧붙입니다(zsh는 건드리지 않음).
 
 ```sh
-aw run -n a1 -- agy --output-format stream-json --model gemini-3.8-flash-high -p='테스트를 추가해줘'
+aw run -n a1 -- agy --output-format stream-json -p='테스트를 추가해줘'
 aw wait a1 && aw result a1 --field response
 ```
 
-**`-p` 의 함정**: `-p` 뒤에 오는 토큰이 무조건 프롬프트가 됩니다.
+**모델**: `--model` 을 안 주면 기본 옵션이 `--model gemini-3.8-flash --effort high` 를 붙입니다.
+수준을 뺀 이름(`gemini-3.8-flash`)은 `--effort` 가 있어야 하고, `gemini-3.8-flash-high` 에
+`--effort low` 를 같이 주면 부딪쳐 실패합니다(실측). 그래서 `--model` 이나 `--effort` 중 하나라도
+직접 주면 aw 는 모델 줄을 통째로 붙이지 않습니다. 기본값을 바꾸려면
+`aw defaults set agy --model gemini-3.1-pro-high` 처럼 합니다.
+
+**`-p` 를 쓸 때 주의할 점**: `-p` 뒤에 오는 토큰이 무조건 프롬프트가 됩니다.
 `agy -p --output-format json` 처럼 쓰면 `--output-format` 이 프롬프트가 되고 이렇게 실패합니다.
 
 ```
@@ -287,7 +295,7 @@ left as an argument and ignored.
 크기 제한(127KB)도 피합니다. 379KB 파일로 확인했습니다.
 
 ```sh
-aw run -n a2 -f spec.md -- agy --output-format stream-json --model gemini-3.8-flash-high
+aw run -n a2 -f spec.md -- agy --output-format stream-json
 ```
 
 `-p` 와 표준 입력을 같이 주면 `-p` 가 이기고 표준 입력은 무시됩니다.
@@ -344,8 +352,12 @@ devin models list        # 모델 목록
 ```
 
 ```sh
-aw run -n d1 -- devin -p "테스트를 추가해줘" --model gemini-3-8-flash-high
+aw run -n d1 -- devin -p "테스트를 추가해줘"
 ```
+
+**모델**: `--model` 을 안 주면 기본 옵션이 `--model swe-2-max` 를 붙입니다. SWE-2 는 `swe-2-medium`,
+`swe-2-high`, `swe-2-max` 가 있고, `swe-2` 만 주면 high 로 돕니다(실측: devin 세션 기록). 기본값을 바꾸려면
+`aw defaults set devin --model swe-2-high` 처럼 합니다.
 
 세 가지를 조심하세요.
 
@@ -375,10 +387,10 @@ error: the argument '--print [<PROMPT>]' cannot be used with '[PATH]...'
 devin 자신의 `--prompt-file` 을 쓰세요.
 
 ```sh
-aw run -n d2 -- devin -p --prompt-file spec.md --model gemini-3-8-flash-high
+aw run -n d2 -- devin -p --prompt-file spec.md
 ```
 
-`--model` 로 다른 모델을 쓰면 컨텍스트가 1M 이므로 한도 경고를 함께 조정하세요.
+SWE-2 의 컨텍스트는 262K 입니다. `--model` 로 Claude·GPT·Gemini 를 쓰면 1M 이므로 한도 경고를 함께 조정하세요.
 
 ```sh
 aw run -n g1 --max-input-tokens 1000000 -- devin -p "설계를 검토해줘" --model gemini-3-8-flash-high
@@ -401,7 +413,35 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 
 출력은 JSONL(줄마다 JSON 이벤트)입니다. `aw result x1 --field text` 가 마지막 메시지(최종 답)를 꺼냅니다.
 
-> 네 에이전트 모두 실제로 돌려 확인했습니다 (379KB 파일 입력 포함).
+### kiro-cli — Kiro CLI
+
+```sh
+kiro-cli login                  # 최초 1회
+kiro-cli chat --list-models     # claude-opus-5.5 등 확인
+```
+
+```sh
+aw run -n k1 -- kiro-cli chat --output-format stream-json "테스트를 추가해줘"
+aw run -n k2 -f spec.md -- kiro-cli chat --output-format stream-json     # 프롬프트 인자 생략
+aw wait k1 && aw result k1 --field finalText
+```
+
+`--output-format stream-json` 은 사람 입력을 기다리지 않는 모드(`--no-interactive`)를 겸합니다. 도중 사건
+(도구 호출, 답 조각)이 한 줄씩 쌓여 `aw peek` 으로 보이고, 마지막 줄에 `finalText` 와 `status`(`success`)가
+있습니다. 답은 몇 글자짜리 조각으로 나눠 오는데, `aw peek` 은 이어 붙여 예상 소요 시간을 읽습니다.
+
+실측(2.24.1)으로 확인한 주의할 점 셋:
+
+- **모델**: 기본 엔진(v2)은 `--model` 을 무시합니다. `failed to set model 'claude-opus-5.5': Method not found`
+  경고를 남기고 Auto 로 돕니다. `--agent-engine v3` 에서는 따릅니다. 그래서 기본 옵션은 모델과 엔진을
+  **따로** 붙입니다. `--model` 만 직접 줘도 엔진 줄은 붙고, 엔진을 직접 고르면(`--agent-engine v2`, `--v2`)
+  엔진 줄이 빠집니다. `--v2` 와 `--agent-engine` 을 같이 주면 kiro-cli 가 오류를 내서 둘을 같은 옵션으로 봅니다.
+- **권한**: `--trust-all-tools`(`-a`) 가 없으면 파일 쓰기·명령이 거부되는데도 **코드 0** 으로 끝나고
+  `finalText` 에만 못 했다고 적힙니다. 기본 옵션을 켜 두면 붙습니다. `-a` 와 같이 주면 오류라 같은 옵션으로 봅니다.
+- **프롬프트**는 `chat` 뒤 맨 끝 인자로 둡니다. `aw resume` 이 `chat --resume-id <sessionId>` 를 붙이고 맨 끝을 갈아 끼웁니다.
+  v3 는 v2 로 시작한 세션도 이어받아서, 중간에 엔진이 바뀌어도 이어집니다.
+
+> claude·agy·devin·codex 는 379KB 파일 입력까지, kiro-cli 는 파일 쓰기·이어하기·모델 적용까지 실제로 돌려 확인했습니다.
 
 ### 워커로 쓸 수 없는 것
 
@@ -412,12 +452,12 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 ### 대화 이어하기
 
 에이전트들은 대화를 이어갈 수 있게 세션 ID 를 내놓습니다. 이름이 제각각이라
-(`session_id` / `conversation_id` / `thread_id`) `aw` 가 끝난 워커의 출력에서
+(`session_id` / `conversation_id` / `thread_id` / `sessionId`) `aw` 가 끝난 워커의 출력에서
 찾아 `meta` 에 적어 둡니다. `aw status` 에서 볼 수 있고 `aw list --json` 에도
 `session` 으로 나옵니다.
 
 ```sh
-aw run -n job -- agy --output-format stream-json --model gemini-3.8-flash-high -p='설계를 검토해줘'
+aw run -n job -- agy --output-format stream-json -p='설계를 검토해줘'
 aw wait job
 aw resume job -- '방금 지적한 것 중 첫 번째를 고쳐줘'     # → job-r1
 aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
@@ -433,12 +473,13 @@ aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
 | `agy` | `--conversation <conversation_id>` | |
 | `codex` | `codex exec resume <thread_id>` | 이 서브명령이 `--sandbox` 를 안 받아 기본 옵션을 자동으로 끕니다 |
 | `devin` | `-c` | 텍스트만 내놓아 세션 ID 를 못 뽑습니다. 아래 참고 |
+| `kiro-cli` | `kiro-cli chat --resume-id <sessionId>` | `chat` 으로 시작한 워커만 |
 
 **`devin` 은 정확하지 않습니다.** 세션 ID 를 비대화형으로 얻을 길이 없어
 `-c`(그 디렉터리의 **가장 최근** 대화)로 이어갑니다. 같은 디렉터리에 devin
 워커가 여럿이면 엉뚱한 대화를 집을 수 있어서, 그럴 때 `aw` 가 경고를 냅니다.
 
-**claude 와 codex 는 프롬프트를 맨 끝 인자로 두세요.** 이어할 때 맨 끝을
+**claude, codex, kiro-cli 는 프롬프트를 맨 끝 인자로 두세요.** 이어할 때 맨 끝을
 프롬프트로 보고 걷어냅니다. `claude -p "프롬프트" --output-format stream-json --verbose` 처럼
 가운데 두면 엉뚱한 걸 걷어냅니다. `-f` 로 넣었다면 걷어낼 게 없으니 그대로입니다.
 
@@ -456,15 +497,16 @@ aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
 | ~127KB 이하 | `-- agy -p="$(cat spec.md)"` 그대로 (특수문자까지 그대로 전달됩니다) |
 | 그보다 크면 | 아래 파일 입력을 쓰세요. 크기 제한이 없습니다. |
 
-파일로 프롬프트를 넣는 법은 에이전트마다 다릅니다. 셋은 표준 입력(`-f`)을 받고,
+파일로 프롬프트를 넣는 법은 에이전트마다 다릅니다. 넷은 표준 입력(`-f`)을 받고,
 `devin` 만 자기 옵션을 씁니다.
 
 | 에이전트 | 명령 |
 | --- | --- |
 | `claude` | `aw run -f spec.md -- claude -p --output-format stream-json --verbose` (프롬프트 인자 생략) |
-| `agy` | `aw run -f spec.md -- agy --output-format stream-json --model ...` (`-p` 빼기) |
+| `agy` | `aw run -f spec.md -- agy --output-format stream-json` (`-p` 빼기) |
 | `codex` | `aw run -f spec.md -- codex exec --json -` |
-| `devin` | `aw run -- devin -p --prompt-file spec.md --model ...` (표준 입력 안 받음) |
+| `devin` | `aw run -- devin -p --prompt-file spec.md` (표준 입력 안 받음) |
+| `kiro-cli` | `aw run -f spec.md -- kiro-cli chat --output-format stream-json` (프롬프트 인자 생략) |
 
 큰 사양서는 파일로 두고 에이전트가 자기 도구로 읽게 하는 편이 토큰 면에서도 낫습니다.
 필요한 부분만 읽기 때문입니다.
@@ -589,56 +631,76 @@ rm ~/.config/agent-worker/brief   # 아예 끄기
 | 에이전트 | 붙는 곳 |
 | --- | --- |
 | claude, codex | 맨 끝 인자(프롬프트), 또는 `-f` 로 넣은 표준 입력 (codex `-`) |
+| kiro-cli | `chat` 뒤 맨 끝 인자, 또는 `-f` 로 넣은 표준 입력 |
 | agy | `-p='...'` / `-p ...` 의 값, 또는 `-f` 로 넣은 표준 입력 |
 | devin | `-p` 바로 뒤 프롬프트, 또는 `--prompt-file` (지시문을 앞에 붙인 새 파일로 바꿔 넘김, 원래 파일은 그대로) |
 
 `aw resume` 으로 이어할 때도 새 프롬프트에 한 번 붙어서, 추가 작업의 예상 시간을 다시 받습니다.
 워커 기록의 `cmd.orig` 에는 붙이기 전 인자가, `cmd` 에는 실제로 넘긴 인자가 남습니다.
 
-## 기본 옵션 (권한 우회)
+## 기본 옵션 (권한 우회, 모델)
 
 무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다. 그래서 에이전트별로
-"사람 없이 돌 때" 필요한 옵션을 **명령 뒤에 자동으로 붙일 수 있습니다.**
+"사람 없이 돌 때" 필요한 옵션을 **명령 뒤에 자동으로 붙일 수 있습니다.** 모델을 따로
+말하지 않았을 때 쓸 모델(agy, devin, kiro-cli)도 같은 파일에 둡니다.
 
-이건 권한을 올리는 일이라 `aw` 가 제멋대로 하지 않습니다. **설정 파일이 있을 때만**
+권한을 올리는 일이라 `aw` 가 제멋대로 하지 않습니다. **설정 파일이 있을 때만**
 적용합니다. `install.sh` 가 설치할 때 그 파일을 만들어 주므로 안내대로 설치했다면
 아래 표가 바로 적용됩니다. 원하지 않으면 `./install.sh --no-defaults` 로 설치하거나
 나중에 파일을 지우면 됩니다.
 
 ```sh
-aw defaults              # 지금 적용 중인 것 확인
-aw defaults --init       # 권장값으로 켜기
-rm ~/.config/agent-worker/defaults   # 끄기
+aw defaults                            # 지금 적용 중인 것 (파일 내용과, 파일에 없는 권장값)
+aw defaults get agy                    # agy 에 붙는 묶음을 한 줄에 하나씩
+aw defaults get agy --model            # 그중 --model 이 든 묶음만 → --model gemini-3.8-flash --effort high
+aw defaults set agy --model gemini-3.1-pro-high    # 옵션이 겹치는 줄을 바꿈 (없으면 넣음)
+aw defaults set agy --model gemini-3.8-flash --effort medium   # 줄이 통째로 바뀌니 수준만 바꿀 때도 모델을 같이
+aw defaults unset agy --model          # 그 줄을 뺌 (옵션을 빼면 그 명령의 줄 전부)
+aw defaults --init                     # 권장값으로 켜기 (--force 면 되돌리기)
+rm ~/.config/agent-worker/defaults     # 끄기
 ```
 
 ```sh
 $ aw run -n a1 -- agy -p='리팩터링'
 워커 시작: a1
-  명령: agy -p=리팩터링 --dangerously-skip-permissions
-  (기본 옵션이 붙었습니다: --dangerously-skip-permissions — 끄려면 --no-defaults)
+  명령: agy -p=리팩터링 --dangerously-skip-permissions --model gemini-3.8-flash --effort high
+  (기본 옵션이 붙었습니다: --dangerously-skip-permissions --model gemini-3.8-flash --effort high — 끄려면 --no-defaults)
 ```
 
-| 명령 | 붙는 옵션 |
+| 명령 | 붙는 옵션 (한 줄이 한 묶음) |
 | --- | --- |
 | `agy` | `--dangerously-skip-permissions` |
+| | `--model gemini-3.8-flash --effort high` |
 | `claude` | `--permission-mode bypassPermissions` |
 | `devin` | `--permission-mode dangerous --respect-workspace-trust false` |
+| | `--model swe-2-max` |
 | `codex` | `--sandbox workspace-write` |
+| `kiro-cli` | `--trust-all-tools` |
+| | `--model claude-opus-5.5` |
+| | `--agent-engine v3` (기본 엔진 v2 는 `--model` 을 무시해서, [위](#kiro-cli--kiro-cli) 참고) |
 
 - **설정 파일이 없으면 아무것도 붙지 않습니다.** 파일을 받아 바로 실행한 사람에게
-  권한이 조용히 올라가는 일은 없습니다
+  권한이 조용히 올라가는 일은 없습니다. 파일이 없을 때 `aw defaults set` 을 하면 그 줄만 든
+  파일을 만듭니다(권한 우회는 켜지 않음)
 - 붙인 내용은 **항상 화면에 찍습니다**
-- 같은 옵션을 직접 지정하면 덧붙이지 않습니다 (`--permission-mode acceptEdits` 를 주면 그대로)
-- **판단은 줄 단위입니다.** 그 줄의 첫 옵션을 직접 넘기면 줄 전체가 빠집니다. 그래서
-  `devin` 에 `--permission-mode` 를 직접 주면 `--respect-workspace-trust false` 도 함께
-  빠져 worktree 에서 실패합니다. 그때는 둘 다 직접 넘기세요
+- **한 줄이 한 묶음입니다.** 한 명령의 줄을 모두 붙이되, 그 줄의 옵션 중 **하나라도** 이미 있으면
+  그 줄 전체를 건너뜁니다. 그래서 `--model` 이나 `--effort` 를 직접 주면 agy 의 모델 줄만 빠지고
+  권한 줄은 붙습니다. `--effort low` 만 주면 모델도 같이 빠져 agy 자체 기본 모델로 돌므로, 그때는
+  `--model gemini-3.8-flash --effort low` 로 둘 다 줍니다. 같은 옵션이 여러 줄에 있으면 앞 줄만 붙습니다
+- 그 대신 한 줄 안의 옵션은 같이 붙고 같이 빠집니다. `devin` 에 `--permission-mode` 를 직접 주면
+  `--respect-workspace-trust false` 도 함께 빠져 worktree 에서 실패합니다. 그때는 둘 다 직접 넘기거나
+  줄을 나누세요
 - 한 번만 끄려면 `--no-defaults`, 그 셸에서 끄려면 `AW_NO_DEFAULTS=1`
-- 표를 바꾸거나 새 에이전트를 추가하려면 `~/.config/agent-worker/defaults` 에
-  `명령이름 옵션...` 한 줄씩. `aw defaults --init --force` 로 권장값으로 되돌립니다
+- 파일을 직접 고쳐도 됩니다. `~/.config/agent-worker/defaults` 에 `명령이름 옵션...` 한 줄씩
+  (`#` 뒤는 주석). 값에 공백이 든 옵션은 적을 수 없습니다
+- **예전에 설치했다면** 파일이 그대로 남아 새 권장값(kiro-cli, 모델)이 없습니다. `aw defaults` 가
+  "권장값 중 이 파일에 없는 줄" 로 알려 주니 `aw defaults set` 으로 넣거나, 고친 게 없으면
+  `aw defaults --init --force` 로 새 권장값을 받습니다. 주석 처리해 끈 줄은 알리지 않습니다
 
 ```
 myagent --yolo --quiet
-agy --dangerously-skip-permissions --effort high
+agy --model gemini-3.1-pro-high
+kiro-cli --model claude-sonnet-5
 ```
 
 **이게 무슨 뜻인지는 분명히 알고 쓰세요.** 권한 우회는 그 에이전트가 승인 없이 파일을 고치고
@@ -665,10 +727,11 @@ $ aw run -f huge-spec.md -- devin -p
 
 | 명령 | 토큰 | 근거 |
 | --- | --- | --- |
-| `devin` | 262,000 | Devin 자체 모델 SWE-2 / SWE-1.7 이 262K (`devin models list` 확인) |
+| `devin` | 262,000 | Devin 자체 모델 SWE-2 / SWE-1.7 이 262K (`devin models list` 확인). 기본 옵션을 켜 두면 SWE-2 |
 | `claude` | 1,000,000 | Claude Opus 5 (`claude -p --output-format json` 의 `contextWindow`) |
 | `agy` | 1,000,000 | Antigravity CLI 기본 Gemini 계열 |
 | `codex` | 400,000 | 참고값 |
+| `kiro-cli` | 1,000,000 | Claude Opus 5.5 (`kiro-cli chat --list-models` 의 "1M context window") |
 | `aider` | 200,000 | 참고값 |
 
 **Devin은 `--model`로 다른 모델을 고를 수 있고 그때는 1M입니다** (Claude Opus 5, Sonnet 5,
@@ -713,7 +776,7 @@ mytool 128000
 | --- | --- | --- |
 | `AW_HOME` | `~/.local/share/agent-worker` | 워커 기록 위치 |
 | `AW_CONFIG` | `~/.config/agent-worker/contexts` | 컨텍스트 한도 설정 파일 |
-| `AW_DEFAULTS` | `~/.config/agent-worker/defaults` | 에이전트별 기본 옵션 파일 |
+| `AW_DEFAULTS` | `~/.config/agent-worker/defaults` | 에이전트별 기본 옵션(권한, 모델) 파일 |
 | `AW_NO_DEFAULTS` | (없음) | `1` 이면 기본 옵션을 붙이지 않음 |
 | `AW_PREFIX` | `~/.local/bin` | `install.sh` / `uninstall.sh` 의 설치 위치 |
 | `AW_WORKER` | (워커 안에서만) | `aw` 가 워커에 넣어 주는 그 워커 이름. 중첩 확인용 |
