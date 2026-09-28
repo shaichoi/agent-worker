@@ -198,7 +198,7 @@ T
 peek 의 줄
   예상 소요     지시문대로 에이전트가 적은 예상 시간과 경과 (aw help brief)
   지금 실행 중  워커가 띄운 하위 프로세스 중 최근 것. 에이전트는 명령을 새 세션으로 떼어
-                띄워서 프로세스 그룹이 아니라 부모-자식으로 따라갑니다. MCP 도우미는 뺍니다
+                띄워서 프로세스 그룹이 아니라 부모-자식으로 따라갑니다. MCP·ACP 도우미는 뺍니다
   생각 중       claude(stream-json) 는 지금까지 생각한 토큰 수, codex 는 추론 단계 수
   마지막 활동   가장 최근 신호와 그 출처: 출력, claude 기록, codex 기록, 새 명령, 파일 변경
                 (끝난 워커는 끝난 뒤의 신호를 세지 않음)
@@ -1532,7 +1532,7 @@ eta_of() { # <워커디렉터리>
 # 워커가 띄운 하위 프로세스 중 끝에 있는 것(자식이 없는 것)을 최근 것부터 냅니다.
 # 에이전트는 명령을 새 세션이나 샌드박스로 떼어 띄워서 프로세스 그룹에 안 잡힙니다
 # (실측: claude, codex). 그래서 부모-자식 관계로 따라갑니다. MCP 서버처럼 처음부터
-# 떠 있는 도우미는 뺍니다.
+# 떠 있는 도우미는 뺍니다. kiro-cli v3 엔진의 acp-server.js(node)도 그렇습니다 (실측).
 proc_leaves() { # <pid>  → "경과초<TAB>명령" 줄들
   # etimes(초) 는 Linux procps 만 있습니다. macOS 의 ps 는 etime([[일-]시:]분:초) 만 줍니다.
   # macOS 는 모르는 열이 있으면 오류를 내면서도 나머지 열로 출력해 열이 밀리므로(실측),
@@ -1559,7 +1559,7 @@ proc_leaves() { # <pid>  → "경과초<TAB>명령" 줄들
       for (i = 1; i <= NR; i++) if (pid[i] in want) parent[pp[i]] = 1
       for (i = 1; i <= NR; i++) {
         if (!(pid[i] in want) || (pid[i] in parent) || pid[i] == root) continue
-        if (cmd[i] ~ /(^|[ \/])(mcp|acp)( |$)|mcp-server|code-mode-host/) continue
+        if (cmd[i] ~ /(^|[ \/])(mcp|acp)( |$)|mcp-server|acp-server|code-mode-host/) continue
         print et[i] "\t" cmd[i]
       }
     }' | sort -n

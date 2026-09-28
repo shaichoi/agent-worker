@@ -751,6 +751,12 @@ if command -v bash >/dev/null 2>&1; then
   out=$("$AW" peek pk-mcp)
   has "MCP 도우미를 걸러도 진짜 명령은 보임" "$out" "sleep 6"
   hasnt "MCP 도우미는 지금 실행 중에서 뺌" "$out" "kordoc mcp"
+  # kiro-cli v3 엔진은 처음부터 node .../acp-server.js 를 띄워 둡니다 (실측)
+  "$AW" run -n pk-acp -- bash -c '(exec -a "node /k/kas/dist/server/acp-server.js --transport=stdio" sleep 7) & sleep 6; wait' >/dev/null 2>&1
+  sleep 1
+  out=$("$AW" peek pk-acp)
+  has "ACP 도우미를 걸러도 진짜 명령은 보임" "$out" "sleep 6"
+  hasnt "kiro-cli 의 acp-server 는 지금 실행 중에서 뺌" "$out" "acp-server"
 fi
 
 # 출력 형식 셋: 내용으로 알아보고 사람이 읽을 줄로 풉니다
@@ -882,7 +888,7 @@ check "watch 는 워커가 끝나면 0 으로 멈춤" 0 "$(cat "$TMPROOT/watch.r
 has "watch 가 끝났다고 알림" "$(cat "$TMPROOT/watch.out")" "모두 끝났습니다"
 "$AW" stop pk-long >/dev/null 2>&1
 "$AW" wait pk-tree pk-claude pk-codex pk-agy pk-kiro pk-text pk-oneline pk-wt pk-mac --timeout 20 >/dev/null 2>&1
-[ -n "$(command -v bash)" ] && "$AW" wait pk-mcp --timeout 20 >/dev/null 2>&1
+[ -n "$(command -v bash)" ] && "$AW" wait pk-mcp pk-acp --timeout 20 >/dev/null 2>&1
 "$AW" clean >/dev/null 2>&1
 
 head_ "19. 생각 중 / 조용함 (peek, wait --idle)"
