@@ -21,8 +21,10 @@ hasnt() { case "$2" in *"$3"*) ng "$1" ;; *) ok "$1" ;; esac; }
 TMPROOT=$(mktemp -d "${TMPDIR:-/tmp}/aw-test.XXXXXX")
 trap 'rm -rf "$TMPROOT"' EXIT
 export AW_HOME="$TMPROOT/awhome"
-# 이 컴퓨터에 켜 둔 지시문이 시험용 명령에 붙지 않게 합니다 (지시문 시험은 따로 켬).
+# 이 컴퓨터에 켜 둔 지시문과 기본 옵션이 시험용 명령에 붙지 않게 합니다 (그 시험은 따로 켬).
 export AW_BRIEF="$TMPROOT/brief"
+NO_DEFAULTS="$TMPROOT/no-defaults"   # 만들지 않는 파일: 기본 옵션이 꺼진 상태
+export AW_DEFAULTS="$NO_DEFAULTS"
 
 head_ "1. 문법 검사"
 for s in sh bash zsh; do
@@ -392,7 +394,7 @@ if [ -f "$IH/.config/agent-worker/brief" ]; then ok "install.sh 가 지시문을
 rm -rf "$IH"; mkdir -p "$IH"
 (cd "$SRC_DIR" && env -u AW_DEFAULTS -u AW_BRIEF HOME="$IH" XDG_CONFIG_HOME="$IH/.config" AW_PREFIX="$IH/bin" sh ./install.sh --no-brief >/dev/null 2>&1)
 if [ -f "$IH/.config/agent-worker/brief" ]; then ng "--no-brief 인데 켜 버림"; else ok "install.sh --no-brief 는 지시문을 켜지 않음"; fi
-unset AW_DEFAULTS
+AW_DEFAULTS="$NO_DEFAULTS"
 
 head_ "13. 도움말"
 h=$("$AW" help)
@@ -561,7 +563,7 @@ if "$AW" resume r-run -- 이어서 >/dev/null 2>&1; then ng "실행 중인 워�
 if "$AW" resume r-claude >/dev/null 2>&1; then ng "프롬프트 없이 이어함"; else ok "새 프롬프트가 없으면 거절"; fi
 if "$AW" resume --help >/dev/null 2>&1; then ok "aw resume --help"; else ng "aw resume --help 실패"; fi
 "$AW" clean --all >/dev/null 2>&1
-unset AW_DEFAULTS
+AW_DEFAULTS="$NO_DEFAULTS"
 
 head_ "16. 에이전트 스킬 (aw skill)"
 SK="$SRC_DIR/skills/agent-worker/SKILL.md"
