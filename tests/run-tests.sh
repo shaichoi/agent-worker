@@ -1001,6 +1001,37 @@ has "codex: 세션 파일의 추론 단계 수" "$out" "추론 3단계"
 has "codex: 세션 파일도 활동으로 침" "$out" "(codex 기록)"
 hasnt "codex: 남은 JSON 사건 줄을 날것으로 보이지 않음" "$out" "thread.started"
 
+# codex 출력의 앞 4096 바이트가 한글 가운데서 잘려도 스레드 ID 를 온전히 꺼냅니다. 예전에는 ID 뒤에
+# 깨진 바이트가 붙어 세션 파일을 못 찾았고, gawk 가 Invalid multibyte data 경고를 냈습니다.
+l1='{"type":"thread.started","thread_id":"T-mb-456"}'; l2='{"type":"turn.started"}'
+pre='{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"'
+pad=''; while [ $(( (4096 - ${#l1} - ${#l2} - 2 - ${#pre} - ${#pad}) % 3 )) -ne 1 ]; do pad="${pad}x"; done
+ko=''; i=0; while [ "$i" -lt 1500 ]; do ko="${ko}가"; i=$((i + 1)); done
+printf '%s\n%s\n%s%s%s"}}\n' "$l1" "$l2" "$pre" "$pad" "$ko" > "$IH/codex-mb.out"
+cat > "$IH/fakebin/codex" <<FAKE
+#!/bin/sh
+cat '$IH/codex-mb.out'
+d="\$HOME/.codex/sessions/2026/09/29"; mkdir -p "\$d"
+( sleep 2; printf '%s\n' '{"timestamp":"t","type":"response_item","payload":{"type":"reasoning","summary":[]}}' > "\$d/rollout-2026-T-mb-456.jsonl" ) &
+sleep 7
+FAKE
+chmod +x "$IH/fakebin/codex"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-codex-mb --no-defaults -- codex exec --json "생각" >/dev/null 2>&1
+sleep 4
+out=$(env -u CODEX_HOME HOME="$IH" "$AW" peek th-codex-mb 2>&1)
+has "codex: 앞 4096 바이트가 한글 가운데서 잘려도 세션 파일을 찾음" "$out" "추론 1단계"
+hasnt "codex: 깨진 바이트로 awk 경고를 내지 않음" "$out" "multibyte"
+
+# 텍스트 출력이 64KB 를 넘고 한글 가운데서 잘려도, 최근 출력과 예상 소요 시간을 읽습니다.
+# 예전에는 GNU grep 이 깨진 첫 바이트를 보고 "binary file matches" 한 줄만 냈습니다.
+"$AW" run -n mb-text -- sh -c 'i=0; while [ $i -lt 4000 ]; do echo "한글 진행 줄입니다."; i=$((i+1)); done; echo "예상 소요: 약 15분"; echo "마지막 줄입니다"; sleep 6' >/dev/null 2>&1
+sleep 2
+out=$("$AW" peek mb-text 2>&1)
+hasnt "텍스트: 잘린 한글에 binary file matches 가 나오지 않음" "$out" "binary file"
+has "텍스트: 최근 출력의 마지막 줄" "$out" "마지막 줄입니다"
+has "텍스트: 예상 소요 시간을 읽음" "$out" "약 15분"
+"$AW" wait th-codex-mb mb-text --timeout 20 >/dev/null 2>&1
+
 # 마지막 활동의 출처: 새로 뜬 하위 명령, 작업 폴더의 파일 변경
 "$AW" run -n la-cmd -- sh -c 'sleep 2; sh -c "sleep 8; true"; true' >/dev/null 2>&1
 "$AW" run -n la-file -d "$REPO" -w feat/la -- sh -c '(sleep 2; printf x > f.txt) & sleep 9; true' >/dev/null 2>&1

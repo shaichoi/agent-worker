@@ -442,8 +442,10 @@ state_of() { # <워커디렉터리>
 }
 
 # JSON 문자열 값 하나 꺼내기 (jq/python 없이)
+# 바이트 단위(C 로케일)로 다룹니다. 출력 앞부분만 잘라 읽으면(head -c) 한글 한 글자가 반으로 잘릴 수 있는데,
+# UTF-8 로케일에서는 sed 의 .* 가 그 조각을 못 넘어 꺼낸 값 뒤에 깨진 바이트가 붙고, gawk 는 경고를 냅니다.
 json_unescape() {
-  awk '
+  LC_ALL=C awk '
     {
       s = $0; out = ""; i = 1; n = length(s)
       while (i <= n) {
@@ -464,11 +466,11 @@ json_unescape() {
 json_str() { # <키>  (JSON 은 표준 입력. 여러 번 나오면 마지막 것)
   js_in=$(tr '\n' ' ')
   js_v=$(printf '%s' "$js_in" \
-    | sed -n -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p')
+    | LC_ALL=C sed -n -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)".*/\1/p')
   if [ -n "$js_v" ]; then printf '%s\n' "$js_v" | json_unescape; return 0; fi
   # 문자열이 아닌 값 (true / false / null / 숫자). is_error 같은 필드가 이렇습니다.
   printf '%s' "$js_in" \
-    | sed -n -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*(true|false|null|-?[0-9][0-9.eE+-]*).*/\1/p'
+    | LC_ALL=C sed -n -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*(true|false|null|-?[0-9][0-9.eE+-]*).*/\1/p'
 }
 # 우리가 만드는 JSON 에 넣을 값 이스케이프
 json_escape() {
@@ -1640,7 +1642,7 @@ cmd_brief() {
 eta_of() { # <워커디렉터리>
   {
     tail -c 262144 "$1/out" 2>/dev/null | activity_lines | sed -n "s/^말$(printf '\t')//p"
-    tail -c 262144 "$1/out" 2>/dev/null | grep -v '^[[:space:]]*{'
+    tail_text 262144 "$1/out" | LC_ALL=C grep -v '^[[:space:]]*{'
     if [ "$(agent_of "$1")" = claude ]; then
       et_tr=$(claude_transcript "$1")
       [ -n "$et_tr" ] && tail -c 262144 "$et_tr" 2>/dev/null | activity_lines | sed -n "s/^말$(printf '\t')//p"
@@ -1799,6 +1801,14 @@ trunc_tail_filter() { # <바이트>
       }
       print s
     }'
+}
+
+# 파일 끝 N 바이트. 앞이 한글 같은 여러 바이트 글자 가운데서 잘리면 그 조각을 뗍니다.
+# 깨진 바이트가 남으면 GNU grep 이 "binary file matches" 를 내고(3.5 전에는 그 뒤 출력을 버림), gawk 가 경고를 냅니다.
+tail_text() { # <바이트> <파일>
+  tail -c "$1" "$2" 2>/dev/null | LC_ALL=C awk '
+    NR == 1 { while ($0 != "" && substr($0, 1, 1) >= "\200" && substr($0, 1, 1) < "\300") $0 = substr($0, 2) }
+    { print }'
 }
 
 mtime_of() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || printf ''; }
@@ -2079,13 +2089,14 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
     # claude·codex·agy·kiro-cli 의 JSON 사건은 위에서 풀었으니, 남은 JSON 줄(thread.started 등)은 날것으로 보이지 않습니다.
     pk_json='^$'
     case "$pk_agent" in claude | codex | agy | kiro-cli) pk_json='^[[:space:]]*{' ;; esac
-    pk_tl=$(tail -c 65536 "$pk_d/out" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | grep -v "$pk_json" | tail -"$pk_n")
-    [ "$pk_st" != running ] && [ -n "$(printf '%s' "$pk_tl" | tail -1 | grep '^[[:space:]]*{')" ] && pk_tl=''
+    # 도는 중이면 마지막 줄이 글자 가운데서 끊겨 있을 수 있어 grep 은 바이트 단위로 돌립니다.
+    pk_tl=$(tail_text 65536 "$pk_d/out" | tr '\r' '\n' | LC_ALL=C grep -v '^[[:space:]]*$' | LC_ALL=C grep -v "$pk_json" | tail -"$pk_n")
+    [ "$pk_st" != running ] && [ -n "$(printf '%s' "$pk_tl" | tail -1 | LC_ALL=C grep '^[[:space:]]*{')" ] && pk_tl=''
     if [ -z "$pk_tl" ]; then
       pk_lab='최근 오류 출력'
       # codex 는 표준 입력이 비었을 때 늘 이 줄을 남깁니다. 뜻이 없어 뺍니다.
-      pk_tl=$(tail -c 65536 "$pk_d/err" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' \
-        | grep -v '^Reading additional input from stdin' | tail -"$pk_n")
+      pk_tl=$(tail_text 65536 "$pk_d/err" | tr '\r' '\n' | LC_ALL=C grep -v '^[[:space:]]*$' \
+        | LC_ALL=C grep -v '^Reading additional input from stdin' | tail -"$pk_n")
     fi
     if [ -n "$pk_tl" ] && [ "$pk_brief" -eq 1 ]; then
       printf '%s%s\n' "$(peek_label "$pk_lab")" "$(printf '%s\n' "$pk_tl" | tail -1 | trunc_tail_filter $((pk_w - 20)))"
