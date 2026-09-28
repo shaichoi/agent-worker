@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.12.0"
+  version: "0.13.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -103,7 +103,7 @@ aw rm review
 
 5. **띄운 직후 사용자에게** 워커 이름, 작업 위치 (worktree), 확인 명령 (`aw watch <이름>` 으로 지켜보기,
    `aw result <이름>` 으로 결과) 을 알립니다. 이 대화가 먼저 끝나도 사용자가 직접 확인할 수 있게 하기 위해서입니다.
-6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령, 생각 중인지 (claude·codex), 마지막 활동과 그 출처,
+6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령, 생각 중인지 (claude·codex·kiro-cli), 마지막 활동과 그 출처,
    조용한 시간을 보고, 그다음 `aw errs <이름>` 을 봅니다. 승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인).
    끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
 
@@ -128,7 +128,9 @@ aw rm review
 - **agy** 는 `-p='작업'` 처럼 붙여 씁니다. `-p` 가 바로 다음 토큰을 프롬프트로 먹습니다.
 - **devin** 은 프롬프트가 `-p` 바로 뒤에 와야 합니다.
 - **kiro-cli** 는 `chat` 을 꼭 붙입니다. `--trust-all-tools` 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로
-  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다.
+  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다. 모델이 거절해도 코드 0 이고 답이
+  "The selected model cannot continue this conversation…" 뿐입니다. 그러면 실패로 보고 `aw peek` 으로 사유를
+  봅니다. kiro 에게는 생각 과정을 적어 달라고 쓰지 않습니다 (생각 빼내기로 거절당함).
 - 모델 목록: `agy models`, `devin models list`, `kiro-cli chat --list-models`. 주의할 점 전체: `aw help agents`.
 
 ## 긴 프롬프트

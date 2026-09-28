@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.12.0
+AW_VERSION=0.13.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -139,6 +139,7 @@ kiro-cli — Kiro CLI
   aw run -n k1 -- kiro-cli chat --output-format stream-json "작업"
   aw run -n k2 -f spec.md -- kiro-cli chat --output-format stream-json   # 프롬프트 인자 생략
   aw result k1 --field finalText     # 상태: --field status (success)
+  finalText 는 그 턴의 말을 구분 없이 다 이어 붙인 것입니다 (진행 줄 포함). aw peek 의 답은 마지막 말.
   stream-json 이면 사람 입력을 기다리지 않습니다 (--no-interactive 가 따라옴).
   이어하기: chat --resume-id <sessionId>  (aw resume 이 알아서 붙입니다)
   주의: 프롬프트는 chat 뒤, 맨 끝 인자로 둡니다.
@@ -148,6 +149,10 @@ kiro-cli — Kiro CLI
         not found" 뒤 Auto 로 돎). 모델을 고르려면 --agent-engine v3 가 필요하고,
         기본 옵션을 켜 두면 둘 다 붙습니다. 엔진을 직접 고르면(--agent-engine v2,
         --v2) aw 는 엔진 옵션을 붙이지 않습니다. 이때 --model 은 무시됩니다.
+        모델이 거절하면(content_filtered) 도중에 멈추고도 status success, 코드 0 으로
+        끝납니다. 답은 "The selected model cannot continue this conversation…" 뿐이고,
+        aw peek 이 사유와 함께 알려 줍니다. 생각 과정을 적어 달라는 프롬프트는
+        생각 빼내기(REASONING_EXTRACTION)로 거절당합니다 (실측).
   모델 목록: kiro-cli chat --list-models
 
 GUI 도구(Antigravity IDE, Cursor)는 창만 열려서 워커로 쓸 수 없습니다.
@@ -160,7 +165,9 @@ T
 
 워커 프롬프트 앞에 붙는 지시문입니다. 권장값은 두 가지를 부탁합니다.
   1. 시작 전에 첫 줄에 "예상 소요: 약 N분" 을 적기   → aw peek 이 경과와 견줘 보여 줌
-  2. 5분 넘게 걸리면 몇 분마다 진행을 한 줄씩       → 생각하는 동안 조용한 devin·agy 도 신호를 냄
+  2. 5분 넘게 걸리면 몇 분마다 지금 하는 일을 한 줄씩 → 오래 도는 작업의 진행이 aw peek 에 보임
+  생각 과정을 적어 달라고는 하지 않습니다. kiro-cli 가 생각 빼내기(REASONING_EXTRACTION)로 보고
+  거절해 도중에 멈춥니다 (실측). 0.12.0 까지의 권장값에 그런 문장이 있었습니다. aw brief 가 알려 줍니다.
 
 T
       if [ -f "$AW_BRIEF" ]; then say "지금: 켜져 있음  ($AW_BRIEF)"; else say "지금: 꺼져 있음  (켜려면 aw brief --init)"; fi
@@ -184,7 +191,8 @@ T
   aw peek 이 에이전트가 쓴 글에서 "예상 소요: 약 15분", "약 10~20분", "ETA: 2h" 를 찾아
   경과와 견줍니다. 넘기면 "예상보다 5m 더 걸리는 중", 끝나면 "실제 12m".
   프롬프트(사용자 말)에 든 예시는 읽지 않습니다.
-  실측: claude, codex, agy, devin 모두 지시문대로 첫 줄에 적었습니다.
+  실측: claude, codex, agy, devin, kiro-cli 모두 지시문대로 첫 줄에 적었습니다.
+  kiro-cli 는 7분짜리 작업에서 단계마다 "1회차 완료, 2회차 실행 중입니다." 처럼 진행을 남겼습니다.
 T
       ;;
     peek) cat <<'T'
@@ -199,19 +207,23 @@ peek 의 줄
   예상 소요     지시문대로 에이전트가 적은 예상 시간과 경과 (aw help brief)
   지금 실행 중  워커가 띄운 하위 프로세스 중 최근 것. 에이전트는 명령을 새 세션으로 떼어
                 띄워서 프로세스 그룹이 아니라 부모-자식으로 따라갑니다. MCP·ACP 도우미는 뺍니다
-  생각 중       claude(stream-json) 는 지금까지 생각한 토큰 수, codex 는 추론 단계 수
+  생각 중       claude(stream-json) 는 지금까지 생각한 토큰 수, codex 는 추론 단계 수,
+                kiro-cli 는 지금 이어지는 생각 글의 글자 수
   마지막 활동   가장 최근 신호와 그 출처: 출력, claude 기록, codex 기록, 새 명령, 파일 변경
                 (끝난 워커는 끝난 뒤의 신호를 세지 않음)
   조용함        그 신호가 모두 AW_QUIET 초(기본 300) 넘게 없으면 알림
   최근 활동     출력을 풀어 봄: 도구 호출, 명령, 말, 바뀐 파일 (claude·agy·kiro-cli stream-json,
-                codex --json). claude 를 json 으로 띄웠으면
+                codex --json). agy·kiro-cli 는 조각으로 오는 답을 이어 붙여 말 한 줄로.
+                claude 를 json 으로 띄웠으면
                 claude 대화 기록에서 읽음. 모르는 형식은 마지막 줄(긴 줄은 끝)을 그대로
   worktree      -w 로 띄웠으면 바뀐 파일 수
-  답            끝난 워커의 최종 답 한 줄
+  답            끝난 워커의 최종 답 한 줄 (kiro-cli 는 마지막 말. finalText 는 진행 줄까지 이어 붙여서)
+  주의          kiro-cli 가 모델 거절로 도중에 멈췄으면 (코드 0 이라 따로 알림)
 
 생각하는 동안 밖에서 보이는 것 (실측: 도구 없이 머리로 계산하는 문제)
   claude stream-json  몇 초마다 thinking_tokens (json 으로 띄우면 없음)
   codex               출력은 조용, 자기 세션 파일(~/.codex/sessions)에 추론 단계가 10~15초마다
+  kiro-cli (v3)       생각 조각(agent_thought_chunk)이 2~4초마다 출력에 (16초 걸린 문제)
   agy                 없음. 2분 47초 조용하다가 정답
   devin               없음. 5분 56초 조용하다가 정답
   그래서 조용하다고 멈춘 건 아닙니다. aw 는 알리기만 하고 끊지 않습니다.
@@ -1378,8 +1390,13 @@ ARGV
 # ---------------------------------------------------------------- 워커 지시문
 
 # 워커 프롬프트 앞에 붙이는 지시문입니다. 예상 소요 시간을 먼저 적게 해서 aw peek 이
-# 경과와 견줘 보여 주고, 오래 걸리는 일은 중간중간 한 줄씩 남기게 해서 생각하는 동안
-# 조용한 에이전트(devin, agy)도 신호를 내게 합니다.
+# 경과와 견줘 보여 주고, 오래 걸리는 일은 단계마다 지금 하는 일을 한 줄씩 남기게 합니다.
+#
+# 생각 과정을 적어 내라는 문장은 넣지 않습니다. 0.12.0 까지의 권장값에 "오래 생각해야 할
+# 때도 한 번에 다 생각하지 말고, 중간에 한 줄씩 진행을 남기며" 가 있었는데, 머리로 푸는
+# 문제와 만나면 kiro-cli 의 모델이 생각 빼내기(REASONING_EXTRACTION)로 보고 거절해 도중에
+# 멈췄습니다 (실측: 4번 중 4번, 그 문장을 빼면 3번 중 3번 정답). 그런 문장이 든 지시문은
+# aw brief 와 aw setup 이 알려 줍니다 (brief_outdated).
 #
 # 기본 옵션처럼 $AW_BRIEF 파일이 있을 때만 붙입니다 (install.sh 가 만들어 주고,
 # aw brief --init 로도 만듭니다). --no-brief 나 AW_NO_BRIEF=1 로 그때그때 끕니다.
@@ -1388,10 +1405,21 @@ recommended_brief() {
 # aw 가 워커의 프롬프트 앞에 붙이는 지시문입니다. '#' 로 시작하는 줄은 붙지 않습니다.
 # claude, codex, agy, devin, kiro-cli 의 프롬프트에만 붙습니다 (인자, -f 파일, devin 의 --prompt-file).
 # 고쳐 써도 됩니다. aw peek 은 답에서 "예상 소요: 약 15분" 같은 줄을 찾아 경과와 견줘 보여 줍니다.
+# 생각 과정을 적어 달라는 문장은 넣지 마세요. kiro-cli 는 거절하고 도중에 멈춥니다 (aw help brief).
 # 끄려면 이 파일을 지우세요. 한 번만 끄려면 aw run --no-brief (또는 AW_NO_BRIEF=1).
 작업을 시작하기 전에, 첫 줄에 예상 소요 시간을 이 형식으로 적으세요: "예상 소요: 약 N분" (범위면 "예상 소요: 약 M~N분").
-작업이 5분 넘게 걸리면 몇 분마다 지금 하는 일을 한 줄로 적으세요. 오래 생각해야 할 때도 한 번에 다 생각하지 말고, 중간에 한 줄씩 진행을 남기며 이어 가세요.
+작업이 5분 넘게 걸리면 몇 분마다 지금 하는 일을 한 줄로 적으세요.
 B
+}
+
+# 생각 과정을 적어 내라는 문장이 든 지시문이면 0. 예전 권장값이 그랬습니다 (위 설명).
+brief_outdated() {
+  [ -f "$AW_BRIEF" ] && grep -v '^[[:space:]]*#' "$AW_BRIEF" | grep -q '생각하지 말고'
+}
+brief_outdated_note() { # [들여쓰기]
+  brief_outdated || return 0
+  say "${1:-}주의: 이 지시문에는 생각 과정을 적어 내라는 문장('한 번에 다 생각하지 말고…')이 있습니다."
+  say "${1:-}  kiro-cli 는 이를 생각 빼내기로 보고 거절해 도중에 멈춥니다. 새 권장값으로: aw brief --init --force"
 }
 
 brief_text() { # 붙일 지시문 ('#' 줄과 앞쪽 빈 줄을 뺌)
@@ -1453,6 +1481,7 @@ brief_where() { # <표준 입력 파일> <인자...>
 brief_init() { # [--force]
   if [ -f "$AW_BRIEF" ] && [ "${1:-}" != --force ]; then
     say "이미 있습니다: $AW_BRIEF   (덮어쓰려면 aw brief --init --force)"
+    brief_outdated_note '  '
     return 0
   fi
   mkdir -p "$(dirname "$AW_BRIEF")" || return 1
@@ -1475,6 +1504,7 @@ cmd_brief() {
     say ""
     brief_text | sed 's/^/  /'
     say ""
+    brief_outdated_note
     say "고치려면 그 파일을 고치세요 ('#' 로 시작하는 줄은 붙지 않음)."
     say "끄려면 파일을 지우고, 한 번만 끄려면 aw run --no-brief   (또는 AW_NO_BRIEF=1)"
   else
@@ -1492,17 +1522,6 @@ cmd_brief() {
 eta_of() { # <워커디렉터리>
   {
     tail -c 262144 "$1/out" 2>/dev/null | activity_lines | sed -n "s/^말$(printf '\t')//p"
-    # agy stream-json 은 답을 text_delta 조각으로, kiro-cli 는 agent_message_chunk 조각으로
-    # 나눠 보냅니다 (한 조각이 몇 글자). 이어 붙입니다.
-    tail -c 262144 "$1/out" 2>/dev/null | LC_ALL=C awk '
-      match($0, /"text_delta":"([^"\\]|\\.)*"/) {
-        v = substr($0, RSTART + 14, RLENGTH - 15); gsub(/\\n/, "\n", v); gsub(/\\"/, "\"", v); printf "%s", v
-        next
-      }
-      /"sessionUpdate":"agent_message_chunk"/ && match($0, /"text":"([^"\\]|\\.)*"/) {
-        v = substr($0, RSTART + 8, RLENGTH - 9); gsub(/\\n/, "\n", v); gsub(/\\"/, "\"", v); printf "%s", v
-      }
-      END { print "" }'
     tail -c 262144 "$1/out" 2>/dev/null | grep -v '^[[:space:]]*{'
     if [ "$(agent_of "$1")" = claude ]; then
       et_tr=$(claude_transcript "$1")
@@ -1569,12 +1588,15 @@ proc_leaves() { # <pid>  → "경과초<TAB>명령" 줄들
 # 형식은 에이전트 이름이 아니라 내용으로 알아봅니다.
 #   claude  stream-json, 그리고 claude 의 대화 기록: "role":"assistant" 줄의 tool_use / text
 #   codex   --json: command_execution 시작, agent_message, file_change
-#   agy     stream-json: step_update 의 도구 단계 (ACTIVE)
-#   kiro-cli stream-json: tool_call 의 제목과 첫 입력값 (답은 조각으로 와서 풀지 않음)
+#   agy     stream-json: step_update 의 도구 단계 (ACTIVE), 답(agent_response 의 text_delta)
+#   kiro-cli stream-json: tool_call 의 제목과 첫 입력값, 답(agent_message_chunk)
+# agy 와 kiro-cli 는 답을 몇 글자짜리 조각으로 보냅니다 (실측). 조각을 모아 두었다가 도구 호출,
+# 생각, 단계나 턴의 끝에서 말 한 줄로 냅니다. 아직 쓰는 중인 답은 입력 끝에서 냅니다.
 # 모르는 형식이면 아무것도 내지 않습니다 (부르는 쪽이 마지막 줄들을 보여 줍니다).
 activity_lines() {
   LC_ALL=C awk '
     function unesc(s) { gsub(/\\[ntr]/, " ", s); gsub(/\\"/, "\"", s); gsub(/\\\\/, "\\", s); return s }
+    function flush() { sub(/^[ \t]+/, "", buf); sub(/[ \t]+$/, "", buf); if (buf != "") print "말\t" buf; buf = "" }
     function str(s, key,   v) {          # "key":"값" 의 값
       if (!match(s, "\"" key "\":\"([^\"\\\\]|\\\\.)*\"")) return ""
       return unesc(substr(s, RSTART + length(key) + 4, RLENGTH - length(key) - 5))
@@ -1608,9 +1630,19 @@ activity_lines() {
       next
     }
     /"event":"step_update"/ && /"step_type":"tool"/ && /"state":"ACTIVE"/ {
-      print str($0, "tool_name") "\t" first_str($0, "parameters"); next
+      flush(); print str($0, "tool_name") "\t" first_str($0, "parameters"); next
     }
-    /"sessionUpdate":"tool_call"/ { print str($0, "title") "\t" first_str($0, "rawInput"); next }
+    /"event":"step_update"/ && /"step_type":"agent_response"/ {
+      k = ""; if (match($0, /"step_index":[0-9]+/)) k = substr($0, RSTART + 13, RLENGTH - 13)
+      if (k != step) flush()
+      step = k; buf = buf str($0, "text_delta")
+      if ($0 ~ /"state":"DONE"/) flush()
+      next
+    }
+    /"sessionUpdate":"agent_message_chunk"/ { buf = buf str($0, "text"); next }
+    /"sessionUpdate":"tool_call"/ { flush(); print str($0, "title") "\t" first_str($0, "rawInput"); next }
+    /"sessionUpdate":"agent_thought_chunk"/ || /"kind":"turn_end"/ || /"type":"runFinished"/ { flush(); next }
+    END { flush() }
   '
 }
 
@@ -1695,6 +1727,7 @@ codex_rollout() { # <워커디렉터리>
 # 지금 생각하는 중이면 그 진행량. 생각 내용은 숨겨져 있어도 양은 보입니다 (실측).
 #   claude stream-json: 생각하는 동안 몇 초마다 "subtype":"thinking_tokens" 줄 (추정 토큰 수)
 #   codex 세션 파일: 끝에 이어진 reasoning 항목 수
+#   kiro-cli stream-json: 이어지는 agent_thought_chunk 의 글자 수 (아래 kiro_thinking)
 claude_thinking() { # <출력 파일>  → 추정 토큰 (마지막 사건이 생각일 때만)
   tail -c 16384 "$1" 2>/dev/null | LC_ALL=C awk '
     /"subtype":"thinking_tokens"/ {
@@ -1704,6 +1737,40 @@ claude_thinking() { # <출력 파일>  → 추정 토큰 (마지막 사건이 �
     /"thinking_delta"/ { on = 1; next }
     /[^[:space:]]/ { on = 0 }
     END { if (on && n != "") print n }'
+}
+# kiro-cli(v3 엔진)는 생각하는 내용을 agent_thought_chunk 조각으로 출력에 흘려보냅니다 (실측).
+# 턴 사이의 session_info_update 같은 사건은 생각을 끊은 것으로 보지 않습니다.
+kiro_thinking() { # <출력 파일>  → 지금 이어지는 생각의 글자 수 (마지막 사건이 생각일 때만)
+  tail -c 65536 "$1" 2>/dev/null | LC_ALL=C awk '
+    /"sessionUpdate":"agent_thought_chunk"/ {
+      if (!on) n = 0
+      on = 1
+      if (match($0, /"text":"([^"\\]|\\.)*"/)) {
+        t = substr($0, RSTART + 8, RLENGTH - 9); gsub(/\\./, "x", t); gsub(/[\200-\277]/, "", t); n += length(t)
+      }
+      next
+    }
+    /"sessionUpdate":"(agent_message_chunk|tool_call|tool_call_update)"/ || /"type":"runFinished"/ { on = 0 }
+    END { if (on && n > 0) print n }'
+}
+# kiro-cli 는 모델이 거절해 도중에 멈춰도 runFinished 에 status success, stopReason end_turn 을
+# 적고 코드 0 으로 끝납니다. 거절은 턴 끝(turn_end)의 stopReason content_filtered 와
+# stopDetails.refusal.category 에만 남고, 답은 "The selected model cannot continue this
+# conversation…" 입니다 (실측). 그래서 peek 이 따로 알려 줍니다.
+kiro_refusal_note() { # <워커디렉터리>
+  kr_o="$1/out"
+  if grep -q '"stopReason":"content_filtered"' "$kr_o" 2>/dev/null; then
+    kr_cat=$(grep -o '"refusal":{"category":"[A-Z_]*"' "$kr_o" | tail -1 | sed 's/.*"category":"//; s/"$//')
+  elif json_str finalText < "$kr_o" 2>/dev/null | grep -q 'The selected model cannot continue this conversation'; then
+    kr_cat=''
+  else
+    return 0
+  fi
+  say "$(peek_label '주의')모델이 거절해 도중에 멈췄습니다 (content_filtered${kr_cat:+, $kr_cat}). 코드 0 이지만 끝까지 못 했습니다."
+  if [ "$kr_cat" = REASONING_EXTRACTION ]; then
+    say "                생각 과정을 적어 내라는 요청으로 본 것입니다. 프롬프트와 지시문(aw brief)에서 그런 문장을 빼세요."
+  fi
+  say "                고친 뒤 새로 돌리거나 aw resume $(meta_get "$1" name) -- '...' 로 이어 가세요."
 }
 codex_thinking() { # <세션 파일>  → 끝에 이어진 추론 단계 수
   tail -c 65536 "$1" 2>/dev/null | LC_ALL=C awk '
@@ -1821,6 +1888,9 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
           pk_tk=$(codex_thinking "$pk_rf")
           [ "$pk_tk" -gt 0 ] && pk_think="추론 ${pk_tk}단계 (마지막 $(elapsed_str $(($(now) - $(mtime_of "$pk_rf")))) 전)"
         fi ;;
+      kiro-cli)
+        pk_tk=$(kiro_thinking "$pk_d/out")
+        [ -n "$pk_tk" ] && pk_think="약 ${pk_tk}자째 (마지막 $(elapsed_str $(($(now) - $(mtime_of "$pk_d/out")))) 전)" ;;
     esac
     [ -n "$pk_think" ] && say "$(peek_label '생각 중')$pk_think"
   fi
@@ -1866,6 +1936,8 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
             fi ;;
           codex)
             say "${pk_ind}codex 는 생각하는 동안에도 10~15초마다 신호를 냅니다. 멈췄을 수 있습니다." ;;
+          kiro-cli)
+            say "${pk_ind}kiro-cli(v3 엔진)는 생각하는 동안에도 몇 초마다 생각 조각을 냅니다. 멈췄을 수 있습니다." ;;
         esac
         say "${pk_ind}더 기다리거나, 멈추려면 aw stop $(meta_get "$pk_d" name)"
       fi
@@ -1923,13 +1995,17 @@ peek_one() { # <워커디렉터리> <활동 줄 수> <짧게 1/0>
   fi
   if [ "$pk_brief" -eq 0 ] && [ "$pk_st" != running ]; then
     # JSON 결과면 최종 답을 한 줄로 (claude result / agy response / kiro-cli finalText / codex 마지막 text)
-    # kiro-cli 도 text 가 있지만 답의 마지막 조각이라 finalText 를 먼저 봅니다.
+    # kiro-cli 의 finalText 는 그 턴의 말을 구분 없이 다 이어 붙인 것이라, 진행 줄을 남긴 작업이면
+    # 앞쪽 진행만 보입니다 (실측). 마지막 말(마지막 도구 호출 뒤의 답)을 씁니다.
+    # 또 kiro-cli 의 text 는 답의 마지막 조각이라 finalText 를 text 보다 먼저 봅니다.
     pk_ans=''
-    for pk_k in result response finalText text; do
+    [ "$pk_agent" = kiro-cli ] && pk_ans=$(printf '%s\n' "$pk_act" | sed -n "s/^말$(printf '\t')//p" | tail -1)
+    [ -n "$pk_ans" ] || for pk_k in result response finalText text; do
       pk_ans=$(json_str "$pk_k" < "$pk_d/out" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
       [ -n "$pk_ans" ] && break
     done
     [ -n "$pk_ans" ] && printf '%s%s\n' "$(peek_label '답')" "$pk_ans" | trunc_filter "$pk_w"
+    [ "$pk_agent" = kiro-cli ] && kiro_refusal_note "$pk_d"
     say "$(peek_label '결과')aw result $(meta_get "$pk_d" name)"
   fi
   return 0
@@ -2276,6 +2352,7 @@ cmd_setup() {
   say "[2/5] 워커 지시문"
   if [ -f "$AW_BRIEF" ]; then
     say "  켜져 있음: $(tilde "$AW_BRIEF")   (내용: aw brief)"
+    brief_outdated_note '  '
   else
     say "  꺼져 있음. 켜면 워커가 예상 소요 시간을 먼저 적고, 오래 걸리면 중간중간 진행을 남깁니다."
     if [ "$st_tty" -eq 1 ] && ask "  권장 지시문을 켤까요?" y; then
@@ -2445,7 +2522,7 @@ aw rm review
 
 5. **띄운 직후 사용자에게** 워커 이름, 작업 위치 (worktree), 확인 명령 (`aw watch <이름>` 으로 지켜보기,
    `aw result <이름>` 으로 결과) 을 알립니다. 이 대화가 먼저 끝나도 사용자가 직접 확인할 수 있게 하기 위해서입니다.
-6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령, 생각 중인지 (claude·codex), 마지막 활동과 그 출처,
+6. **멈춘 것 같으면** `aw peek <이름>` 으로 지금 도는 명령, 생각 중인지 (claude·codex·kiro-cli), 마지막 활동과 그 출처,
    조용한 시간을 보고, 그다음 `aw errs <이름>` 을 봅니다. 승인 대기로 멈춘 경우가 흔합니다 (`aw defaults` 확인).
    끝내려면 `aw stop <이름>` 으로, 하위 프로세스까지 정리됩니다.
 
@@ -2470,7 +2547,9 @@ aw rm review
 - **agy** 는 `-p='작업'` 처럼 붙여 씁니다. `-p` 가 바로 다음 토큰을 프롬프트로 먹습니다.
 - **devin** 은 프롬프트가 `-p` 바로 뒤에 와야 합니다.
 - **kiro-cli** 는 `chat` 을 꼭 붙입니다. `--trust-all-tools` 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로
-  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다.
+  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다. 모델이 거절해도 코드 0 이고 답이
+  "The selected model cannot continue this conversation…" 뿐입니다. 그러면 실패로 보고 `aw peek` 으로 사유를
+  봅니다. kiro 에게는 생각 과정을 적어 달라고 쓰지 않습니다 (생각 빼내기로 거절당함).
 - 모델 목록: `agy models`, `devin models list`, `kiro-cli chat --list-models`. 주의할 점 전체: `aw help agents`.
 
 ## 긴 프롬프트

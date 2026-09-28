@@ -772,7 +772,7 @@ ag='{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_
 kr='{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Creating a.txt","kind":"edit","rawInput":{"__tool_use_purpose":"a.txt 를 만듦","command":"create","path":"a.txt"}}}}
 {"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","title":"Creating a.txt"}}}
 {"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"다 "}}}}
-{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"했"}}}}'
+{"type":"sessionUpdate","data":{"sessionId":"K1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"했습니다"}}}}'
 kf='{"type":"runFinished","data":{"sessionId":"K1","status":"success","stopReason":"end_turn","finalText":"다 했습니다","finalTextTruncated":false}}'
 "$AW" run -n pk-kiro -- sh -c 'printf "%s\n" "$1"; sleep 4; printf "%s\n" "$2"' sh "$kr" "$kf" >/dev/null 2>&1
 sleep 1
@@ -788,10 +788,40 @@ out=$("$AW" peek pk-agy)
 has "agy: 도구 단계" "$out" "run_command go test ./..."
 out=$("$AW" peek pk-kiro)
 has "kiro-cli: 도구 호출의 제목과 입력" "$out" "Creating a.txt a.txt 를 만듦"
+has "kiro-cli: 아직 쓰는 중인 답 조각도 말로 이어 붙임" "$out" "말       다 했습니다"
 check "kiro-cli: tool_call_update 는 따로 안 셈" 1 "$(printf '%s\n' "$out" | grep -c 'Creating a.txt')"
 hasnt "kiro-cli: JSON 을 날것으로 보이지 않음" "$out" '"sessionUpdate"'
 "$AW" wait pk-kiro --timeout 20 >/dev/null 2>&1
-has "kiro-cli: 끝나면 답은 finalText (text 조각이 아니라)" "$("$AW" peek pk-kiro)" "답          : 다 했습니다"
+has "kiro-cli: 끝나면 답은 이어 붙인 마지막 말 (text 조각이 아니라)" "$("$AW" peek pk-kiro)" "답          : 다 했습니다"
+
+# agy·kiro-cli 는 답을 몇 글자씩 조각으로 보냅니다 (실측). 도구 호출·생각·단계 끝에서 끊어 말 한 줄로 이어 붙입니다.
+kc='{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"예상 "}}}}
+{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"session_info_update","_meta":{"kiro":{"kind":"context_usage"}}}}}
+{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"소요: 약 7분\n"}}}}
+{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Wait (1/2)","rawInput":{"command":"sleep 75"}}}}
+{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"1회차 완료, "}}}}
+{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"2회차 실행 중입니다."}}}}
+{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"생각"}}}}
+{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"끝"}}}}
+{"type":"runFinished","data":{"status":"success","stopReason":"end_turn","finalText":"예상 소요: 약 7분\n1회차 완료, 2회차 실행 중입니다.끝"}}'
+# 답을 마지막 말로 고르는 건 kiro-cli 워커일 때만이라, 출력을 그대로 내는 가짜 kiro-cli 로 띄웁니다.
+mkdir -p "$TMPROOT/kbin"; printf '%s\n' "$kc" > "$TMPROOT/kc.jsonl"
+printf '#!/bin/sh\ncat "%s"\n' "$TMPROOT/kc.jsonl" > "$TMPROOT/kbin/kiro-cli"; chmod +x "$TMPROOT/kbin/kiro-cli"
+PATH="$TMPROOT/kbin:$PATH" "$AW" run -n pk-kchunk --no-defaults -- kiro-cli chat 질문 >/dev/null 2>&1
+ac='{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"먼저 "}}
+{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"보겠습니다\n"}}
+{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"ls"}}}}
+{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"다 "}}
+{"event":"step_update","step_update":{"step_index":4,"state":"ACTIVE","step_type":"agent_response","text_delta":"새 단계"}}'
+"$AW" run -n pk-achunk -- sh -c 'printf "%s\n" "$1"' sh "$ac" >/dev/null 2>&1
+"$AW" wait pk-kchunk pk-achunk --timeout 20 >/dev/null 2>&1
+check "kiro-cli: 조각을 이어 붙이고 도구 호출·생각에서 끊음 (다른 사건은 건너뜀)" \
+  "$(printf '말       예상 소요: 약 7분\nWait (1/2) sleep 75\n말       1회차 완료, 2회차 실행 중입니다.\n말       끝')" \
+  "$("$AW" peek pk-kchunk -n 10 | sed -n '/최근 활동/,/답/p' | sed '1d;$d' | sed 's/^    //')"
+has "kiro-cli: 답은 진행 줄까지 붙은 finalText 가 아니라 마지막 말" "$("$AW" peek pk-kchunk)" "답          : 끝"
+check "agy: 단계(step_index)마다, DONE 이나 도구 단계에서 끊음" \
+  "$(printf '말       먼저 보겠습니다\nrun_command ls\n말       다\n말       새 단계')" \
+  "$("$AW" peek pk-achunk -n 10 | sed -n '/최근 활동/,/결과/p' | sed '1d;$d' | sed 's/^    //')"
 
 # claude 를 json 으로 띄우면 출력이 끝날 때까지 비어 있습니다. 도는 동안 claude 가
 # sessions/<pid>.json 에 적는 세션 ID 로 대화 기록을 찾아 읽습니다.
@@ -906,6 +936,43 @@ env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-claude --no-defaults -- 
 sleep 1
 out=$(env HOME="$IH" "$AW" peek th-claude)
 has "claude: 생각 중 토큰 수" "$out" "생각 중     : 약 1200 토큰째"
+
+# kiro-cli(v3): 생각 내용이 agent_thought_chunk 조각으로 출력에 흐릅니다 (실측)
+cat > "$IH/fakebin/kiro-cli" <<'FAKE'
+#!/bin/sh
+printf '%s\n' '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"옛 생각"}}}}' \
+  '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"중간 답"}}}}' \
+  '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"abc"}}}}' \
+  '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"session_info_update","_meta":{"kiro":{"kind":"context_usage"}}}}}' \
+  '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"한글\"x"}}}}'
+sleep 6
+FAKE
+chmod +x "$IH/fakebin/kiro-cli"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-kiro --no-defaults -- kiro-cli chat --output-format stream-json "생각" >/dev/null 2>&1
+sleep 1
+out=$(env HOME="$IH" "$AW" peek th-kiro)
+has "kiro-cli: 지금 이어지는 생각의 글자 수 (앞선 생각은 빼고, 사이 사건은 건너뜀)" "$out" "생각 중     : 약 7자째"
+hasnt "kiro-cli: 생각 내용은 말로 보이지 않음" "$out" "abc"
+
+# kiro-cli: 모델이 거절해 멈춰도 success·코드 0 입니다. 사유는 turn_end 에만 남습니다 (실측)
+cat > "$IH/fakebin/kiro-cli" <<'FAKE'
+#!/bin/sh
+printf '%s\n' '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"The selected model cannot continue this conversation."}}}}' \
+  '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"session_info_update","_meta":{"kiro":{"turnEnd":{"stopReason":"content_filtered"},"kind":"turn_end","stopReason":"content_filtered","stopDetails":{"refusal":{"category":"REASONING_EXTRACTION","explanation":"x"}}}}}}}' \
+  '{"type":"runFinished","data":{"status":"success","stopReason":"end_turn","finalText":"The selected model cannot continue this conversation."}}'
+FAKE
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n kr-refused --no-defaults -- kiro-cli chat --output-format stream-json "생각" >/dev/null 2>&1
+"$AW" wait kr-refused --timeout 10 >/dev/null 2>&1
+check "kiro-cli: 거절당해도 코드 0 (그대로 전함)" 0 "$(cat "$AW_HOME/workers/kr-refused/exit")"
+out=$("$AW" peek kr-refused)
+has "kiro-cli: 거절로 멈췄다고 사유와 함께 알림" "$out" "주의        : 모델이 거절해 도중에 멈췄습니다 (content_filtered, REASONING_EXTRACTION)"
+has "kiro-cli: 생각 빼내기면 지시문을 보라고 알림" "$out" "지시문(aw brief)"
+printf '%s\n' '#!/bin/sh' "printf '%s\\n' '{\"type\":\"runFinished\",\"data\":{\"status\":\"success\",\"stopReason\":\"end_turn\",\"finalText\":\"정상 답\"}}'" > "$IH/fakebin/kiro-cli"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n kr-ok --no-defaults -- kiro-cli chat --output-format stream-json "질문" >/dev/null 2>&1
+"$AW" wait kr-ok --timeout 10 >/dev/null 2>&1
+out=$("$AW" peek kr-ok)
+has "정상으로 끝난 kiro-cli 의 답" "$out" "답          : 정상 답"
+hasnt "정상으로 끝난 kiro-cli 에는 주의가 없음" "$out" "주의        :"
 
 # codex: 출력은 조용하지만 자기 세션 파일에 추론 단계가 쌓입니다 (실측)
 cat > "$IH/fakebin/codex" <<'FAKE'
@@ -1037,6 +1104,14 @@ has "권장값은 예상 소요 시간을 묻음" "$(env AW_BRIEF="$IH/b2" "$AW"
 printf '내 지시문\n' > "$IH/b2"; env AW_BRIEF="$IH/b2" "$AW" brief --init >/dev/null 2>&1
 check "aw brief --init 은 있던 것을 덮어쓰지 않음" "내 지시문" "$(cat "$IH/b2")"
 has "권장 예시에는 숫자가 없음 (답으로 잘못 읽지 않게)" "$(env AW_BRIEF="$IH/b3" "$AW" brief | grep '예상 소요:')" '약 N분'
+# 생각 과정을 적어 내라는 문장은 kiro-cli 가 생각 빼내기로 보고 거절합니다 (실측). 권장값에 없어야 하고,
+# 예전 권장값을 쓰는 사람에게는 알립니다.
+env AW_BRIEF="$IH/b4" "$AW" brief --init >/dev/null 2>&1
+hasnt "권장값에 생각 과정을 적으라는 문장이 없음" "$(cat "$IH/b4")" "생각하지 말고"
+hasnt "새 권장값이면 예전 지시문 알림이 없음" "$(env AW_BRIEF="$IH/b4" "$AW" brief)" "주의:"
+printf '%s\n' '작업이 5분 넘게 걸리면 몇 분마다 지금 하는 일을 한 줄로 적으세요. 오래 생각해야 할 때도 한 번에 다 생각하지 말고, 중간에 한 줄씩 진행을 남기며 이어 가세요.' > "$IH/b5"
+has "예전 지시문이면 aw brief 가 알림" "$(env AW_BRIEF="$IH/b5" "$AW" brief)" "aw brief --init --force"
+has "예전 지시문이면 aw brief --init 도 알림" "$(env AW_BRIEF="$IH/b5" "$AW" brief --init)" "생각 빼내기"
 
 # 예상 소요 시간 읽기
 "$AW" run -n eta-text -- sh -c 'echo "예상 소요: 약 15분"; echo "일하는 중"; sleep 6; true' >/dev/null 2>&1
