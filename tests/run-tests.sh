@@ -1427,6 +1427,41 @@ mv "$PK/codex.orig" "$PK/bin/codex"
 cp "$PK/pick.agents-only" "$AW_PICK"
 resp codex 0.8
 
+# 빼기: --without 과 AW_PICK_WITHOUT. 에이전트, 에이전트:모델(수준 상관없이), 에이전트:모델@수준
+printf 'claude Claude.\n  claude-sonnet-5@low S.\n  claude-opus-5-5@xhigh O.\ncodex Codex.\n  gpt-6-luna@medium L.\n  gpt-6-astra@xhigh A.\n' > "$PK/pick.w"
+printf '%s\n' '{"model":"jev-1.13.0","answers":{"agent":{"type":"choice","choice":"claude","probabilities":{"claude":0.9,"codex":0.1},"confidence":0.8}},"usage":{"input_tokens":1,"output_tokens":1}}' > "$PK/stub/resp"
+awpw() { env AW_PICK="$PK/pick.w" PATH="$PKPATH" "$AW" "$@"; }
+awpw pick --without codex:gpt-6-astra --dry-run -- 작업 >/dev/null 2>&1
+body=$(cat "$PK/stub/body")
+hasnt "에이전트:모델 이면 그 모델 줄을 Jev 에 안 보냄" "$body" '"gpt-6-astra@xhigh"'
+has "다른 에이전트의 모델 줄은 그대로" "$body" '"claude-sonnet-5@low"'
+printf '%s\n' '{"model":"jev-1.13.0","answers":{"agent":{"type":"choice","choice":"codex","probabilities":{"claude":0.1,"codex":0.9},"confidence":0.8}},"usage":{"input_tokens":1,"output_tokens":1}}' > "$PK/stub/resp"
+has "남은 한 줄은 묻지 않고 씀" "$(awpw pick --without codex:gpt-6-astra --dry-run -- 작업 2>&1)" "고른 모델    : gpt-6-luna@medium   (모델 줄이 하나라"
+printf '%s\n' '{"model":"jev-1.13.0","answers":{"agent":{"type":"choice","choice":"claude","probabilities":{"claude":0.9,"codex":0.1},"confidence":0.8}},"usage":{"input_tokens":1,"output_tokens":1}}' > "$PK/stub/resp"
+awpw pick --without claude:claude-opus-5-5@xhigh --dry-run -- 작업 >/dev/null 2>&1
+hasnt "에이전트:모델@수준 이면 그 줄 하나를 뺌" "$(cat "$PK/stub/body")" '"claude-opus-5-5@xhigh"'
+rm -f "$PK/stub/args"
+out=$(awpw pick --without codex --dry-run -- 작업 2>&1)
+has "에이전트를 빼면 남은 후보만" "$out" "고른 에이전트: claude   (후보가 이것 하나라 묻지 않았습니다)"
+has "뺀 것을 알림" "$out" "(뺀 것: codex"
+out=$(env AW_PICK_WITHOUT=codex AW_PICK="$PK/pick.w" PATH="$PKPATH" "$AW" pick --dry-run -- 작업 2>&1)
+has "AW_PICK_WITHOUT 으로도 뺌" "$out" "고른 에이전트: claude   (후보가 이것 하나라"
+has "상태에 뺀 것" "$(env AW_PICK_WITHOUT=codex:gpt-6-luna AW_PICK="$PK/pick.w" PATH="$PKPATH" "$AW" pick)" "(뺌) L."
+out=$(awpw pick --without claude,codex --dry-run -- 작업 2>&1); code=$?
+check "다 빼면 코드 1" 1 "$code"
+has "다 뺐다고 알림" "$out" "뺀 것: claude codex"
+out=$(awpw pick --without codx --without codex:nope --dry-run -- 작업 2>&1)
+has "모르는 에이전트를 빼려 하면 알림" "$out" "모르는 에이전트라 뺄 수 없습니다: codx"
+has "없는 모델 줄을 빼려 하면 알림" "$out" "그 모델 줄이 없습니다: codex:nope"
+echo 503 > "$PK/stub/code"
+out=$(awpw pick --without claude --dry-run -- 작업 2>&1)
+has "Jev 를 못 쓸 때 대신 띄우는 것도 뺀 것을 건너뜀" "$out" "고른 에이전트: codex   (Jev 를 못 써서 대신)"
+rm -f "$PK/stub/code"
+awpw pick -n pk-without --without codex:gpt-6-astra -d "$PK/nogit" -- 작업 >/dev/null 2>&1
+check "meta 에 뺀 것" "codex:gpt-6-astra" "$(sed -n 's/^pick_without=//p' "$AW_HOME/workers/pk-without/meta")"
+awp wait pk-without --timeout 10 >/dev/null 2>&1
+resp codex 0.8
+
 # 후보가 하나면 묻지 않음
 rm -f "$PK/stub/args"
 grep -v '^[[:space:]]' "$AW_PICK" | sed 's/^codex /#codex /' > "$AW_PICK.new" && mv "$AW_PICK.new" "$AW_PICK"

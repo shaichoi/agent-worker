@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.15.1
+AW_VERSION=0.16.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -252,7 +252,8 @@ T
 모델 목록 캐시: $AW_HOME/models/<에이전트>   (aw models, codex 는 ~/.codex 의 파일을 바로 읽음)
 기계로 읽으려면: aw list --json
 환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_QUIET,
-          AW_PICK, AW_PICK_KEYFILE, AW_PICK_MIN_CONFIDENCE, AW_PICK_FALLBACK, TYPESAFE_API_KEY (aw help pick)
+          AW_PICK, AW_PICK_KEYFILE, AW_PICK_MIN_CONFIDENCE, AW_PICK_FALLBACK, AW_PICK_WITHOUT,
+          TYPESAFE_API_KEY (aw help pick)
 워커 안에서는 AW_WORKER 에 그 워커 이름이 들어 있습니다 (중첩 확인용).
 T
       ;;
@@ -306,6 +307,8 @@ T
   --min-confidence N               확신이 N 보다 낮으면 띄우지 않고 코드 3 (기본 0.5, AW_PICK_MIN_CONFIDENCE)
   --key 키                         이번만 이 키로 (저장하지 않음)
   --fallback <에이전트|none>       Jev 를 못 쓸 때 대신 띄울 에이전트 (기본: 설명 파일의 첫 후보, AW_PICK_FALLBACK)
+  --without <에이전트|에이전트:모델>  이번엔 고르지 않을 것. 여러 번 주거나 쉼표로. 늘 빼려면 AW_PICK_WITHOUT
+                                   예) --without devin,codex:gpt-6-astra   (모델@수준 이면 그 줄 하나만)
   run 옵션: -n -d -w -e --tag --profile --max-input-tokens --no-defaults --no-brief
   종료 코드: 0 띄움 (Jev 를 못 써서 대신 띄운 것 포함) / 1 오류 (꺼짐, --fallback none, 대신 띄울
             에이전트가 없음) / 3 확신이 낮아 안 띄움
@@ -2688,6 +2691,7 @@ pick_models_ok() { # <에이전트>
   pmo_out=''
   while IFS="$pmo_tab" read -r pmo_s pmo_d; do
     [ -n "$pmo_s" ] || continue
+    pick_model_out "$1" "$pmo_s" && continue
     if model_known "$1" "$(pick_spec_model "$1" "$pmo_s")"; then :; elif [ $? -eq 1 ]; then pmo_dropped="${pmo_dropped:+$pmo_dropped, }$pmo_s"; continue; fi
     pmo_out="$pmo_out$pmo_s$pmo_tab$pmo_d
 "
@@ -2715,12 +2719,40 @@ pick_model_opts() { # <에이전트> <모델[@수준]>
   return 0
 }
 
-# 후보: 아는 에이전트 중 PATH 에 있는 것. 모르는 이름은 알리고 건너뜁니다.
+# 빼기 목록 (--without, AW_PICK_WITHOUT). 쉼표나 공백으로 나뉜 '에이전트' 또는 '에이전트:모델[@수준]'.
+# '에이전트:모델' 은 수준과 상관없이 그 모델의 줄을, '에이전트:모델@수준' 은 그 줄 하나를 뺍니다.
+pick_without=''
+pick_without_add() { # <목록>
+  for pw_t in $(printf '%s' "$1" | tr ',' ' '); do pick_without="${pick_without:+$pick_without }$pw_t"; done
+}
+pick_agent_out() { # <에이전트>  → 빼기 목록에 있으면 0
+  case " $pick_without " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+pick_model_out() { # <에이전트> <모델[@수준]>
+  case " $pick_without " in *" $1:$2 "* | *" $1:${2%%@*} "*) return 0 ;; esac
+  return 1
+}
+# 설명 파일에 없는 것을 빼려 하면(오타 등) 알립니다.
+pick_without_check() {
+  pwc_tab=$(printf '\t')
+  for pwc_t in $pick_without; do
+    pwc_a=${pwc_t%%:*}
+    case "$pwc_a" in claude | codex | agy | devin | kiro-cli) ;; *) warn "aw pick: 모르는 에이전트라 뺄 수 없습니다: $pwc_t"; continue ;; esac
+    case "$pwc_t" in *:*) ;; *) continue ;; esac
+    pwc_m=${pwc_t#*:}
+    pick_models "$pwc_a" | cut -f1 | LC_ALL=C awk -v m="$pwc_m" '$0 == m || substr($0, 1, index($0 "@", "@") - 1) == m { f = 1 } END { exit !f }' \
+      || warn "aw pick: 설명 파일의 $pwc_a 에 그 모델 줄이 없습니다: $pwc_t"
+  done
+}
+
+# 후보: 아는 에이전트 중 PATH 에 있는 것. 모르는 이름은 알리고 건너뜁니다. 빼기 목록에 있으면 뺍니다.
 pick_candidates() {
   pc_tab=$(printf '\t')
   pick_lines | while IFS="$pc_tab" read -r pc_a pc_d; do
     case "$pc_a" in
       claude | codex | agy | devin | kiro-cli)
+        pick_agent_out "$pc_a" && continue
         if command -v "$pc_a" >/dev/null 2>&1; then printf '%s\t%s\n' "$pc_a" "$pc_d"; fi ;;
       *) warn "aw pick: 모르는 에이전트라 건너뜁니다: $pc_a  ($(tilde "$AW_PICK"))" ;;
     esac
@@ -2835,18 +2867,22 @@ pick_status() {
     say "  키      : 없음. 넣으려면 aw pick key <키>   (또는 TYPESAFE_API_KEY, 한 번만이면 aw pick --key)"
   fi
   say "  모델    : ${TYPESAFE_DEFAULT_MODEL:-jev-latest}   확신 하한: ${AW_PICK_MIN_CONFIDENCE:-0.5}"
+  pick_without=''; pick_without_add "${AW_PICK_WITHOUT:-}"
+  [ -n "$pick_without" ] && say "  빼기    : $(printf '%s' "$pick_without" | sed 's/ /, /g')   (AW_PICK_WITHOUT)"
   say "  후보    :"
   ps_tab=$(printf '\t')
   pick_lines | while IFS="$ps_tab" read -r ps_a ps_d; do
     case "$ps_a" in
       claude | codex | agy | devin | kiro-cli)
-        if command -v "$ps_a" >/dev/null 2>&1; then ps_s=있음; else ps_s='없음 (안 고름)'; fi ;;
+        if pick_agent_out "$ps_a"; then ps_s='뺌 (안 고름)'
+        elif command -v "$ps_a" >/dev/null 2>&1; then ps_s=있음; else ps_s='없음 (안 고름)'; fi ;;
       *) ps_s='모름 (안 고름)' ;;
     esac
     say "    $(padw 10 "$ps_a")$(padw 16 "$ps_s")$(printf '%s' "$ps_d" | trunc_filter 60)"
     pick_models "$ps_a" | while IFS="$ps_tab" read -r ps_m ps_md; do
       ps_ms=''
-      if command -v "$ps_a" >/dev/null 2>&1 && ps_l=$(models_list "$ps_a" 2>/dev/null) \
+      if pick_model_out "$ps_a" "$ps_m"; then ps_ms='(뺌) '
+      elif command -v "$ps_a" >/dev/null 2>&1 && ps_l=$(models_list "$ps_a" 2>/dev/null) \
         && ! models_has "$ps_a" "$(pick_spec_model "$ps_a" "$ps_m")" "$ps_l"; then ps_ms='(목록에 없음) '; fi
       say "      $(padw 30 "$ps_m")$ps_ms$(printf '%s' "$ps_md" | trunc_filter 50)"
     done
@@ -3002,6 +3038,7 @@ cmd_pick() {
     key) shift; pick_key_set "$@"; return $? ;;
   esac
 
+  pick_without=''; pick_without_add "${AW_PICK_WITHOUT:-}"
   pk_argkey=''; pk_fb="${AW_PICK_FALLBACK:-}"; pk_dry=0; pk_min="${AW_PICK_MIN_CONFIDENCE:-0.5}"; pk_file=''; pk_dir=$PWD; pk_git=0; pk_opts=''
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -3009,6 +3046,7 @@ cmd_pick() {
       --dry-run) pk_dry=1; shift ;;
       --key) pk_argkey="${2:?--key 에 키가 필요합니다}"; shift 2 ;;
       --fallback) pk_fb="${2:?--fallback 에 에이전트 이름이나 none 이 필요합니다}"; shift 2 ;;
+      --without) pick_without_add "${2:?--without 에 에이전트나 에이전트:모델 이 필요합니다}"; shift 2 ;;
       --min-confidence) pk_min="${2:?--min-confidence 에 0~1 사이 값이 필요합니다}"; shift 2 ;;
       -f | --stdin-file) pk_file="${2:?-f 에 파일이 필요합니다}"; shift 2 ;;
       -d | --dir) pk_dir="${2:?--dir 에 값이 필요합니다}"; pk_opts="$pk_opts -d $(shquote "$pk_dir")"; shift 2 ;;
@@ -3037,7 +3075,11 @@ cmd_pick() {
   fi
   [ "$pk_git" -eq 1 ] || { git -C "$pk_dir" rev-parse --git-dir >/dev/null 2>&1 && pk_git=1; } || true
 
+  pick_without_check
   pk_cands=$(pick_candidates)
+  if [ -z "$pk_cands" ] && [ -n "$pick_without" ]; then
+    die "고를 에이전트가 없습니다. 남은 에이전트가 없거나 PATH 에 없습니다 (뺀 것: $pick_without)."
+  fi
   [ -n "$pk_cands" ] || die "고를 에이전트가 없습니다. $(tilde "$AW_PICK") 의 에이전트가 하나도 PATH 에 없습니다 (aw pick 으로 확인)."
   pk_ask_agent=0
   [ "$(printf '%s\n' "$pk_cands" | grep -c .)" -ge 2 ] && pk_ask_agent=1
@@ -3126,6 +3168,7 @@ cmd_pick() {
   pk_mopts=''
   [ -n "$pk_model" ] && pk_mopts=$(pick_model_opts "$pk_choice" "$pk_model")
 
+  [ -n "$pick_without" ] && say "  (뺀 것: $(printf '%s' "$pick_without" | sed 's/ /, /g') — --without, AW_PICK_WITHOUT)"
   pk_argv=$(pick_argv "$pk_choice" "$pk_file" "$pk_prompt" "$pk_git" "$pk_mopts")
   pk_fopt=''
   [ -n "$pk_file" ] && [ "$pk_choice" != devin ] && pk_fopt=" -f $(shquote "$pk_file")"
@@ -3144,6 +3187,7 @@ cmd_pick() {
     [ -n "$pk_model" ] && printf 'pick_model=%s\n' "$pk_model"
     [ -n "$pk_mconfs" ] && printf 'pick_model_confidence=%s\n' "$pk_mconfs"
     [ -n "$pk_jev_err" ] && printf 'pick_jev_error=%s\n' "$(printf '%s' "$pk_jev_err" | tr '\n' ' ')"
+    [ -n "$pick_without" ] && printf 'pick_without=%s\n' "$pick_without"
   } >> "$wd/meta"
   return 0
 }
@@ -3341,6 +3385,7 @@ aw rm review
   ```
 
   - 고른 에이전트와 확신이 첫 줄에, 모델을 골랐으면 그다음 줄에 찍힙니다. 사용자에게 그대로 전합니다.
+  - 사용자가 어떤 에이전트나 모델을 빼 달라고 하면 ("devin 말고", "astra 는 쓰지 마") `--without devin,codex:gpt-6-astra`.
   - **사용자가 에이전트를 콕 집었으면** ("codex 로", "gemini 한테") 켜져 있어도 `aw run` 으로 그 에이전트를 띄웁니다.
     당신이 쓴 워커 프롬프트에는 그 이름이 없어서 Jev 가 다른 걸 고를 수 있습니다.
   - 코드 3 은 확신이 낮아 안 띄웠다는 뜻입니다. 찍힌 분포를 보고 직접 골라 `aw run` 으로 띄우고, 그렇게 했다고 알립니다.

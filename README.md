@@ -715,6 +715,11 @@ aw pick off                                   # 끄기 (고친 설명과 키는 
 - **확신이 낮으면 띄우지 않습니다.** 에이전트 확신이 `--min-confidence`(기본 0.5)보다 낮으면 분포만 보여 주고
   코드 3 으로 끝납니다. 직접 `aw run` 으로 고르거나, 1등을 그대로 쓰려면 `--min-confidence 0`. 모델 확신이 낮으면
   워커는 띄우고 모델만 기본값으로 둡니다.
+- **빼기:** 이번엔 고르지 않을 에이전트나 모델 줄을 `--without` 으로 줍니다. `에이전트` 는 그 에이전트를, `에이전트:모델` 은
+  수준과 상관없이 그 모델의 줄을, `에이전트:모델@수준` 은 그 줄 하나를 뺍니다. 여러 번 주거나 쉼표로 잇습니다
+  (`aw pick --without devin,codex:gpt-6-astra -- '작업'`). 늘 빼려면 같은 문법을 `AW_PICK_WITHOUT` 에 둡니다(컴퓨터마다
+  셸 설정에). 뺀 에이전트는 Jev 를 못 쓸 때 대신 띄우는 후보에서도 빠지고, 설명 파일에 없는 이름이면 알려 줍니다.
+  설명 파일에서 그 줄을 `#` 로 막아도 됩니다.
 - 후보나 모델 줄이 하나뿐이면 묻지 않고 그걸 씁니다. 고른 결과는 워커 `meta` 의 `picked`, `pick_confidence`,
   `pick_model`, `pick_model_confidence` 에 남고 `aw status` 에 보입니다.
 - 종료 코드: `0` 띄움 (Jev 를 못 써서 대신 띄운 것 포함) / `1` 오류 (꺼짐, `--fallback none`, 대신 띄울 에이전트가 없음) /
@@ -933,6 +938,7 @@ mytool 128000
 | `AW_PICK_KEYFILE` | `~/.config/agent-worker/typesafe-key` | `aw pick key` 가 키를 저장하는 파일 |
 | `AW_PICK_MIN_CONFIDENCE` | `0.5` | `aw pick` 이 띄우는 확신 하한 |
 | `AW_PICK_FALLBACK` | (설명 파일의 첫 후보) | Jev 를 못 쓸 때 대신 띄울 에이전트. `none` 이면 멈춤 |
+| `AW_PICK_WITHOUT` | (없음) | `aw pick` 이 늘 고르지 않을 것. `devin,codex:gpt-6-astra` 처럼 (`--without` 과 같은 문법) |
 | `TYPESAFE_API_KEY` | (없음) | Jev 키. 저장한 파일보다 먼저 쓰임 (`--key` 가 그보다 먼저) |
 | `TYPESAFE_DEFAULT_MODEL` / `TYPESAFE_BASE_URL` | `jev-latest` / `https://api.typesafe.ai` | `aw pick` 이 부르는 모델과 주소 |
 

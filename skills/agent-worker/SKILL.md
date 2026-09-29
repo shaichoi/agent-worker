@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.15.1"
+  version: "0.16.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -81,6 +81,7 @@ aw rm review
   ```
 
   - 고른 에이전트와 확신이 첫 줄에, 모델을 골랐으면 그다음 줄에 찍힙니다. 사용자에게 그대로 전합니다.
+  - 사용자가 어떤 에이전트나 모델을 빼 달라고 하면 ("devin 말고", "astra 는 쓰지 마") `--without devin,codex:gpt-6-astra`.
   - **사용자가 에이전트를 콕 집었으면** ("codex 로", "gemini 한테") 켜져 있어도 `aw run` 으로 그 에이전트를 띄웁니다.
     당신이 쓴 워커 프롬프트에는 그 이름이 없어서 Jev 가 다른 걸 고를 수 있습니다.
   - 코드 3 은 확신이 낮아 안 띄웠다는 뜻입니다. 찍힌 분포를 보고 직접 골라 `aw run` 으로 띄우고, 그렇게 했다고 알립니다.
