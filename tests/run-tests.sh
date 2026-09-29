@@ -300,7 +300,13 @@ check "kiro-cli: 모델을 직접 줘도 엔진 줄은 남음" \
 
 "$AW" run -n def-claude -- claude -p 질문 >/dev/null 2>&1
 "$AW" wait def-claude >/dev/null 2>&1
-check "값이 딸린 옵션도 온전히 붙음" "$(printf -- '-p\n질문\n--permission-mode\nbypassPermissions')" "$("$AW" result def-claude)"
+check "값이 딸린 옵션도 온전히 붙음 (claude 는 모델과 수준도)" "$(printf -- '-p\n질문\n--permission-mode\nbypassPermissions\n--model\nclaude-opus-5-5\n--effort\nxhigh')" "$("$AW" result def-claude)"
+# claude 는 모델과 수준을 따로 둡니다. 모델만 바꾸면 수준은 남고, 수준만 바꾸면 모델이 남습니다.
+"$AW" run -n def-claude-m -- claude -p 질문 --model sonnet >/dev/null 2>&1
+"$AW" run -n def-claude-e -- claude -p 질문 --effort low >/dev/null 2>&1
+"$AW" wait def-claude-m def-claude-e >/dev/null 2>&1
+check "claude: 모델만 바꿔도 xhigh 는 남음" "$(printf -- '-p\n질문\n--model\nsonnet\n--permission-mode\nbypassPermissions\n--effort\nxhigh')" "$("$AW" result def-claude-m)"
+check "claude: 수준만 바꿔도 Opus 는 남음" "$(printf -- '-p\n질문\n--effort\nlow\n--permission-mode\nbypassPermissions\n--model\nclaude-opus-5-5')" "$("$AW" result def-claude-e)"
 # devin 은 승인 우회와 작업 공간 신뢰 검사 끄기를 한 줄에 같이 둡니다.
 # -w 가 만드는 worktree 는 실행 시점에 생기는 경로라 미리 신뢰 등록을 할 수 없습니다.
 "$AW" run -n def-devin -- devin -p 질문 >/dev/null 2>&1
@@ -317,7 +323,7 @@ check "devin 에 --model 을 직접 주면 SWE-2 는 안 붙음" \
 
 "$AW" run -n def-user -- claude -p 질문 --permission-mode acceptEdits >/dev/null 2>&1
 "$AW" wait def-user >/dev/null 2>&1
-check "사용자 지정이 있으면 덧붙이지 않음" "$(printf -- '-p\n질문\n--permission-mode\nacceptEdits')" "$("$AW" result def-user)"
+check "사용자 지정이 있으면 덧붙이지 않음 (그 줄만)" "$(printf -- '-p\n질문\n--permission-mode\nacceptEdits\n--model\nclaude-opus-5-5\n--effort\nxhigh')" "$("$AW" result def-user)"
 
 "$AW" run -n def-off --no-defaults -- agy -p=질문 >/dev/null 2>&1
 "$AW" wait def-off >/dev/null 2>&1
