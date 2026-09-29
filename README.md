@@ -106,12 +106,13 @@ cd agent-worker
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
 | `aw defaults [get\|set\|unset]` | [기본 옵션](#기본-옵션-권한-우회-모델)(권한, 모델) 보기 / 바꾸기. `--init` 은 권장값으로 켜기 |
+| `aw models [에이전트] [--refresh]` | 설치된 CLI 의 [모델 목록](#모델-목록-aw-models). 기본 옵션의 모델이 목록에 없으면 CLI 기본으로 |
 | `aw brief [--init]` | [워커 지시문](#워커-지시문-brief) 확인 / 권장값으로 켜기 |
 | `aw pick [on\|off\|key]` / `aw pick -- '작업'` | (실험용) Jev 가 [작업에 맞는 에이전트·모델을 골라](#에이전트-고르기-aw-pick-실험용) 워커를 띄움 |
 | `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
 | `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
 | `aw version` | 버전 |
-| `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` `peek` `brief` `pick` |
+| `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` `peek` `brief` `pick` `models` |
 
 `aw ls` 는 `aw list` 의 별칭입니다. `aw logs` 의 `-n` 기본값은 40줄입니다.
 
@@ -674,19 +675,19 @@ aw pick off                                   # 끄기 (고친 설명과 키는 
 
 ```
 고른 에이전트: codex   확신 0.99   (codex 1.00 · agy 0.00 · claude 0.00 · devin 0.00 · kiro-cli 0.00)
-고른 모델    : gpt-5.6-sol@xhigh   확신 0.97   (gpt-5.6-sol@xhigh 0.98 · gpt-5.6-terra@high 0.02 · gpt-5.6-luna@medium 0.00)
+고른 모델    : gpt-6-astra@xhigh   확신 0.96   (gpt-6-astra@xhigh 0.97 · gpt-6-sol@high 0.03 · gpt-6-luna@medium 0.00)
 워커 시작: review
-  명령: codex exec --json --model gpt-5.6-sol -c model_reasoning_effort=xhigh src/auth 를 검토해줘
+  명령: codex exec --json --model gpt-6-astra -c model_reasoning_effort=xhigh src/auth 를 검토해줘
 ```
 
 - **고르는 기준**은 `~/.config/agent-worker/pick` 의 설명입니다. 에이전트 줄 아래 들여 쓴 줄이 그 에이전트의
   모델 선택지입니다.
 
   ```
-  codex OpenAI Codex CLI (GPT-5.6). For reviewing and critiquing existing material without changing it ...
-    gpt-5.6-luna@medium GPT-5.6 Luna, fast and cheap, medium reasoning. For a quick, low-risk check ...
-    gpt-5.6-terra@high GPT-5.6 Terra, balanced, high reasoning. The ordinary choice ...
-    gpt-5.6-sol@xhigh GPT-5.6 Sol, ... For a review where a missed problem would be costly ...
+  codex OpenAI Codex CLI (GPT-6). For reviewing and critiquing existing material without changing it ...
+    gpt-6-luna@medium GPT-6 Luna, fast and affordable, medium reasoning. For a quick, low-risk check ...
+    gpt-6-sol@high GPT-6 Sol, OpenAI's workhorse coding model, high reasoning. The ordinary choice ...
+    gpt-6-astra@xhigh GPT-6 Astra, ... For a review where a missed problem would be costly ...
   ```
 
   Jev 에는 요청 한 번에 Choice 질문을 여럿 보냅니다. 에이전트 하나, 그리고 모델 줄이 둘 이상인 후보마다 모델
@@ -697,9 +698,11 @@ aw pick off                                   # 끄기 (고친 설명과 키는 
 - **권장 설명**은 실측으로 다듬었습니다. 다섯 CLI 의 모델·수준 목록을 실측으로 모으고, 초안을 codex 와 devin 에게
   `aw run` 으로 검토받은 뒤 네 가지 안을 실제 Jev 로 견줬습니다. 시험 작업은 `tests/pick-eval/` 에 있습니다.
   - `tasks.txt` (26개, 다듬을 때 쓴 것): 에이전트 26/26, 모델까지 25/26.
-  - `heldout.txt` (24개, 정책만 주고 codex 가 따로 만든 것): 에이전트 24/24, 모델까지 19/24. 모델이 틀린 5개 중
-    3개는 확신이 낮아 기본값으로 갔고 2개는 옆 단계를 골랐습니다. 권장 설명을 쓸 때 이 세트는 보지 않았지만, 결과를 본
-    뒤 규칙 하나(Luna·Terra·Sol, Flash·Pro 라는 이름을 codex·agy 가 가져감)를 고쳤습니다. 고치기 전 에이전트는 22/24 였습니다.
+  - `heldout.txt` (24개, 정책만 주고 codex 가 따로 만든 것): 에이전트 24/24, 모델까지 18/24. 모델이 틀린 6개 중
+    4개는 확신이 낮아 기본값으로 갔고 2개는 옆 단계를 골랐습니다. 권장 설명을 쓸 때 이 세트는 보지 않았지만, 결과를 본
+    뒤 규칙 하나(Luna·Sol·Astra, Flash·Pro 라는 이름을 codex·agy 가 가져감)를 고쳤습니다. 고치기 전 에이전트는 22/24 였습니다.
+  - codex 줄은 0.15.0 에서 GPT-5.6 에서 GPT-6 세대(luna / sol / astra)로 바꿨습니다. 그러면서 "Sol 로 꼼꼼히" 처럼 이름과
+    난이도가 다른 줄을 가리키는 작업이 생겨, 보류 세트의 모델 점수가 19/24 에서 18/24 로 내려갔습니다(그 작업은 기본값으로 감).
   - 다시 재려면 `tests/pick-eval/run.sh [설명 파일]` (실제 Jev 에 작업마다 한 번 요청, 키 필요).
 
   정답표는 "누가 무엇을 맡는가" 라는 정책을 따른 것이라, Jev 가 그 정책대로 고르는지만 잽니다. 그 정책이 실제로 최선인지
@@ -740,6 +743,41 @@ aw pick key "$KEY"                           # 인자로 저장
 인자로 준 키는 셸 기록과 `aw` 프로세스의 `ps` 에 남을 수 있습니다. 기록이 걱정되면 환경변수나 표준 입력을 쓰세요.
 `aw` 는 키를 `curl` 의 명령 인자에 싣지 않고(설정을 표준 입력으로 넘김) 워커 기록에도 남기지 않습니다.
 Jev 로 보내는 것은 작업 글의 앞 12KB 와 후보 설명뿐이고, 저장소 파일은 보내지 않습니다. `curl` 이 필요합니다.
+
+## 모델 목록 (aw models)
+
+설치된 CLI 가 스스로 알려 주는 모델 목록을 가져와, 정해 둔 모델이 그 컴퓨터에서 실제로 쓸 수 있는지 봅니다.
+
+```sh
+aw models                   # 에이전트마다 모델 수, CLI 의 기본, 기본 옵션의 모델이 목록에 있는지
+aw models devin             # 그 에이전트의 모델 이름, 한 줄에 하나 (CLI 의 기본은 앞에 '* ')
+aw models --refresh         # CLI 에게 다시 물어 캐시를 새로 씀
+```
+
+```
+에이전트  모델  CLI 기본            목록
+claude    -     -                   목록 명령이 없어 확인하지 않음
+codex     9     gpt-6-astra         ~/.codex/models_cache.json (codex 가 관리)
+agy       14    -                   캐시 2m 전
+            기본 옵션 --model gemini-3.8-flash: 목록에 있음
+devin     704   -                   캐시 2m 전
+            기본 옵션 --model swe-2-max: 목록에 있음
+kiro-cli  20    auto                캐시 2m 전
+            기본 옵션 --model claude-opus-5.5: 목록에 있음
+```
+
+- **정한 기본이 먼저입니다.** 기본 옵션(`aw defaults`)의 모델을 붙이기 전에 그 CLI 의 목록에 있는지 봅니다. 없으면(모델이
+  바뀌었거나 없어졌으면) 그 줄을 빼서 CLI 자체의 기본 모델로 띄우고, `aw run` 출력과 워커 `meta` 의
+  `default_model_dropped` 에 남깁니다. 다른 줄(권한 등)은 그대로 붙습니다.
+- **목록을 모르면 정한 기본 그대로입니다.** claude 는 목록 명령이 없고, 설치 안 된 CLI 나 조회에 실패한 CLI 도
+  확인하지 않습니다.
+- `aw pick` 은 목록에 없는 모델 줄을 Jev 에 보내지 않습니다. `aw pick` 상태에는 `(목록에 없음)` 으로 보입니다.
+- 목록을 얻는 곳: codex 는 `~/.codex/models_cache.json` 과 `config.toml` 의 `model`(기본), agy 는 `agy models`, devin 은
+  `devin models list`(모델 ID·계열·별칭 모두, `--model` 이 셋 다 받음), kiro-cli 는 `kiro-cli chat --list-models`(`*` 가 기본).
+  agy 는 `gemini-3.8-flash` 처럼 수준을 뗀 이름도 목록의 `gemini-3.8-flash-high` 와 맞는 것으로 봅니다(`--effort` 와 함께 씀).
+- 목록 명령이 느려서(실측: kiro-cli 1.4초, agy 4.7초, devin 5.5초) `~/.local/share/agent-worker/models/` 에 캐시합니다.
+  `aw run` 은 캐시만 읽고, **찾는 모델이 캐시에 없을 때만** 한 번 새로 물어본 뒤 정합니다. 낡은 캐시 때문에 멀쩡한 기본을
+  빼지 않고, 새로 받지 못하면 빼지 않습니다. codex 는 스스로 관리하는 파일을 그때그때 읽습니다.
 
 ## 기본 옵션 (권한 우회, 모델)
 

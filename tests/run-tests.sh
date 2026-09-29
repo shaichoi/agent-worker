@@ -27,7 +27,9 @@ NO_DEFAULTS="$TMPROOT/no-defaults"   # 만들지 않는 파일: 기본 옵션이
 export AW_DEFAULTS="$NO_DEFAULTS"
 # aw pick 도 이 컴퓨터의 설정·키를 읽지 않게 합니다. 네트워크에는 나가지 않습니다 (curl 을 가짜로 바꿈).
 export AW_PICK="$TMPROOT/pick" AW_PICK_KEYFILE="$TMPROOT/typesafe-key"
-unset TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL AW_PICK_MIN_CONFIDENCE
+unset TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL AW_PICK_MIN_CONFIDENCE AW_PICK_FALLBACK
+# 모델 목록도 이 컴퓨터의 codex 설정(~/.codex)을 읽지 않게 합니다 (그 시험은 따로 가짜를 둠).
+export CODEX_HOME="$TMPROOT/no-codex-home"
 
 head_ "1. 문법 검사"
 for s in sh bash zsh; do
@@ -406,7 +408,7 @@ for want in "aw run" "aw wait" "wait 종료 코드" "running / done" "aw help ag
 done
 lines=$(printf '%s\n' "$h" | wc -l)
 if [ "$lines" -lt 60 ]; then ok "개요가 짧음 (${lines}줄)"; else ng "개요가 너무 김 (${lines}줄)"; fi
-for topic in agents defaults files limits peek brief pick; do
+for topic in agents defaults files limits peek brief pick models; do
   if "$AW" help "$topic" >/dev/null 2>&1; then ok "aw help $topic"; else ng "aw help $topic 실패"; fi
   case "$h" in *"aw help $topic"*) ok "개요의 자세히에 $topic 이 있음" ;; *) ng "개요에 aw help $topic 안내 없음" ;; esac
 done
@@ -1442,6 +1444,120 @@ if [ -f "$AW_PICK" ]; then ok "aw pick on --key 가 켬"; else ng "aw pick on --
 check "aw pick on --key 가 키를 저장" tsk_on_key_7654321 "$(cat "$AW_PICK_KEYFILE" 2>/dev/null)"
 hasnt "aw pick on --key 가 키 전체를 찍지 않음" "$out" tsk_on_key_7654321
 awp clean >/dev/null 2>&1
+
+head_ "22. 모델 목록 (aw models)"
+# 가짜 CLI 가 실제 형식 그대로 목록을 내고, 에이전트로 불리면 인자를 찍습니다. 목록은 $MF 의 파일이라 바꿀 수 있습니다.
+MF="$TMPROOT/models-t"; MB="$MF/bin"; mkdir -p "$MB" "$MF/codex"
+export MF
+for a in agy devin kiro-cli claude; do
+  cat > "$MB/$a" <<'F'
+#!/bin/sh
+n=${0##*/}
+case "$n:$*" in
+  agy:models | "devin:models list" | "kiro-cli:chat --list-models")
+    echo called >> "$MF/$n.calls"
+    [ -f "$MF/$n.fail" ] && exit 1
+    cat "$MF/$n.list"; exit 0 ;;
+esac
+printf '%s\n' "$0" "$@"
+F
+  chmod +x "$MB/$a"
+done
+printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\ngemini-3.1-pro-high\tGemini 3.1 Pro (High)\n' > "$MF/agy.list"
+cat > "$MF/devin.list" <<'L'
+Available models (2 families)
+
+SWE-2 (swe-2)
+  aliases: swe
+  swe-2-high                  SWE-2 High  [262K context, Free]
+  swe-2-max                   SWE-2 Max  [262K context, Free]
+
+Claude Opus 5.5 (claude-opus-5.5)
+  claude-opus-5-5-high        Claude Opus 5.5 High  [1M context, $4 / 1M Input]
+
+Pass a family slug, alias, or model UID to `--model` (e.g. `--model opus`)
+or switch models in a session with `/model <name>`.
+L
+cat > "$MF/kiro-cli.list" <<'L'
+Available models (* = default):
+
+* auto                 1.00x credits      Models chosen by task for optimal usage
+  claude-opus-5.5      2.00x credits      Experimental preview of Claude Opus 5.5
+  claude-sonnet-5      1.30x credits      Claude Sonnet 5 model with 1M context window
+L
+cat > "$MF/codex/models_cache.json" <<'L'
+{
+  "fetched_at": "2026-09-29T00:00:00Z",
+  "models": [
+    {
+      "slug": "gpt-6-astra",
+      "visibility": "list"
+    },
+    {
+      "slug": "gpt-6-luna",
+      "visibility": "list"
+    }
+  ]
+}
+L
+printf 'model = "gpt-6-astra"\nmodel_reasoning_effort = "medium"\n[features]\nmodel = "not-this"\n' > "$MF/codex/config.toml"
+awm() { env PATH="$MB:/usr/bin:/bin" CODEX_HOME="$MF/codex" "$AW" "$@"; }
+
+out=$(awm models)
+has "요약에 codex 모델 수와 기본 (config.toml 맨 위의 model)" "$out" "codex     2     gpt-6-astra"
+has "요약에 kiro-cli 의 기본(*)" "$out" "kiro-cli  3     auto"
+has "claude 는 목록 명령이 없음" "$out" "목록 명령이 없어 확인하지 않음"
+check "devin: 계열·별칭·ID 를 다 모음" "$(printf '%s\n' swe-2 swe swe-2-high swe-2-max claude-opus-5.5 claude-opus-5-5-high)" "$(awm models devin)"
+check "agy: 모델 이름만" "$(printf '%s\n' gemini-3.8-flash-high gemini-3.8-flash-low gemini-3.1-pro-high)" "$(awm models agy)"
+has "kiro-cli: 기본은 앞에 *" "$(awm models kiro-cli)" "* auto"
+if awm models claude >/dev/null 2>&1; then ng "claude 목록을 안다고 함"; else ok "claude 목록은 모른다고 (코드 1)"; fi
+
+# 기본 옵션의 모델이 목록에 있으면 붙이고, 없으면 그 줄을 빼고 CLI 기본으로
+printf 'agy --model gemini-3.8-flash --effort high\ndevin --model swe\nkiro-cli --trust-all-tools\nkiro-cli --model gone-model\nclaude --model whatever-name\ncodex --model gpt-6-luna\n' > "$MF/defaults"
+awd() { env PATH="$MB:/usr/bin:/bin" CODEX_HOME="$MF/codex" AW_DEFAULTS="$MF/defaults" "$AW" "$@"; }
+awd run -n md-agy -- agy -p=작업 >/dev/null 2>&1
+awd run -n md-devin -- devin -p 작업 >/dev/null 2>&1
+out=$(awd run -n md-kiro -- kiro-cli chat 작업 2>&1)
+awd run -n md-claude -- claude -p 작업 >/dev/null 2>&1
+printf '#!/bin/sh\nprintf "%%s\\n" "$0" "$@"\n' > "$MB/codex"; chmod +x "$MB/codex"
+awd run -n md-codex -- codex exec 작업 >/dev/null 2>&1
+awm wait md-agy md-devin md-kiro md-claude md-codex --timeout 10 >/dev/null 2>&1
+has "agy: 수준을 뗀 이름(gemini-3.8-flash)도 목록의 -high 와 맞음" "$(awm result md-agy)" "gemini-3.8-flash"
+has "devin: 별칭(swe)도 목록에 있음" "$(awm result md-devin)" "swe"
+hasnt "kiro-cli: 목록에 없는 모델 줄은 뺌" "$(awm result md-kiro)" "gone-model"
+has "kiro-cli: 다른 줄(권한)은 그대로" "$(awm result md-kiro)" "--trust-all-tools"
+has "kiro-cli: 뺀 줄 전체를 알림" "$out" "기본 옵션 '--model gone-model' 는 뺐습니다: 모델이 kiro-cli 의 모델 목록에 없음"
+check "meta 에 뺀 줄" "--model gone-model" "$(sed -n 's/^default_model_dropped=//p' "$AW_HOME/workers/md-kiro/meta")"
+has "claude: 목록을 모르면 그대로" "$(awm result md-claude)" "whatever-name"
+has "codex: models_cache.json 의 모델이면 그대로" "$(awm result md-codex)" "gpt-6-luna"
+
+# 캐시에 없는 모델은 한 번 새로 물어본 뒤 정함 (목록이 바뀌었을 수 있음)
+printf 'kiro-cli --model claude-new-6\n' > "$MF/defaults"
+: > "$MF/kiro-cli.calls"
+printf '  claude-new-6         1.00x credits      new\n' >> "$MF/kiro-cli.list"
+awd run -n md-kiro2 -- kiro-cli chat 작업 >/dev/null 2>&1
+awm wait md-kiro2 --timeout 10 >/dev/null 2>&1
+has "캐시에 없던 새 모델은 새로 물어 붙임" "$(awm result md-kiro2)" "claude-new-6"
+check "그때 목록을 한 번 물어봄" 1 "$(grep -c called "$MF/kiro-cli.calls")"
+: > "$MF/kiro-cli.calls"
+awd run -n md-kiro3 -- kiro-cli chat 작업 >/dev/null 2>&1
+check "캐시에 있으면 다시 묻지 않음" 0 "$(grep -c called "$MF/kiro-cli.calls")"
+# 목록을 새로 받지 못하면(조회 실패) 낡은 캐시로 빼지 않고 그대로
+printf 'kiro-cli --model not-in-cache\n' > "$MF/defaults"; touch "$MF/kiro-cli.fail"
+awd run -n md-kiro4 -- kiro-cli chat 작업 >/dev/null 2>&1
+awm wait md-kiro3 md-kiro4 --timeout 10 >/dev/null 2>&1
+has "조회에 실패하면 정한 기본을 그대로" "$(awm result md-kiro4)" "not-in-cache"
+rm -f "$MF/kiro-cli.fail"
+awm models --refresh kiro-cli >/dev/null 2>&1
+has "--refresh 로 다시 받음" "$(awm models kiro-cli)" "claude-new-6"
+
+# aw pick: 목록에 없는 모델 줄은 고르지 않음
+printf 'codex Codex.\n  gpt-6-luna@medium Simple.\n  gpt-5.6-terra@high Gone.\n' > "$MF/pick"
+out=$(env PATH="$MB:$PK/bin:/usr/bin:/bin" CODEX_HOME="$MF/codex" AW_PICK="$MF/pick" PICK_STUB="$PK/stub" "$AW" pick --dry-run -- 리뷰 2>&1)
+has "pick: 목록에 없는 줄은 뺐다고 알림" "$out" "고르지 않은 줄: gpt-5.6-terra@high"
+has "pick: 남은 한 줄은 묻지 않고 씀" "$out" "고른 모델    : gpt-6-luna@medium   (모델 줄이 하나라 묻지 않았습니다)"
+has "pick 상태: 목록에 없는 줄 표시" "$(env PATH="$MB:$PK/bin:/usr/bin:/bin" CODEX_HOME="$MF/codex" AW_PICK="$MF/pick" "$AW" pick)" "(목록에 없음)"
+awm clean >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

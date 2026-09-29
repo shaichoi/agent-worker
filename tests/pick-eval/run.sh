@@ -1,6 +1,9 @@
 #!/bin/sh
 # aw pick 의 설명대로 Jev 가 고르는지 실제 API 로 잽니다. 네트워크와 TypeSafe 키가 필요하고, 작업마다 요청이 한 번 갑니다.
 # 설명을 고친 뒤 이걸로 전후를 견주세요. tests/run-tests.sh 는 이걸 돌리지 않습니다.
+# 결과는 이 컴퓨터에 어떤 CLI 가 PATH 에 있고 각 CLI 의 모델 목록(aw models)이 어떤지에 따라 달라집니다
+# (없는 에이전트와 목록에 없는 모델 줄은 고르지 않음). README 의 숫자는 다섯 CLI 가 모두 있고 codex 에
+# GPT-6 가 보이는 컴퓨터에서 잰 것입니다.
 #
 #   tests/pick-eval/run.sh [설명 파일] [작업 파일...]   기본: 권장 설명, tasks.txt 와 heldout.txt
 #

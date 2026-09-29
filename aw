@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.14.0
+AW_VERSION=0.15.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -42,6 +42,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw clean [--all]                     끝난 워커 일괄 정리
   aw contexts                          컨텍스트 한도표
   aw defaults [get|set|unset]          기본 옵션(권한, 모델) 보기 / 바꾸기
+  aw models [에이전트] [--refresh]     설치된 CLI 의 모델 목록 (기본 옵션의 모델이 없으면 CLI 기본으로)
   aw brief [--init]                    워커 프롬프트 앞에 붙는 지시문 (예상 소요 시간 등)
   aw pick [on|off|key] / -- '작업'     (실험용) Jev 가 작업에 맞는 에이전트·모델을 골라 워커를 띄움
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
@@ -73,6 +74,7 @@ wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 /
   aw help peek      진행 상황 보기: 각 줄의 뜻, 생각 중·조용함, wait --idle
   aw help brief     워커 지시문: 붙는 곳, 끄는 법, 예상 소요 시간
   aw help pick      (실험용) 에이전트 고르기: 켜고 끄기, 키, 고르는 기준
+  aw help models    설치된 CLI 의 모델 목록, 기본 옵션의 모델이 목록에 없을 때
 USAGE
 }
 
@@ -163,6 +165,7 @@ GUI 도구(Antigravity IDE, Cursor)는 창만 열려서 워커로 쓸 수 없습
 T
       ;;
     defaults) cmd_defaults ;;
+    models) models_usage ;;
     brief)
       cat <<'T'
 워커 지시문 (brief)
@@ -245,6 +248,7 @@ T
   run.sh    실제로 돌린 스크립트 (그대로 다시 실행 가능)
   fallback.sh, out.model, err.model   aw pick 이 고른 모델이 거부될 때 대신 돌리는 스크립트와 첫 시도의 출력
 
+모델 목록 캐시: $AW_HOME/models/<에이전트>   (aw models, codex 는 ~/.codex 의 파일을 바로 읽음)
 기계로 읽으려면: aw list --json
 환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_QUIET,
           AW_PICK, AW_PICK_KEYFILE, AW_PICK_MIN_CONFIDENCE, AW_PICK_FALLBACK, TYPESAFE_API_KEY (aw help pick)
@@ -312,6 +316,7 @@ T
   하나. 고른 에이전트의 모델 답만 씁니다. 선택지는 PATH 에 있는 에이전트뿐이고, 작업이 에이전트나 모델을
   짚으면(예: "codex 로") 그걸 고르라고 함께 적어 보냅니다. 후보나 모델 줄이 하나면 묻지 않고 그걸 씁니다.
   모델 줄이 없는 에이전트는 기본값(aw defaults)으로, 모델 확신이 하한보다 낮아도 기본값으로 돕니다.
+  그 컴퓨터의 CLI 모델 목록(aw models)에 없는 모델 줄은 고르지 않습니다 (aw pick 상태에 "(목록에 없음)").
   수준을 넘기는 법은 aw 가 바꿉니다: claude·agy --effort, codex -c model_reasoning_effort=,
   devin 은 이름-수준 (swe-2@max → swe-2-max), kiro-cli 는 --agent-engine v3 를 같이 붙임
   (kiro-cli 의 --effort 는 실측에서 먹지 않아 권장값에 수준을 적지 않았습니다).
@@ -342,7 +347,7 @@ T
       ;;
     '') usage ;;
     *) warn "그런 도움말 주제가 없습니다: $1"
-       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief, pick"
+       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief, pick, models"
        return 1 ;;
   esac
 }
@@ -896,6 +901,160 @@ cmd_defaults() {
   say "해 둘 수 없습니다. 이 옵션이 없으면 devin 은 거기서 코드 1 로 실패합니다."
 }
 
+# ---------------------------------------------------------------- 모델 목록
+
+# 설치된 CLI 가 스스로 알려 주는 모델 목록을 씁니다. 기본 옵션(aw defaults)의 모델이 그 목록에 없으면
+# (모델이 바뀌었거나 없어졌으면) 그 줄을 빼서 CLI 자체의 기본 모델로 돌게 하고, aw pick 은 목록에 없는
+# 모델 줄을 Jev 에 보내지 않습니다. 목록을 모르면(claude, 설치 안 됨, 조회 실패) 정한 기본을 그대로 씁니다.
+#
+# 목록 명령이 느려서(실측: kiro-cli 1.4초, agy 4.7초, devin 5.5초) $AW_HOME/models/<에이전트> 에 캐시합니다.
+# aw run 은 캐시만 읽고, 찾는 모델이 캐시에 없을 때만 한 번 새로 물어본 뒤 정합니다. 그래서 낡은 캐시
+# 때문에 멀쩡한 기본을 빼지 않습니다. codex 는 스스로 관리하는 models_cache.json 과 config.toml 을
+# 그때그때 읽습니다. 캐시 줄은 모델 이름 하나씩이고, CLI 의 기본 모델이면 앞에 '* ' 가 붙습니다.
+
+models_file() { printf '%s/models/%s\n' "$AW_HOME" "$1"; }
+
+# 설치된 CLI 에게 목록을 물어 한 줄에 하나씩. 목록을 못 얻으면 1.
+# 로그인이나 확인을 묻다가 멈추지 않게 표준 입력은 /dev/null 입니다.
+models_discover() { # <에이전트>
+  case "$1" in
+    codex)
+      md_h="${CODEX_HOME:-$HOME/.codex}"
+      [ -f "$md_h/models_cache.json" ] || return 1
+      # config.toml 의 맨 위(첫 [구역] 앞) model = "..." 이 codex 의 기본입니다.
+      md_d=$(sed -n '/^[[:space:]]*\[/q; s/^[[:space:]]*model[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$md_h/config.toml" 2>/dev/null | head -1)
+      md_o=$(LC_ALL=C grep -o '"slug"[[:space:]]*:[[:space:]]*"[^"]*"' "$md_h/models_cache.json" \
+        | sed 's/.*"\([^"]*\)"$/\1/' | awk -v d="$md_d" '{ print ($0 == d ? "* " : "") $0 }') ;;
+    agy)
+      command -v agy >/dev/null 2>&1 || return 1
+      # 'gemini-3.8-flash-high<TAB>Gemini 3.8 Flash (High)'
+      md_o=$(agy models </dev/null 2>/dev/null | LC_ALL=C awk -F '\t' 'NF >= 2 && $1 ~ /^[A-Za-z0-9]/ { print $1 }') ;;
+    devin)
+      command -v devin >/dev/null 2>&1 || return 1
+      # 'SWE-2 (swe-2)' 계열 줄, '  aliases: swe' 별칭 줄, '  swe-2-max   SWE-2 Max [...]' 모델 줄.
+      # --model 은 셋 다 받습니다.
+      md_o=$(devin models list </dev/null 2>/dev/null | LC_ALL=C awk '
+        /^[^ ]/ { if (match($0, /\([a-z0-9._-]+\)$/)) print substr($0, RSTART + 1, RLENGTH - 2); next }
+        /^  aliases:/ { sub(/^  aliases:[ ]*/, ""); n = split($0, a, /,[ ]*/); for (i = 1; i <= n; i++) if (a[i] != "") print a[i]; next }
+        /^  [A-Za-z0-9]/ { print $1 }') ;;
+    kiro-cli)
+      command -v kiro-cli >/dev/null 2>&1 || return 1
+      # '* auto   1.00x credits ...' (기본), '  claude-opus-5.5   2.00x credits ...'
+      md_o=$(kiro-cli chat --list-models </dev/null 2>/dev/null | LC_ALL=C awk '
+        /^\* [A-Za-z0-9]/ { print "* " $2; next }
+        /^  [A-Za-z0-9]/ { print $1 }') ;;
+    *) return 1 ;;   # claude 는 목록 명령이 없습니다
+  esac
+  [ -n "$md_o" ] || return 1
+  printf '%s\n' "$md_o"
+}
+
+# 다시 물어 캐시를 새로 씁니다. 못 얻으면 1 이고 캐시는 그대로 둡니다. 한 번 실행에 에이전트마다 한 번만.
+models_fresh=''
+models_refresh() { # <에이전트>
+  [ "$1" = codex ] && return 0
+  case " $models_fresh " in *" $1 "*) return 0 ;; esac
+  mr_o=$(models_discover "$1") || return 1
+  mkdir -p "$AW_HOME/models" || return 1
+  printf '%s\n' "$mr_o" > "$(models_file "$1").tmp" && mv "$(models_file "$1").tmp" "$(models_file "$1")" || return 1
+  models_fresh="$models_fresh $1"
+}
+
+models_list() { # <에이전트>  → 알고 있는 목록 (codex 는 파일에서, 나머지는 캐시). 모르면 1
+  if [ "$1" = codex ]; then models_discover codex; return $?; fi
+  [ -s "$(models_file "$1")" ] || return 1
+  cat "$(models_file "$1")"
+}
+
+# 목록에 그 모델이 있나. agy 는 수준을 뗀 이름(gemini-3.8-flash, --effort 와 함께)도 받습니다.
+models_has() { # <에이전트> <모델> <목록>
+  printf '%s\n' "$3" | sed 's/^\* //' | LC_ALL=C awk -v a="$1" -v m="$2" '
+    $0 == m { f = 1 }
+    a == "agy" && index($0, m "-") == 1 && substr($0, length(m) + 2) ~ /^(minimal|low|medium|high|xhigh|max)$/ { f = 1 }
+    END { exit !f }'
+}
+
+# 0 있음, 1 없음(새로 받은 목록에도 없음), 2 목록을 모름(확인하지 않고 그대로 씀).
+# 캐시에 없거나 캐시가 없으면 한 번 새로 물어본 뒤 정합니다.
+model_known() { # <에이전트> <모델>
+  mk_a=${1##*/}
+  case "$mk_a" in codex | agy | devin | kiro-cli) ;; *) return 2 ;; esac
+  if mk_l=$(models_list "$mk_a") && models_has "$mk_a" "$2" "$mk_l"; then return 0; fi
+  if [ "$mk_a" = codex ]; then [ -n "$mk_l" ] && return 1; return 2; fi
+  models_refresh "$mk_a" || return 2
+  mk_l=$(models_list "$mk_a") || return 2
+  models_has "$mk_a" "$2" "$mk_l" && return 0
+  return 1
+}
+
+# 기본 옵션 묶음이 고르는 모델 (--model X, --model=X, -m X). 없으면 빈 값
+group_model() { # <묶음>
+  printf '%s\n' "$1" | LC_ALL=C awk '{ for (i = 1; i <= NF; i++) {
+    if (($i == "--model" || $i == "-m") && i < NF) { print $(i + 1); exit }
+    if ($i ~ /^--model=/) { sub(/^--model=/, "", $i); print $i; exit } } }'
+}
+
+models_usage() {
+  cat <<'U'
+사용법
+  aw models                           설치된 에이전트마다 모델 수, CLI 의 기본, 기본 옵션의 모델이 목록에 있는지
+  aw models <에이전트>                 그 에이전트의 모델 이름, 한 줄에 하나 (CLI 의 기본은 앞에 '* ')
+  aw models --refresh [에이전트...]    CLI 에게 다시 물어 캐시를 새로 씀 (devin 은 몇 초 걸림)
+
+기본 옵션(aw defaults)의 모델이 그 CLI 의 목록에 없으면, aw run 이 그 줄을 빼고 CLI 기본 모델로 띄웁니다.
+aw pick 은 목록에 없는 모델 줄을 고르지 않습니다. 목록을 모르면(claude 는 목록 명령이 없음, 설치 안 됨,
+조회 실패) 정한 기본을 그대로 씁니다. aw run 은 캐시만 읽고, 찾는 모델이 캐시에 없을 때만 새로 물어봅니다.
+U
+}
+
+cmd_models() {
+  mo_ref=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --refresh) mo_ref=1; shift ;;
+      -h | --help) models_usage; return 0 ;;
+      -*) die "알 수 없는 옵션: $1   (aw models --help)" ;;
+      *) break ;;
+    esac
+  done
+  if [ $# -gt 0 ]; then mo_as=$*; else mo_as='claude codex agy devin kiro-cli'; fi
+  for mo_a in $mo_as; do
+    case "$mo_a" in claude | codex | agy | devin | kiro-cli) ;; *) die "모르는 에이전트입니다: $mo_a   (claude, codex, agy, devin, kiro-cli)" ;; esac
+  done
+  # 에이전트 하나를 이름으로 물으면 목록만 (스크립트용)
+  if [ $# -eq 1 ] && [ "$mo_ref" -eq 0 ]; then
+    if ! models_list "$1" 2>/dev/null; then
+      models_refresh "$1" 2>/dev/null && models_list "$1" && return 0
+      warn "$1 의 모델 목록을 모릅니다: $( [ "$1" = claude ] && printf '목록 명령이 없음' || { command -v "$1" >/dev/null 2>&1 && printf '조회 실패' || printf '설치 안 됨'; } )"
+      return 1
+    fi
+    return 0
+  fi
+  say "$(padw 10 에이전트)$(padw 6 모델)$(padw 20 'CLI 기본')목록"
+  for mo_a in $mo_as; do
+    if [ "$mo_a" = claude ]; then say "$(padw 10 claude)$(padw 6 -)$(padw 20 -)목록 명령이 없어 확인하지 않음"; continue; fi
+    if ! command -v "$mo_a" >/dev/null 2>&1 && [ "$mo_a" != codex ]; then say "$(padw 10 "$mo_a")$(padw 6 -)$(padw 20 -)설치 안 됨"; continue; fi
+    [ "$mo_ref" -eq 1 ] && { models_refresh "$mo_a" || warn "  $mo_a: 목록을 새로 받지 못했습니다 (전 캐시를 그대로 둠)"; }
+    if ! mo_l=$(models_list "$mo_a"); then
+      # 처음이면 한 번 물어봅니다
+      models_refresh "$mo_a" && mo_l=$(models_list "$mo_a") || { say "$(padw 10 "$mo_a")$(padw 6 -)$(padw 20 -)목록을 받지 못함"; continue; }
+    fi
+    mo_n=$(printf '%s\n' "$mo_l" | grep -c .)
+    mo_d=$(printf '%s\n' "$mo_l" | sed -n 's/^\* //p' | head -1)
+    if [ "$mo_a" = codex ]; then mo_src="$(tilde "${CODEX_HOME:-$HOME/.codex}")/models_cache.json (codex 가 관리)"
+    else mo_src="캐시 $(elapsed_str $(( $(now) - $(mtime_of "$(models_file "$mo_a")") ))) 전"; fi
+    say "$(padw 10 "$mo_a")$(padw 6 "$mo_n")$(padw 20 "${mo_d:--}")$mo_src"
+    # 기본 옵션의 모델이 목록에 있는지
+    defaults_for "$mo_a" | while IFS= read -r mo_g; do
+      mo_m=$(group_model "$mo_g"); [ -n "$mo_m" ] || continue
+      if models_has "$mo_a" "$mo_m" "$mo_l"; then say "            기본 옵션 --model $mo_m: 목록에 있음"
+      else say "            기본 옵션 --model $mo_m: 목록에 없음 → 띄울 때 빼고 CLI 기본으로 (aw defaults set $mo_a --model ...)"; fi
+    done
+  done
+  say ""
+  say "목록 보기: aw models <에이전트>   새로 받기: aw models --refresh   (aw models --help)"
+}
+
 # ---------------------------------------------------------------- 컨텍스트 한도
 
 # 에이전트별 기본 컨텍스트 한도(토큰). 사용자가 $AW_CONFIG 로 덮어쓸 수 있습니다.
@@ -990,6 +1149,13 @@ run_argv() { # <인자...>
       # 건너뜁니다. --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
       # 붙거나, agy 의 --effort 처럼 사용자 값과 부딪치는 사고를 막습니다.
       group_given "$1" "$dg" "$@" && continue
+      # 그 줄이 고르는 모델이 CLI 의 목록에 없으면(바뀌었거나 없어졌으면) 줄째 빼고 CLI 기본으로 돕니다.
+      # 목록을 모르면(model_known 2) 그대로 붙입니다.
+      rg_m=$(group_model "$dg")
+      if [ -n "$rg_m" ] && { model_known "$1" "$rg_m"; [ $? -eq 1 ]; }; then
+        mdropped="${mdropped:+$mdropped, }$dg"
+        continue
+      fi
       added="${added:+$added }$dg"
       # 공백으로 직접 쪼갭니다. 셸의 단어 분리에 기대지 않습니다
       # (zsh 는 따옴표 없는 변수를 분리하지 않습니다).
@@ -1025,7 +1191,7 @@ write_launch() { # <파일> <따옴표로 감싼 인자들>
 
 cmd_run() {
   name=''; dir=''; worktree=''; stdin_file='/dev/null'; tag=''; profile=''
-  envs=''; max_tokens=''; no_defaults="${AW_NO_DEFAULTS:-0}"; added=''
+  envs=''; max_tokens=''; no_defaults="${AW_NO_DEFAULTS:-0}"; added=''; mdropped=''
   no_brief="${AW_NO_BRIEF:-0}"; briefed=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1107,7 +1273,7 @@ cmd_run() {
   # 첫 판과 같은 지시문·기본 옵션이 붙게 하위 셸에서 run_argv 를 한 번 더 돌립니다.
   fb_words=''
   if [ -n "${run_fallback:-}" ]; then
-    fb_words=$(stdin_file=$stdin_orig; added=''; eval "set -- $run_fallback"; run_argv "$@"; printf '%s' "$rw_words")
+    fb_words=$(stdin_file=$stdin_orig; added=''; mdropped=''; eval "set -- $run_fallback"; run_argv "$@"; printf '%s' "$rw_words")
   fi
 
   # setsid 가 있으면 워커를 새 프로세스 그룹의 리더로 띄울 수 있습니다.
@@ -1161,6 +1327,7 @@ cmd_run() {
     [ -n "$tag" ]      && printf 'tag=%s\n' "$tag"
     [ -n "$profile" ]  && printf 'profile=%s\n' "$profile"
     [ "$briefed" -eq 1 ] && printf 'brief=1\n'
+    [ -n "$mdropped" ] && printf 'default_model_dropped=%s\n' "$mdropped"
     [ -n "$wt" ]       && { printf 'worktree=%s\n' "$wt"; printf 'branch=%s\n' "$worktree"; }
     printf 'cmdline=%s\n' "$(printf '%s ' "$@" | sed 's/ $//' | tr '\n' ' ')"
   } > "$wd/meta"
@@ -1200,6 +1367,7 @@ cmd_run() {
   [ -n "$wt" ] && say "  worktree: $wt  (브랜치 $worktree)"
   say "  명령: $(meta_get "$wd" cmdline)"
   [ -n "$added" ] && [ "$no_defaults" -ne 1 ] && say "  (기본 옵션이 붙었습니다: $added — 끄려면 --no-defaults)"
+  [ -n "$mdropped" ] && say "  (기본 옵션 '$mdropped' 는 뺐습니다: 모델이 ${1##*/} 의 모델 목록에 없음. ${1##*/} 기본 모델로 돕니다 — aw models ${1##*/})"
   [ "$briefed" -eq 1 ] && say "  (지시문이 붙었습니다: $(tilde "$AW_BRIEF") — 끄려면 --no-brief)"
   say "  보기: aw logs $name -f    기다리기: aw wait $name    결과: aw result $name"
 }
@@ -2467,10 +2635,10 @@ claude Claude Code (Anthropic). For hands-on work in a repository that needs jud
   claude-sonnet-5@low Claude Sonnet 5, low reasoning; fast and cheap. For obvious, low-risk work: a short answer or a small localized edit whose change is clear. Also choose this when the task names Sonnet.
   claude-opus-5-5@xhigh Claude Opus 5.5, extra-high reasoning. The ordinary choice for repository work that needs judgment: a feature, a bug fix, debugging, a refactor, or a document edit, when nothing about it is unusually risky. Also choose this when the task names Opus.
   claude-fable-5-1@xhigh Claude Fable 5.1, Anthropic's most capable model, extra-high reasoning; slow and expensive. Only for unusually hard or high-stakes work: a bug that earlier attempts failed to fix, an intermittent or concurrency bug, possible data loss or security impact, or a major architecture decision. Also choose this when the task names Fable.
-codex OpenAI Codex CLI (GPT-5.6). For reviewing and critiquing existing material without changing it: a code review, a security or correctness audit, a pull request or diff review, a critique of a plan or design, or a second opinion. Also for writing tests for behavior the task specifies. It claims tasks that name Codex, GPT, Luna, Terra, or Sol.
-  gpt-5.6-luna@medium GPT-5.6 Luna, fast and cheap, medium reasoning. For a quick, low-risk check or a brief suggestion. Also choose this when the task names Luna.
-  gpt-5.6-terra@high GPT-5.6 Terra, balanced, high reasoning. The ordinary choice: a normal code review, a design critique, or writing tests. Also choose this when the task names Terra.
-  gpt-5.6-sol@xhigh GPT-5.6 Sol, the strongest model this Codex offers, extra-high reasoning; slower and more expensive. For a review where a missed problem would be costly: security, authentication, payments, data integrity, or concurrency, or when the task asks for a thorough or careful review. Also choose this when the task names Sol.
+codex OpenAI Codex CLI (GPT-6). For reviewing and critiquing existing material without changing it: a code review, a security or correctness audit, a pull request or diff review, a critique of a plan or design, or a second opinion. Also for writing tests for behavior the task specifies. It claims tasks that name Codex, GPT, Luna, Sol, or Astra.
+  gpt-6-luna@medium GPT-6 Luna, fast and affordable, medium reasoning. For a quick, low-risk check or a brief suggestion. Also choose this when the task names Luna.
+  gpt-6-sol@high GPT-6 Sol, OpenAI's workhorse coding model, high reasoning. The ordinary choice: a normal code review, a design critique, or writing tests. Also choose this whenever the task names Sol, even when it asks for a careful or thorough review.
+  gpt-6-astra@xhigh GPT-6 Astra, OpenAI's frontier model, extra-high reasoning; about five times the price of Sol. For a review where a missed problem would be costly: security, authentication, payments, data integrity, or concurrency, or when the task asks for a thorough or careful review. Also choose this when the task names Astra.
 agy Antigravity CLI (Google Gemini). For quick, low-stakes work: answering a question, explaining or summarizing code, documents, or error messages, reading a very large file or log, converting a format, and small mechanical edits such as a rename or a typo fix. It claims tasks that name Gemini, Flash, Pro, or Antigravity, or that ask for the fastest or cheapest option.
   gemini-3.8-flash-low Gemini 3.8 Flash, low reasoning; the fastest and cheapest. For trivial work: a one-line answer, a typo fix, a format conversion, or a short summary. Also choose this when the task asks for the fastest or cheapest option.
   gemini-3.8-flash-high Gemini 3.8 Flash, high reasoning. The ordinary choice: explaining code, summarizing long documents or logs, a rename across a codebase, or a question that needs some thought. Also choose this when the task names Gemini or Flash without more detail.
@@ -2499,6 +2667,26 @@ pick_models() { # <에이전트>
   awk -v a="$1" '/^[[:space:]]*#/ || NF == 0 { next }
        /^[^[:space:]]/ { cur = $1; next }
        cur == a { m = $1; $1 = ""; sub(/^[[:space:]]+/, ""); if (!(m in seen)) { seen[m] = 1; print m "\t" $0 } }' "$AW_PICK"
+}
+
+# 모델 줄 중 그 CLI 의 목록에 있는 것 (목록을 모르면 전부). 뺀 줄은 pmo_dropped 에 이름만 남깁니다.
+pick_spec_model() { # <에이전트> <모델[@수준]>  → CLI 에 넘길 모델 이름 (devin 은 이름-수준)
+  case "$1:$2" in devin:*@*) printf '%s-%s' "${2%%@*}" "${2#*@}" ;; *) printf '%s' "${2%%@*}" ;; esac
+}
+pick_models_ok() { # <에이전트>
+  pmo_tab=$(printf '\t'); pmo_dropped=''
+  pmo_all=$(pick_models "$1")
+  [ -n "$pmo_all" ] || return 0
+  pmo_out=''
+  while IFS="$pmo_tab" read -r pmo_s pmo_d; do
+    [ -n "$pmo_s" ] || continue
+    if model_known "$1" "$(pick_spec_model "$1" "$pmo_s")"; then :; elif [ $? -eq 1 ]; then pmo_dropped="${pmo_dropped:+$pmo_dropped, }$pmo_s"; continue; fi
+    pmo_out="$pmo_out$pmo_s$pmo_tab$pmo_d
+"
+  done <<PMO
+$pmo_all
+PMO
+  printf '%s' "$pmo_out"
 }
 
 # '모델[@수준]' → 그 에이전트에 붙일 옵션 (따옴표로 감싼 한 줄). 수준을 넘기는 법이 에이전트마다 다릅니다.
@@ -2649,7 +2837,10 @@ pick_status() {
     esac
     say "    $(padw 10 "$ps_a")$(padw 16 "$ps_s")$(printf '%s' "$ps_d" | trunc_filter 60)"
     pick_models "$ps_a" | while IFS="$ps_tab" read -r ps_m ps_md; do
-      say "      $(padw 30 "$ps_m")$(printf '%s' "$ps_md" | trunc_filter 50)"
+      ps_ms=''
+      if command -v "$ps_a" >/dev/null 2>&1 && ps_l=$(models_list "$ps_a" 2>/dev/null) \
+        && ! models_has "$ps_a" "$(pick_spec_model "$ps_a" "$ps_m")" "$ps_l"; then ps_ms='(목록에 없음) '; fi
+      say "      $(padw 30 "$ps_m")$ps_ms$(printf '%s' "$ps_md" | trunc_filter 50)"
     done
   done
   if ! grep -q '^[[:space:]][[:space:]]*[^[:space:]#]' "$AW_PICK"; then
@@ -2716,7 +2907,7 @@ pick_body() { # <후보> <에이전트도 물을지 1/0>
   pb_sep=''
   if [ "$2" -eq 1 ]; then printf '"agent":'; pick_choice_json "$PICK_AGENT_Q" "$1"; pb_sep=','; fi
   for pb_a in $(printf '%s\n' "$1" | cut -f1); do
-    pb_ms=$(pick_models "$pb_a")
+    pb_ms=$(pick_models_ok "$pb_a")
     [ "$(printf '%s\n' "$pb_ms" | grep -c .)" -ge 2 ] || continue
     printf '%s"model_%s":' "$pb_sep" "$pb_a"; pick_choice_json "$PICK_MODEL_Q" "$pb_ms"; pb_sep=','
   done
@@ -2844,7 +3035,7 @@ cmd_pick() {
   [ "$(printf '%s\n' "$pk_cands" | grep -c .)" -ge 2 ] && pk_ask_agent=1
   # 물을 게 있나: 후보가 둘 이상이거나, 하나뿐인 후보에 모델 줄이 둘 이상
   pk_need=$pk_ask_agent
-  if [ "$pk_need" -eq 0 ] && [ "$(pick_models "$(printf '%s\n' "$pk_cands" | cut -f1)" | grep -c .)" -ge 2 ]; then pk_need=1; fi
+  if [ "$pk_need" -eq 0 ] && [ "$(pick_models_ok "$(printf '%s\n' "$pk_cands" | cut -f1)" | grep -c .)" -ge 2 ]; then pk_need=1; fi
 
   # Jev 를 못 쓰면(키 없음, 네트워크, 예산, 한도, 서버 오류, 읽을 수 없는 답) pk_jev_err 에 이유를 남기고
   # 아래에서 대신 띄울 에이전트(--fallback, 없으면 설명 파일의 첫 후보)로 갑니다. none 이면 멈춥니다.
@@ -2902,8 +3093,11 @@ cmd_pick() {
 
   # 모델과 추론 수준: 모델 줄이 없으면 기본값(aw defaults, 에이전트 설정)으로 돕니다.
   # 확신이 낮거나 답을 못 읽으면 에이전트는 그대로 띄우고 모델만 기본값으로 둡니다.
-  pk_models=$(pick_models "$pk_choice")
+  # 파일로 받으면 이 셸에서 돌아 pmo_dropped(목록에 없어 뺀 줄)를 같이 받습니다.
+  pick_models_ok "$pk_choice" > "$AW_HOME/.pick-models.$$" || true
+  pk_models=$(cat "$AW_HOME/.pick-models.$$"); rm -f "$AW_HOME/.pick-models.$$"
   pk_nm=$(printf '%s\n' "$pk_models" | grep -c . || true)
+  [ -n "$pmo_dropped" ] && say "  ($pk_choice 의 모델 목록에 없어 고르지 않은 줄: $pmo_dropped — aw models $pk_choice)"
   pk_model=''; pk_mconfs=''
   if [ "$pk_nm" -eq 1 ]; then
     pk_model=$(printf '%s\n' "$pk_models" | cut -f1)
@@ -3292,6 +3486,7 @@ case "$sub" in
   clean)   cmd_clean "$@" ;;
   contexts) cmd_contexts ;;
   defaults) cmd_defaults "$@" ;;
+  models)  cmd_models "$@" ;;
   brief)   cmd_brief "$@" ;;
   pick)    cmd_pick "$@" ;;
   skill)   cmd_skill "$@" ;;
