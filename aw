@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.16.0
+AW_VERSION=0.16.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -90,7 +90,7 @@ claude/codex/kiro-cli 는 프롬프트를 맨 끝 인자로 둬야 이어할 때
 진행을 보려면 claude·agy·kiro-cli 는 stream-json 으로 띄우세요. 도중 사건이 출력에 쌓여
 aw peek / aw logs -f 로 보이고, 끝난 뒤 --field 는 json 과 똑같이 됩니다.
 
-모델을 안 고르면 기본 옵션(aw defaults)이 claude 에 claude-opus-5-5 와 --effort xhigh, codex 에 gpt-6-luna,
+모델을 안 고르면 기본 옵션(aw defaults)이 claude 에 claude-opus-5-5 와 --effort xhigh, codex 에 gpt-6.1-sol,
 agy 에 gemini-3.8-flash, devin 에 swe-2-max, kiro-cli 에 claude-opus-5.5 를 붙입니다.
 바꾸려면 aw defaults set <명령> --model ...   (그 CLI 의 목록에 없는 모델이면 빼고 CLI 기본으로: aw models)
 
@@ -678,8 +678,10 @@ kiro-cli --trust-all-tools
 # claude 는 모델과 수준을 따로 둡니다. 모델만 바꿔도 xhigh 가, 수준만 바꿔도 Opus 가 남습니다.
 claude --model claude-opus-5-5
 claude --effort xhigh
-# codex 는 가볍고 싼 Luna 를 기본으로 둡니다. 수준은 codex 설정(model_reasoning_effort)을 따릅니다.
-codex --model gpt-6-luna
+# codex 는 주력 모델 Sol 6.1 을 기본으로 둡니다. 수준은 codex 설정(model_reasoning_effort)을
+# 따르고, 설정이 없으면 이 모델의 기본(low)으로 돕니다. codex 0.158 은 이 모델을 거절하니
+# 목록(aw models codex)에 없으면 codex update 를 하세요 (0.159.2 에서 확인).
+codex --model gpt-6.1-sol
 # agy 의 gemini-3.8-flash 는 --effort(low, medium, high)가 있어야 해서 한 줄로 둡니다.
 agy --model gemini-3.8-flash --effort high
 # devin 의 SWE-2 는 swe-2-medium, swe-2-high, swe-2-max 가 있습니다 (swe-2 만 주면 high).
@@ -746,7 +748,7 @@ defaults_init() { # [--force]
   recommended_defaults > "$AW_DEFAULTS" || return 1
   say "기본 옵션을 켰습니다: $AW_DEFAULTS"
   say "  이제 워커가 에이전트의 승인 절차를 건너뜁니다."
-  say "  모델을 안 고르면 claude 는 claude-opus-5-5@xhigh, codex 는 gpt-6-luna, agy 는 gemini-3.8-flash,"
+  say "  모델을 안 고르면 claude 는 claude-opus-5-5@xhigh, codex 는 gpt-6.1-sol, agy 는 gemini-3.8-flash,"
   say "  devin 은 swe-2-max, kiro-cli 는 claude-opus-5.5 로 돕니다."
   say "  끄려면 그 파일을 지우거나 해당 줄을 주석 처리하세요."
   return 0
@@ -3438,7 +3440,7 @@ aw rm review
 | kiro-cli | `aw run -n k -- kiro-cli chat --output-format stream-json "작업"` | `aw result k --field finalText` |
 
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
-  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6-luna`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
+  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
 - **claude·agy·kiro-cli 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
   `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.

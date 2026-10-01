@@ -261,7 +261,7 @@ lv-d  running  6m12s  devin
 | **codex** | `npm i -g @openai/codex` | ChatGPT 계정 또는 `CODEX_API_KEY` | `codex exec "..."` 또는 stdin `-` | JSONL(`--json`) |
 | **kiro-cli** (Kiro) | Kiro 공식 설치 안내 (kiro.dev) | `kiro-cli login` | `kiro-cli chat "..."` (맨 끝) 또는 stdin | `finalText`, `status` (`stream-json`) |
 
-무인 실행에 필요한 권한 옵션과 기본 모델(claude `claude-opus-5-5`@xhigh, codex `gpt-6-luna`, agy `gemini-3.8-flash`,
+무인 실행에 필요한 권한 옵션과 기본 모델(claude `claude-opus-5-5`@xhigh, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`,
 devin `swe-2-max`, kiro-cli `claude-opus-5.5`)은
 `aw`가 **자동으로 붙입니다** ([기본 옵션](#기본-옵션-권한-우회-모델) 참고).
 
@@ -824,7 +824,7 @@ $ aw run -n a1 -- agy -p='리팩터링'
 | `devin` | `--permission-mode dangerous --respect-workspace-trust false` |
 | | `--model swe-2-max` |
 | `codex` | `--sandbox workspace-write` |
-| | `--model gpt-6-luna` (수준은 codex 설정의 `model_reasoning_effort`) |
+| | `--model gpt-6.1-sol` (수준은 codex 설정의 `model_reasoning_effort`. codex 0.158 은 이 모델을 거절하니 `codex update`) |
 | `kiro-cli` | `--trust-all-tools` |
 | | `--model claude-opus-5.5` |
 | | `--agent-engine v3` (기본 엔진 v2 는 `--model` 을 무시해서, [위](#kiro-cli--kiro-cli) 참고) |

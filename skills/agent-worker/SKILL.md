@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.16.0"
+  version: "0.16.1"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -134,7 +134,7 @@ aw rm review
 | kiro-cli | `aw run -n k -- kiro-cli chat --output-format stream-json "작업"` | `aw result k --field finalText` |
 
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
-  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6-luna`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
+  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
 - **claude·agy·kiro-cli 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
   `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.
