@@ -104,6 +104,7 @@ cd agent-worker
 | `aw wait <이름...> [--timeout N] [--idle N]` | 끝날 때까지 대기 (실패면 0이 아닌 코드). `--idle` 은 [조용함](#조용할-때-생각-중인가-멈췄나) 알림 |
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
+| `aw prune [--dry-run]` | 프로세스가 사라진 워커(`lost`)만 정리. 그룹에 산 것이 있거나 worktree 에 변경이 있으면 남김 |
 | `aw contexts` | 에이전트별 컨텍스트 한도 표 |
 | `aw defaults [get\|set\|unset]` | [기본 옵션](#기본-옵션-권한-우회-모델)(권한, 모델) 보기 / 바꾸기. `--init` 은 권장값으로 켜기 |
 | `aw models [에이전트] [--refresh]` | 설치된 CLI 의 [모델 목록](#모델-목록-aw-models). 기본 옵션의 모델이 목록에 없으면 CLI 기본으로 |
@@ -911,7 +912,7 @@ mytool 128000
 
 | 파일 | 내용 |
 | --- | --- |
-| `meta` | 이름, 디렉터리, 시작 시각, worktree, 꼬리표 |
+| `meta` | 이름, 디렉터리, 시작 시각, 부팅 ID, worktree, 꼬리표 |
 | `cmd` | 실행한 인자 (한 줄에 하나) |
 | `out` / `err` | 표준 출력 / 표준 오류 |
 | `exit` | 종료 코드 (생기면 끝난 것) |
@@ -920,7 +921,12 @@ mytool 128000
 | `fallback.sh`, `out.model`, `err.model` | `aw pick` 이 고른 모델이 거부될 때 대신 돌리는 스크립트와 첫 시도의 출력 |
 
 상태는 `running`(pid 살아 있음), `done`(코드 0), `failed`(0 아님), `stopped`(`aw stop`),
-`lost`(종료 코드 없이 프로세스가 사라짐)입니다.
+`lost`(종료 코드 없이 프로세스가 사라짐)입니다. 재부팅 전에 띄운 워커도 `lost` 입니다. pid 는 재부팅 뒤 다른
+프로세스가 다시 쓰므로, 띄울 때 `meta` 에 부팅 ID 를 적어 두고 다르면 pid 를 보지 않습니다(`aw stop` 도 신호를 보내지 않음).
+
+`lost` 워커만 치우려면 `aw prune` 입니다(`--dry-run` 으로 미리 보기). 끝난 워커(`done`·`failed`·`stopped`)는 남깁니다.
+프로세스 그룹에 아직 살아 있는 것(에이전트가 띄운 서버 등)이 있거나 worktree 에 커밋하지 않은 변경이 있으면
+지우지 않고 알려 줍니다. 앞의 것은 `aw stop`, 뒤의 것은 살펴본 뒤 `aw rm` 으로 지웁니다.
 
 ## 환경변수
 

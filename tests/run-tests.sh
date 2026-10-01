@@ -204,6 +204,69 @@ if "$AW" rm tokeep >/dev/null 2>&1; then ng "실행 중인데 rm 이 성공함";
 "$AW" clean --all >/dev/null 2>&1
 if [ -d "$AW_HOME/workers/tokeep" ]; then ng "clean --all 이 안 지움"; else ok "clean --all 이 실행 중 워커까지 정리"; fi
 
+# prune: 프로세스가 사라진 워커(lost)만 지움. 그룹에 남은 것이 있거나 worktree 에 변경이 있으면 남김
+set_boot() { # <워커> <부팅 ID>  재부팅 전에 띄운 것처럼 meta 의 부팅 ID 를 바꿈
+  sb_m="$AW_HOME/workers/$1/meta"
+  { grep -v '^boot=' "$sb_m"; printf 'boot=%s\n' "$2"; } > "$sb_m.tmp" && mv "$sb_m.tmp" "$sb_m"
+}
+"$AW" run -n pr-done -- true >/dev/null 2>&1
+"$AW" wait pr-done >/dev/null 2>&1
+if [ -r /proc/sys/kernel/random/boot_id ]; then
+  check "meta 에 부팅 ID 를 적음" "$(cat /proc/sys/kernel/random/boot_id)" "$(sed -n 's/^boot=//p' "$AW_HOME/workers/pr-done/meta")"
+fi
+check "lost 가 없으면 그렇게 알림" "프로세스가 사라진 워커가 없습니다." "$("$AW" prune 2>&1)"
+
+# 재부팅 전에 띄운 워커: pid 가 살아 있어도(이제 남의 프로세스일 수 있음) lost
+"$AW" run -n pr-boot -- sleep 30 >/dev/null 2>&1
+pb_pid=$(cat "$AW_HOME/workers/pr-boot/pid"); pb_g=$(cat "$AW_HOME/workers/pr-boot/pgid" 2>/dev/null)
+set_boot pr-boot not-this-boot
+has "재부팅 전에 띄운 워커는 lost" "$("$AW" status pr-boot)" "상태     : lost"
+has "재부팅 전 워커에는 stop 이 신호를 보내지 않음" "$("$AW" stop pr-boot 2>&1)" "재부팅 전에 띄운 워커라"
+if kill -0 "$pb_pid" 2>/dev/null; then ok "stop 이 그 pid 의 프로세스를 건드리지 않음"; else ng "재부팅 전 워커의 pid 를 끊음"; fi
+t0=$(date +%s); "$AW" wait pr-boot --timeout 20 >/dev/null 2>&1; rc=$?
+check "재부팅 전 워커는 wait 가 기다리지 않고 1" 1 "$rc"
+if [ $(( $(date +%s) - t0 )) -lt 5 ]; then ok "wait 가 바로 돌아옴"; else ng "wait 가 pid 를 기다림"; fi
+has "prune 이 재부팅 전 워커를 지움" "$("$AW" prune 2>&1)" "지움: pr-boot (재부팅 전에 띄움"
+if [ -d "$AW_HOME/workers/pr-boot" ]; then ng "pr-boot 기록이 남음"; else ok "pr-boot 기록이 지워짐"; fi
+if [ -n "$pb_g" ]; then kill -9 "-$pb_g" 2>/dev/null; else kill -9 "$pb_pid" 2>/dev/null; fi
+
+# 막 띄우는 중(pid 가 아직 없음)일 수 있으면 1분은 남김
+mkdir -p "$AW_HOME/workers/pr-young"; printf 'name=pr-young\n' > "$AW_HOME/workers/pr-young/meta"
+"$AW" prune >/dev/null 2>&1
+if [ -d "$AW_HOME/workers/pr-young" ]; then ok "pid 가 없는 갓 만든 워커는 남김"; else ng "띄우는 중일 수 있는 워커를 지움"; fi
+touch -t 202001010000 "$AW_HOME/workers/pr-young"
+"$AW" prune >/dev/null 2>&1
+if [ -d "$AW_HOME/workers/pr-young" ]; then ng "오래된 pid 없는 워커가 남음"; else ok "pid 없이 오래된 워커는 지움"; fi
+
+if command -v setsid >/dev/null 2>&1; then
+  # 그룹째 죽어 종료 코드를 남기지 못한 워커
+  "$AW" run -n pr-lost -- sleep 30 >/dev/null 2>&1
+  kill -9 "-$(cat "$AW_HOME/workers/pr-lost/pgid")" 2>/dev/null; sleep 1
+  has "그룹째 죽은 워커는 lost" "$("$AW" status pr-lost)" "상태     : lost"
+  has "prune --dry-run 은 지울 것을 보여 줌" "$("$AW" prune --dry-run 2>&1)" "지울 것: pr-lost (프로세스가 사라짐"
+  if [ -d "$AW_HOME/workers/pr-lost" ]; then ok "prune --dry-run 은 지우지 않음"; else ng "prune --dry-run 이 지움"; fi
+  "$AW" prune >/dev/null 2>&1
+  if [ -d "$AW_HOME/workers/pr-lost" ]; then ng "prune 이 lost 워커를 남김"; else ok "prune 이 lost 워커를 지움"; fi
+  if [ -d "$AW_HOME/workers/pr-done" ]; then ok "prune 은 끝난 워커(done)를 남김"; else ng "prune 이 끝난 워커를 지움"; fi
+
+  # 명령은 죽었지만 그룹에 하위 프로세스가 남음 (에이전트가 띄운 서버 같은 것)
+  "$AW" run -n pr-kids -- sh -c 'sleep 30 & sleep 30' >/dev/null 2>&1; sleep 1
+  kill -9 "$(cat "$AW_HOME/workers/pr-kids/pgid")" "$(cat "$AW_HOME/workers/pr-kids/pid")" 2>/dev/null; sleep 1
+  has "그룹에 살아 있는 것이 있으면 남기고 알림" "$("$AW" prune 2>&1)" "남김: pr-kids"
+  if [ -d "$AW_HOME/workers/pr-kids" ]; then ok "그 워커 기록은 남음"; else ng "살아 있는 그룹의 워커를 지움"; fi
+  "$AW" stop pr-kids >/dev/null 2>&1
+  if kill -0 "-$(cat "$AW_HOME/workers/pr-kids/pgid")" 2>/dev/null; then ng "stop 뒤에도 그룹이 남음"; else ok "남은 그룹은 aw stop 으로 끊김"; fi
+  "$AW" rm pr-kids >/dev/null 2>&1
+
+  # worktree 에 커밋하지 않은 변경이 있으면 남김
+  "$AW" run -n pr-wt -d "$REPO" -w feat/pr -- sh -c 'printf x > new.txt; sleep 30' >/dev/null 2>&1; sleep 1
+  kill -9 "-$(cat "$AW_HOME/workers/pr-wt/pgid")" 2>/dev/null; sleep 1
+  has "worktree 에 변경이 있으면 남기고 알림" "$("$AW" prune 2>&1)" "커밋하지 않은 변경이 있습니다"
+  if [ -f "$REPO/.aw-worktrees/pr-wt/new.txt" ]; then ok "그 worktree 는 그대로 남음"; else ng "변경이 있는 worktree 를 지움"; fi
+  "$AW" rm pr-wt >/dev/null 2>&1
+fi
+"$AW" clean >/dev/null 2>&1
+
 head_ "11. 컨텍스트 한도 경고"
 # 실제 에이전트 없이 같은 이름의 가짜 명령으로 시험합니다.
 STUB="$TMPROOT/stub"
