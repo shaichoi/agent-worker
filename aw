@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.16.1
+AW_VERSION=0.17.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -47,6 +47,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw pick [on|off|key] / -- '작업'     (실험용) Jev 가 작업에 맞는 에이전트·모델을 골라 워커를 띄움
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
+  aw uninstall [--yes] [--dry-run]     기록·설정·스킬·실행 파일을 모두 지움 (터미널이면 한 번 물음)
   aw version | aw help [주제]
 
 전형적인 흐름
@@ -1583,6 +1584,8 @@ remove_worker() { # <이름>
     if [ -n "$top" ]; then
       git -C "$top" worktree remove --force "$wt" >/dev/null 2>&1 \
         || warn "worktree 를 지우지 못했습니다: $wt"
+      # 마지막 worktree 였으면 빈 .aw-worktrees 도 치웁니다.
+      case "$wt" in */.aw-worktrees/*) rmdir "${wt%/*}" 2>/dev/null || true ;; esac
     fi
   fi
   rm -rf "$d"
@@ -3300,6 +3303,189 @@ cmd_setup() {
   say "끝. 새로 넣은 스킬은 에이전트를 새로 시작하면 보입니다.   스킬 상태: aw skill"
 }
 
+# ---------------------------------------------------------------- 제거
+
+# aw 가 이 컴퓨터에 남긴 것을 모두 지웁니다: 워커 기록(실행 중이면 멈추고, worktree 도), 설정 파일,
+# 에이전트 스킬, 실행 파일. 지울 것을 먼저 보여 주고, 터미널이면 한 번 묻습니다. 터미널이 아니면
+# (에이전트, 스크립트) --yes 가 있어야 지웁니다. 실행 파일은 마지막에 지워, 도중에 실패해도 다시 돌릴 수 있습니다.
+
+uninstall_usage() {
+  cat <<'U'
+사용법: aw uninstall [--yes] [--dry-run] [--prefix DIR]
+
+aw 가 이 컴퓨터에 남긴 것을 모두 지웁니다. 지울 것을 먼저 보여 주고 한 번 묻습니다.
+  워커 기록      실행 중인 워커는 멈춥니다. -w 로 만든 worktree 도 지웁니다
+                 (브랜치는 남지만, 커밋하지 않은 변경은 사라집니다).
+  설정 파일      기본 옵션, 지시문, 컨텍스트 한도표, aw pick 설명과 키
+  에이전트 스킬  aw 가 넣은 것만 (같은 이름의 다른 스킬은 남김)
+  실행 파일      설치 위치(--prefix, 기본 ~/.local/bin)의 aw 와 지금 돌린 aw.
+                 저장소에서 ./aw uninstall 로 돌리면 저장소의 aw 는 남깁니다.
+
+  -y, --yes      묻지 않고 바로 지움 (터미널이 아니면 이것이 있어야 지움)
+  --dry-run      무엇을 지울지 보여 주기만 함
+  --prefix DIR   설치 위치 (기본: $AW_PREFIX, 없으면 ~/.local/bin)
+U
+}
+
+un_is_aw() { [ -f "$1" ] && grep -q '^AW_VERSION=' "$1" 2>/dev/null; }
+
+un_abs() { # <경로>  → 절대 경로 (폴더가 없으면 받은 그대로)
+  ua_d=$(CDPATH= cd -- "$(dirname -- "$1")" 2>/dev/null && pwd) || { printf '%s' "$1"; return 0; }
+  printf '%s/%s' "$ua_d" "$(basename -- "$1")"
+}
+
+# 지울 실행 파일: 설치 위치의 aw 와 지금 돌고 있는 aw. 옆에 install.sh 가 있으면 저장소라 뺍니다.
+# aw 가 아닌 파일(AW_VERSION= 줄이 없음)은 이름이 같아도 건드리지 않습니다. 심볼릭 링크는 링크만 지웁니다.
+un_bins() { # <설치 위치>
+  ub_seen='|'
+  for ub_f in "$1/aw" "$0"; do
+    ub_f=$(un_abs "$ub_f")
+    case "$ub_seen" in *"|$ub_f|"*) continue ;; esac
+    ub_seen="$ub_seen$ub_f|"
+    [ -f "$(dirname -- "$ub_f")/install.sh" ] && continue
+    un_is_aw "$ub_f" && printf '%s\n' "$ub_f"
+  done
+  return 0
+}
+
+# 스킬 폴더: aw skill 이 넣는 곳들과, 손으로 넣었을 수 있는 ~/.codex/skills
+un_skill_roots() {
+  { for ur_a in $(skill_agents); do skill_root "$ur_a"; printf '\n'; done
+    printf '%s\n' "$HOME/.codex/skills"; } | awk '!seen[$0]++'
+}
+
+# 지울 설정 파일 (환경변수로 옮겨 둔 곳도 따라감)
+un_configs() {
+  for uc_f in "$AW_DEFAULTS" "$AW_BRIEF" "$AW_CONFIG" "$AW_PICK" "$AW_PICK.off" "$AW_PICK_KEYFILE"; do
+    [ -f "$uc_f" ] && printf '%s\n' "$uc_f"
+  done
+  return 0
+}
+
+cmd_uninstall() {
+  un_yes=0; un_dry=0; un_prefix="${AW_PREFIX:-$HOME/.local/bin}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -y | --yes) un_yes=1 ;;
+      --dry-run) un_dry=1 ;;
+      --prefix) un_prefix="${2:?--prefix 에 경로가 필요합니다}"; shift ;;
+      --prefix=*) un_prefix="${1#--prefix=}" ;;
+      --purge) ;;   # 옛 uninstall.sh 의 옵션. 이제 워커 기록도 늘 지웁니다.
+      -h | --help) uninstall_usage; return 0 ;;
+      *) die "알 수 없는 옵션: $1   (aw uninstall --help)" ;;
+    esac
+    shift
+  done
+
+  # 워커 기록 폴더가 홈이나 / 이면 그 아래 workers 가 사용자의 것일 수 있어 건드리지 않습니다.
+  un_home_ok=1
+  case "$AW_HOME" in "$HOME" | "$HOME/" | / | '') un_home_ok=0 ;; esac
+  un_cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker"
+
+  un_any=0
+  say "aw $AW_VERSION 제거 — 아래를 지웁니다."
+
+  say ""
+  say "== 워커 기록: $(tilde "$AW_HOME")"
+  un_workers=''; un_running=''
+  if [ "$un_home_ok" -eq 0 ]; then
+    warn "  위험한 경로라 건드리지 않습니다: $AW_HOME"
+  elif [ ! -d "$AW_HOME" ]; then
+    say "  없음"
+  else
+    for un_d in $(list_dirs); do
+      un_n=$(meta_get "$un_d" name); [ -n "$un_n" ] || un_n=$(basename "$un_d")
+      un_workers="$un_workers $un_n"
+      [ "$(state_of "$un_d")" = running ] && un_running="$un_running $un_n"
+      un_wt=$(meta_get "$un_d" worktree)
+      if [ -n "$un_wt" ] && [ -d "$un_wt" ]; then
+        say "  worktree: $(tilde "$un_wt")   (브랜치 $(meta_get "$un_d" branch) 는 남고, 커밋하지 않은 변경은 사라짐)"
+      fi
+    done
+    say "  워커 $(printf '%s' "$un_workers" | wc -w | tr -d ' ')개$([ -d "$AW_HOME/models" ] && printf ', 모델 목록 캐시')"
+    [ -n "$un_running" ] && say "  실행 중이라 멈출 워커:$un_running"
+    un_any=1
+  fi
+
+  say ""
+  say "== 설정 파일"
+  un_cfgs=$(un_configs)
+  if [ -n "$un_cfgs" ]; then
+    printf '%s\n' "$un_cfgs" | while IFS= read -r uc; do say "  $(tilde "$uc")"; done
+    un_any=1
+  else
+    say "  없음"
+  fi
+
+  say ""
+  say "== 에이전트 스킬"
+  un_skills=0; un_kept=0
+  while IFS= read -r ur; do
+    case "$(skill_state "$ur/agent-worker/SKILL.md")" in
+      '없음') ;;
+      '남의 것') say "  남김: $(tilde "$ur/agent-worker")  (aw 가 넣은 스킬이 아닙니다)"; un_kept=1 ;;
+      *) say "  $(tilde "$ur/agent-worker")"; un_skills=1; un_any=1 ;;
+    esac
+  done <<EOF_ROOTS
+$(un_skill_roots)
+EOF_ROOTS
+  [ "$un_skills" -eq 1 ] || [ "$un_kept" -eq 1 ] || say "  없음"
+
+  say ""
+  say "== 실행 파일"
+  un_exe=$(un_bins "$un_prefix")
+  if [ -n "$un_exe" ]; then
+    printf '%s\n' "$un_exe" | while IFS= read -r ue; do say "  $(tilde "$ue")"; done
+    un_any=1
+  else
+    say "  없음   (설치 위치가 다르면 --prefix)"
+  fi
+  un_self=$(un_abs "$0")
+  [ -f "$(dirname -- "$un_self")/install.sh" ] && say "  남김: $(tilde "$un_self")  (저장소의 aw)"
+
+  say ""
+  if [ "$un_any" -eq 0 ]; then say "지울 것이 없습니다."; return 0; fi
+  if [ "$un_dry" -eq 1 ]; then say "--dry-run 이라 지우지 않았습니다."; return 0; fi
+  if [ "$un_yes" -eq 0 ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+      ask "모두 지울까요?" n || { say "취소했습니다."; return 1; }
+      say ""
+    else
+      warn "터미널이 아니라 확인을 받을 수 없어 지우지 않았습니다. 지우려면: aw uninstall --yes"
+      return 1
+    fi
+  fi
+
+  if [ "$un_home_ok" -eq 1 ] && [ -d "$AW_HOME" ]; then
+    # cmd_stop 이 die 해도 제거가 도중에 끝나지 않게 하위 셸에서 돌립니다.
+    for un_n in $un_running; do ( cmd_stop "$un_n" ) >/dev/null 2>&1 || warn "  멈추지 못했습니다: $un_n"; done
+    for un_n in $un_workers; do remove_worker "$un_n"; done
+    rm -rf "$AW_WORKERS" "$AW_HOME/models"
+    rm -f "$AW_HOME"/.pick.* "$AW_HOME"/.pick-models.*
+    if rmdir "$AW_HOME" 2>/dev/null; then
+      say "지움: $(tilde "$AW_HOME")"
+    else
+      say "지움: 워커 기록   (남김: $(tilde "$AW_HOME") — aw 가 만들지 않은 파일이 있습니다)"
+    fi
+  fi
+  if [ -n "$un_cfgs" ]; then
+    printf '%s\n' "$un_cfgs" | while IFS= read -r uc; do rm -f "$uc" && say "지움: $(tilde "$uc")"; done
+    rmdir "$un_cfgdir" 2>/dev/null || true
+  fi
+  if [ "$un_skills" -eq 1 ]; then
+    sk_dry=0
+    un_skill_roots | while IFS= read -r ur; do skill_del "$ur"; done | sed -n 's/^  뺌: /지움: /p'
+  fi
+  if [ -n "$un_exe" ]; then
+    printf '%s\n' "$un_exe" | while IFS= read -r ue; do rm -f "$ue" && say "지움: $(tilde "$ue")"; done
+  fi
+  say ""
+  say "aw 를 지웠습니다. 에이전트를 새로 시작하면 스킬도 보이지 않습니다."
+  un_envs=$(env | sed -n 's/^\(AW_[A-Z_]*\)=.*/\1/p' | LC_ALL=C sort | tr '\n' ' ')
+  [ -z "$un_envs" ] || say "셸 설정에 둔 환경변수는 직접 지우세요: $un_envs"
+  return 0
+}
+
 # 저장소의 skills/agent-worker/SKILL.md 는 이 함수의 출력입니다 (aw skill show > ...).
 # 고칠 때는 여기를 고치고 파일을 다시 만드세요. 테스트가 둘이 같은지 확인합니다.
 skill_text() {
@@ -3516,12 +3702,15 @@ aw wait rv-codex rv-gemini --timeout 100
 컨텍스트 한도), `aw help defaults` (권한·모델 옵션), `aw help files` (워커 기록 구조),
 `aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문), `aw help pick` (실험용 에이전트 고르기).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.
+사용자가 aw 를 지워 달라고 하면 `aw uninstall --dry-run` 으로 지울 것(워커 기록·설정·스킬·실행 파일)을 보여 주고,
+사용자가 확인하면 `aw uninstall --yes` 로 지웁니다. 터미널의 확인 질문에는 에이전트가 답할 수 없습니다.
 SKILL
 }
 
 # ---------------------------------------------------------------- 진입점
 
-mkdir -p "$AW_WORKERS" 2>/dev/null || die "작업 디렉터리를 만들 수 없습니다: $AW_WORKERS"
+# 지우러 온 aw uninstall 은 기록 폴더를 새로 만들지 않습니다 (--dry-run 도 아무것도 남기지 않게).
+[ "${1:-}" = uninstall ] || mkdir -p "$AW_WORKERS" 2>/dev/null || die "작업 디렉터리를 만들 수 없습니다: $AW_WORKERS"
 
 [ $# -gt 0 ] || { usage; exit 1; }
 sub=$1; shift
@@ -3546,6 +3735,7 @@ case "$sub" in
   pick)    cmd_pick "$@" ;;
   skill)   cmd_skill "$@" ;;
   setup)   cmd_setup "$@" ;;
+  uninstall) cmd_uninstall "$@" ;;
   version|--version|-v) say "aw $AW_VERSION" ;;
   help|--help|-h) help_topic "${1:-}" ;;
   *) die "알 수 없는 명령: $sub   (aw help)" ;;

@@ -1,101 +1,11 @@
 #!/bin/sh
-# aw 제거
+# aw 제거 — 저장소에서 돌리는 aw uninstall 입니다. 설치한 aw 로 aw uninstall 을 해도 같습니다.
 #
-# 기본은 실행 파일과 에이전트 스킬만 지웁니다. 워커 기록(출력, 종료 코드)은 남깁니다.
+# 워커 기록(실행 중이면 멈춤), 설정 파일, aw 가 넣은 스킬, 설치한 실행 파일을 모두 지웁니다.
+# 지울 것을 먼저 보여 주고, 터미널이면 한 번 묻습니다. 아니면 --yes 가 있어야 지웁니다.
+# 저장소의 aw 는 남깁니다. 옵션: ./uninstall.sh --help
 
 set -eu
 
-PREFIX="${AW_PREFIX:-$HOME/.local/bin}"
-AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
-PURGE=0
-ASSUME_YES=0
-DRY_RUN=0
-
-usage() {
-  cat <<'USAGE'
-사용법: ./uninstall.sh [옵션]
-
-  --prefix DIR   설치 위치 (기본: ~/.local/bin)
-  --purge        워커 기록(출력과 종료 코드)까지 삭제
-  --yes          --purge 확인 질문 건너뛰기
-  --dry-run      무엇을 지울지 보여주기만 함
-  -h, --help     이 도움말
-USAGE
-}
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --prefix)   PREFIX="${2:?--prefix 에 경로가 필요합니다}"; shift 2 ;;
-    --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
-    --purge)    PURGE=1; shift ;;
-    --yes|-y)   ASSUME_YES=1; shift ;;
-    --dry-run)  DRY_RUN=1; shift ;;
-    -h|--help)  usage; exit 0 ;;
-    *) printf '알 수 없는 옵션: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
-  esac
-done
-
-say()  { printf '%s\n' "$*"; }
-warn() { printf '%s\n' "$*" >&2; }
-
-say "== 실행 파일"
-if [ -f "$PREFIX/aw" ]; then
-  say "  삭제: $PREFIX/aw"
-  [ "$DRY_RUN" -eq 0 ] && rm -f "$PREFIX/aw"
-else
-  say "  $PREFIX/aw 없음"
-fi
-
-say "== 에이전트 스킬"
-# aw skill 이 넣는 곳들입니다 (aw 를 먼저 지웠어도 치울 수 있게 여기 따로 적어 둡니다).
-# ~/.codex/skills 는 손으로 넣었을 수 있어 같이 봅니다.
-# 표식(homepage 줄)이 있는 우리 스킬만 지웁니다.
-SKILL_MARK='homepage: https://github.com/shaichoi/agent-worker'
-found_skill=0
-for root in "$HOME/.agents" "$HOME/.claude" "$HOME/.gemini/config" "$HOME/.hermes" "$HOME/.codex"; do
-  dest="$root/skills/agent-worker"
-  [ -f "$dest/SKILL.md" ] || continue
-  found_skill=1
-  if grep -qF "$SKILL_MARK" "$dest/SKILL.md"; then
-    say "  삭제: $dest/SKILL.md"
-    # 사용자가 그 폴더에 따로 둔 파일이 있을 수 있어 SKILL.md 만 지우고 빈 폴더만 치웁니다.
-    [ "$DRY_RUN" -eq 0 ] && { rm -f "$dest/SKILL.md"; rmdir "$dest" 2>/dev/null || true; }
-  else
-    say "  남김: $dest  (aw 가 넣은 스킬이 아닙니다)"
-  fi
-done
-[ "$found_skill" -eq 1 ] || say "  설치된 스킬 없음"
-
-say "== 설정 파일"
-for f in "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults" "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts" \
-         "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/pick" "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/pick.off" \
-         "${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/typesafe-key"; do
-  [ -f "$f" ] && say "  남김: $f   (지우려면 rm \"$f\")"
-done
-
-say "== 워커 기록"
-case "$AW_HOME" in
-  "$HOME" | "$HOME/" | / | '') warn "  위험한 경로라 건드리지 않습니다: $AW_HOME"; PURGE=0 ;;
-esac
-
-if [ ! -d "$AW_HOME" ]; then
-  say "  $AW_HOME 없음"
-elif [ "$PURGE" -eq 0 ]; then
-  n=$(find "$AW_HOME/workers" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-  say "  유지: $AW_HOME  (워커 $n 개)"
-  say "  기록까지 지우려면: ./uninstall.sh --purge"
-else
-  say "  아래를 삭제합니다:"
-  find "$AW_HOME/workers" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | LC_ALL=C sort | sed 's/^/    /'
-  if [ "$DRY_RUN" -eq 1 ]; then
-    say "  dry-run 이라 지우지 않습니다."
-  elif [ "$ASSUME_YES" -eq 1 ]; then
-    rm -rf "$AW_HOME"; say "  삭제 완료"
-  elif [ -t 0 ]; then
-    printf '정말 삭제할까요? yes 를 입력하세요: '
-    read -r answer
-    if [ "$answer" = yes ]; then rm -rf "$AW_HOME"; say "  삭제 완료"; else say "  취소했습니다."; fi
-  else
-    warn "  확인을 받을 수 없어 취소했습니다. 비대화형이면 --yes 를 쓰세요."
-  fi
-fi
+SRC_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec sh "$SRC_DIR/aw" uninstall "$@"

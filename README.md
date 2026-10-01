@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/shaichoi/agent-worker/main/install.
 실행 파일을 `~/.local/bin` 에 놓고, 무인 실행용 [기본 옵션](#기본-옵션-권한-우회-모델)(권한 우회, 기본 모델)을 켜고, 에이전트들이 `aw` 를 쓸 수 있게 하는
 [스킬](#에이전트가-aw-를-쓰게-하기-스킬)을 넣을지 에이전트마다 묻고, PATH 를 확인합니다. 셸 설정은 건드리지 않습니다.
 다시 돌리면 최신으로 덮어씁니다(기본 옵션 파일은 그대로 둡니다. 새로 생긴 권장값은 `aw defaults` 가 알려 줍니다).
-설치한 뒤 무엇이 갖춰졌는지는 `aw setup` 으로 점검합니다.
+설치한 뒤 무엇이 갖춰졌는지는 `aw setup` 으로 점검합니다. 지우려면 [`aw uninstall`](#제거).
 
 | 옵션 | 스킬 |
 | --- | --- |
@@ -111,6 +111,7 @@ cd agent-worker
 | `aw pick [on\|off\|key]` / `aw pick -- '작업'` | (실험용) Jev 가 [작업에 맞는 에이전트·모델을 골라](#에이전트-고르기-aw-pick-실험용) 워커를 띄움 |
 | `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
 | `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
+| `aw uninstall [--yes] [--dry-run]` | 워커 기록·설정·스킬·실행 파일을 모두 [제거](#제거) (터미널이면 한 번 물음) |
 | `aw version` | 버전 |
 | `aw help [주제]` | 도움말. 주제: `agents` `defaults` `files` `limits` `peek` `brief` `pick` `models` |
 
@@ -586,7 +587,7 @@ $ aw setup
 | agy | `~/.gemini/config/skills/` | 실측 (1.2.9). `~/.agents/skills` 는 읽지 않음 |
 | Hermes | `~/.hermes/skills/` | 문서 기준. 저장소에서 바로 받을 수도 있음: `hermes skills install shaichoi/agent-worker/skills/agent-worker` |
 
-- 같은 이름의 다른 스킬이 이미 있으면 덮어쓰지 않습니다. `aw skill remove` 와 `./uninstall.sh` 는 `aw` 가 넣은 것만 지웁니다.
+- 같은 이름의 다른 스킬이 이미 있으면 덮어쓰지 않습니다. `aw skill remove` 와 `aw uninstall` 은 `aw` 가 넣은 것만 지웁니다.
 - 새로 넣은 스킬은 에이전트를 새로 시작해야 보입니다.
 - 스킬 내용은 `aw` 안에 들어 있어서 인터넷 없이 넣을 수 있고, 늘 그 `aw` 의 버전과 맞습니다.
   저장소의 `SKILL.md` 는 `aw skill show` 로 만든 것입니다. 고칠 때는 `aw` 의 `skill_text` 를 고치고
@@ -929,7 +930,7 @@ mytool 128000
 | `AW_CONFIG` | `~/.config/agent-worker/contexts` | 컨텍스트 한도 설정 파일 |
 | `AW_DEFAULTS` | `~/.config/agent-worker/defaults` | 에이전트별 기본 옵션(권한, 모델) 파일 |
 | `AW_NO_DEFAULTS` | (없음) | `1` 이면 기본 옵션을 붙이지 않음 |
-| `AW_PREFIX` | `~/.local/bin` | `install.sh` / `uninstall.sh` 의 설치 위치 |
+| `AW_PREFIX` | `~/.local/bin` | `install.sh` / `aw uninstall` 의 설치 위치 |
 | `AW_WORKER` | (워커 안에서만) | `aw` 가 워커에 넣어 주는 그 워커 이름. 중첩 확인용 |
 | `AW_QUIET` | `300` | `aw peek` 이 조용함을 알리는 기준(초) |
 | `AW_BRIEF` | `~/.config/agent-worker/brief` | 워커 지시문 파일 |
@@ -974,11 +975,24 @@ AW_HOME=/tmp/aw-test aw run -- echo 시험
 ## 제거
 
 ```sh
-./uninstall.sh
+aw uninstall              # 지울 것을 보여 주고 한 번 물음
+aw uninstall --dry-run    # 보여 주기만
+aw uninstall --yes        # 묻지 않고 바로 (스크립트, 에이전트)
 ```
 
-실행 파일과 `aw` 가 넣은 스킬만 지우고 워커 기록은 남깁니다. 기록까지 지우려면 `--purge`를 주세요
-(무엇이 지워지는지 먼저 보여주고 `yes` 입력을 받습니다).
+`aw` 가 이 컴퓨터에 남긴 것을 모두 지웁니다.
+
+| 무엇 | 어디 | |
+| --- | --- | --- |
+| 워커 기록 | `~/.local/share/agent-worker` | 실행 중인 워커는 멈춥니다. `-w` 로 만든 worktree 도 지웁니다 (브랜치는 남지만 커밋하지 않은 변경은 사라짐) |
+| 설정 파일 | `~/.config/agent-worker/` | 기본 옵션, 지시문, 컨텍스트 한도표, `aw pick` 설명과 키 |
+| 스킬 | 에이전트마다 (`aw skill`) | `aw` 가 넣은 것만. 같은 이름의 다른 스킬은 남깁니다 |
+| 실행 파일 | `~/.local/bin/aw` | 설치 위치가 다르면 `--prefix DIR` (또는 `AW_PREFIX`). 지금 돌린 `aw` 도 지웁니다 |
+
+지울 것을 먼저 보여 주고, 터미널이면 `[y/N]` 으로 한 번 묻습니다(기본 아니오). 터미널이 아니면(에이전트, 스크립트)
+묻지 못하므로 `--yes` 가 있어야 지우고, 없으면 목록만 보여 주고 코드 1 로 끝납니다. 환경변수로 옮겨 둔 파일
+(`AW_HOME`, `AW_DEFAULTS` 등)은 그 위치를 따라가고, 셸 설정에 둔 그 변수들은 직접 지우라고 알려 줍니다.
+저장소에서 `./uninstall.sh`(또는 `./aw uninstall`)로 돌려도 같고, 저장소의 `aw` 는 남깁니다.
 
 ## 검증
 

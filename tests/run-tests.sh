@@ -688,11 +688,64 @@ else ok "install.sh --dry-run 은 아무것도 만들지 않음"; fi
 fresh; mkdir -p "$IH/.claude" "$IH/.gemini/config/skills/agent-worker"; fake codex
 printf -- '---\nname: agent-worker\ndescription: 남의 것\n---\n' > "$IH/.gemini/config/skills/agent-worker/SKILL.md"
 inst --skill
-(env HOME="$IH" AW_PREFIX="$IH/bin" AW_HOME="$IH/awhome" PATH="/usr/bin:/bin" sh "$SRC_DIR/uninstall.sh" >/dev/null 2>&1)
-if [ -e "$IH/.claude/skills/agent-worker" ] || [ -e "$IH/.agents/skills/agent-worker" ]; then
-  ng "uninstall.sh 가 우리 스킬을 남김"
-else ok "uninstall.sh 가 우리 스킬을 지움"; fi
-if [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ]; then ok "uninstall.sh 는 남의 스킬을 남김"; else ng "uninstall.sh 가 남의 스킬을 지움"; fi
+# 제거는 이 시험의 설정 파일(AW_DEFAULTS 등)을 지우지 않게 AW_* 를 비우고 시험용 홈 아래로만 돌립니다.
+uaw() { env -u AW_DEFAULTS -u AW_BRIEF -u AW_PICK -u AW_PICK_KEYFILE -u AW_CONFIG HOME="$IH" XDG_CONFIG_HOME="$IH/.config" \
+          AW_HOME="$IH/awhome" AW_PREFIX="$IH/bin" PATH="$IH/fakebin:/usr/bin:/bin" "$@"; }
+UREPO="$IH/repo"; mkdir -p "$UREPO"
+(cd "$UREPO" && git init -q && git -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m init)
+uaw "$IH/bin/aw" run -n un-wt -d "$UREPO" -w feat/un -- true >/dev/null 2>&1
+uaw "$IH/bin/aw" run -n un-long -- sleep 60 >/dev/null 2>&1
+uaw "$IH/bin/aw" wait un-wt >/dev/null 2>&1
+un_pid=$(cat "$IH/awhome/workers/un-long/pid" 2>/dev/null)
+un_left() { [ -e "$IH/bin/aw" ] || [ -e "$IH/awhome" ] || [ -e "$IH/.config/agent-worker" ] \
+              || [ -e "$IH/.claude/skills/agent-worker" ] || [ -e "$IH/.agents/skills/agent-worker" ]; }
+
+out=$(uaw "$IH/bin/aw" uninstall --dry-run 2>&1)
+has "uninstall --dry-run: 지울 것을 보여 줌" "$out" "~/.config/agent-worker/defaults"
+has "uninstall --dry-run: 실행 중인 워커를 멈춘다고 알림" "$out" "멈출 워커: un-long"
+has "uninstall --dry-run: worktree 와 남는 브랜치를 알림" "$out" "브랜치 feat/un 는 남고"
+has "uninstall --dry-run: 남의 스킬은 남긴다고 알림" "$out" "남김: ~/.gemini/config/skills/agent-worker"
+if [ -x "$IH/bin/aw" ] && [ -d "$IH/awhome/workers/un-wt" ] && [ -f "$IH/.claude/skills/agent-worker/SKILL.md" ]; then
+  ok "uninstall --dry-run 은 아무것도 지우지 않음"
+else ng "uninstall --dry-run 이 무언가를 지움"; fi
+
+if uaw "$IH/bin/aw" uninstall < /dev/null >/dev/null 2>&1; then ng "터미널이 아닌데 --yes 없이 성공"; else ok "uninstall: 터미널이 아니고 --yes 가 없으면 코드 1"; fi
+if [ -x "$IH/bin/aw" ] && [ -d "$IH/awhome" ]; then ok "uninstall: --yes 없이는 지우지 않음"; else ng "uninstall: 확인 없이 지움"; fi
+
+if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
+  un_tty() { printf '%s\n' "$1" | script -qec "env -u AW_DEFAULTS -u AW_BRIEF -u AW_PICK -u AW_PICK_KEYFILE -u AW_CONFIG HOME='$IH' XDG_CONFIG_HOME='$IH/.config' AW_HOME='$IH/awhome' AW_PREFIX='$IH/bin' PATH='$IH/fakebin:/usr/bin:/bin' sh '$IH/bin/aw' uninstall" /dev/null 2>&1; }
+  out=$(un_tty n)
+  has "uninstall: 터미널이면 한 번 물음" "$out" "모두 지울까요? [y/N]"
+  if [ -x "$IH/bin/aw" ] && [ -d "$IH/awhome" ]; then ok "uninstall: n 이면 지우지 않음"; else ng "uninstall: n 인데 지움"; fi
+fi
+
+uaw "$IH/bin/aw" uninstall --yes >/dev/null 2>&1
+if un_left; then ng "uninstall --yes 뒤에 남은 것이 있음"; else ok "uninstall --yes: 실행 파일·기록·설정·우리 스킬을 지움"; fi
+if [ -f "$IH/.gemini/config/skills/agent-worker/SKILL.md" ]; then ok "uninstall 은 남의 스킬을 남김"; else ng "uninstall 이 남의 스킬을 지움"; fi
+if [ -e "$UREPO/.aw-worktrees" ]; then ng "worktree(.aw-worktrees)가 남음"; else ok "uninstall 이 worktree 와 빈 .aw-worktrees 를 지움"; fi
+check "uninstall 뒤에도 worktree 의 브랜치는 남음" feat/un "$(git -C "$UREPO" branch --list feat/un --format='%(refname:short)')"
+if [ -n "$un_pid" ] && kill -0 "$un_pid" 2>/dev/null; then ng "실행 중이던 워커가 남음"; kill "$un_pid" 2>/dev/null; else ok "uninstall 이 실행 중인 워커를 멈춤"; fi
+
+# 터미널에서 y 로 답하면 지움
+if command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
+  inst --no-skill
+  un_tty y >/dev/null
+  if [ -e "$IH/bin/aw" ]; then ng "uninstall: y 인데 안 지움"; else ok "uninstall: y 로 답하면 지움"; fi
+fi
+
+# 저장소에서 돌리면(uninstall.sh, ./aw uninstall) 저장소의 aw 는 남기고 설치한 aw 를 지움
+inst --skill
+uaw sh "$SRC_DIR/uninstall.sh" --yes >/dev/null 2>&1
+if un_left; then ng "uninstall.sh --yes 뒤에 남은 것이 있음"; else ok "uninstall.sh 가 aw uninstall 로 모두 지움"; fi
+if [ -f "$AW" ] && grep -q '^AW_VERSION=' "$AW"; then ok "저장소의 aw 는 남김"; else ng "저장소의 aw 를 지움"; fi
+# 지운 뒤 다시 돌려도(이미 없음) 아무것도 만들지 않고 끝남
+out=$(uaw sh "$AW" uninstall --dry-run 2>&1)
+has "지울 것이 없으면 그렇게 알림" "$out" "지울 것이 없습니다"
+if [ -e "$IH/awhome" ]; then ng "uninstall 이 기록 폴더를 새로 만듦"; else ok "uninstall 은 기록 폴더를 만들지 않음"; fi
+# 설치 위치의 aw 가 aw 가 아니면(같은 이름의 남의 파일) 지우지 않음
+mkdir -p "$IH/bin"; printf '#!/bin/sh\necho mine\n' > "$IH/bin/aw"
+uaw sh "$AW" uninstall --yes >/dev/null 2>&1
+check "설치 위치의 남의 aw 는 지우지 않음" mine "$(sh "$IH/bin/aw")"
 
 # 스킬을 못 넣어도(쓰기 권한 없음) aw 설치는 끝까지 가야 합니다. root 는 권한을 무시해 건너뜁니다.
 if [ "$(id -u)" -ne 0 ]; then

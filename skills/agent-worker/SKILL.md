@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.16.1"
+  version: "0.17.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -210,3 +210,5 @@ aw wait rv-codex rv-gemini --timeout 100
 컨텍스트 한도), `aw help defaults` (권한·모델 옵션), `aw help files` (워커 기록 구조),
 `aw help peek` (진행 상황 각 줄의 뜻, 조용함), `aw help brief` (워커 지시문), `aw help pick` (실험용 에이전트 고르기).
 이 스킬이 어느 에이전트에 들어 있는지는 `aw skill`, 설치 전반 점검은 `aw setup` 입니다.
+사용자가 aw 를 지워 달라고 하면 `aw uninstall --dry-run` 으로 지울 것(워커 기록·설정·스킬·실행 파일)을 보여 주고,
+사용자가 확인하면 `aw uninstall --yes` 로 지웁니다. 터미널의 확인 질문에는 에이전트가 답할 수 없습니다.

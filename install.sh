@@ -32,7 +32,8 @@ usage() {
 터미널이 없으면(스크립트, CI) 새로 넣지 않습니다. 이미 넣어 둔 스킬은 새 버전으로
 바꿉니다. 나중에 보거나 바꾸려면 aw skill, 설치 전반 점검은 aw setup.
 
-워커 기록(~/.local/share/agent-worker)은 설치·제거와 무관하게 유지됩니다.
+워커 기록(~/.local/share/agent-worker)은 다시 설치해도 유지됩니다.
+모두 지우려면 aw uninstall (지울 것을 먼저 보여 주고 묻습니다).
 USAGE
 }
 
@@ -166,5 +167,5 @@ cat <<DONE
 도움말: aw help          에이전트별 호출법: aw help agents
 설치 점검: aw setup      에이전트 스킬: aw skill
 기본 옵션 확인/바꾸기: aw defaults   지시문 확인/고치기: aw brief
-제거: ./uninstall.sh   (워커 기록은 남습니다)
+제거: aw uninstall     (기록·설정·스킬까지 모두. 먼저 보여 주고 묻습니다)
 DONE
