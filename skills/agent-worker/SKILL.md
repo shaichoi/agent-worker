@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.19.1"
+  version: "0.20.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -138,7 +138,8 @@ aw rm review
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
-  붙이지 않습니다(프로필이 정함). 키를 `-e` 로 넘기지 않습니다(워커 기록에 남음). 자세히: `aw help gateway`.
+  붙이지 않습니다(프로필이 정함). 키는 사용자가 `aw gateway key <이름>` 으로 넣습니다. 키를 `-e` 로 넘기지
+  않고, 사용자에게 키를 대화에 붙여 달라고 하지 않습니다. 자세히: `aw help gateway`.
 - **claude·agy·kiro-cli 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
   `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.
 - **claude·codex·kiro-cli 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.

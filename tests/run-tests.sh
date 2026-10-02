@@ -32,6 +32,7 @@ unset TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL AW_PICK_MIN_CONF
 export CODEX_HOME="$TMPROOT/no-codex-home"
 # claude 프로필(aw run --profile, aw gateway)도 이 컴퓨터의 ~/.claude-profiles 를 건드리지 않게 합니다.
 export CLAUDE_PROFILE_ROOT="$TMPROOT/claude-profiles"
+export AW_GATEWAY_KEYS="$TMPROOT/gateway-keys"
 
 head_ "1. 문법 검사"
 for s in sh bash zsh; do
@@ -1755,8 +1756,13 @@ cat > "$GW/bin/codex" <<'STUB'
 #!/bin/sh
 printf '{"type":"thread.started","thread_id":"tid-gw"}\n'
 printf '%s\n' "$@"
+printf 'KEY=%s\n' "${OPENGATEWAY_API_KEY:-}"
 STUB
-printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$GW/bin/claude"
+cat > "$GW/bin/claude" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$@"
+printf 'KEY=%s\n' "${OPENGATEWAY_API_KEY:-}"
+STUB
 chmod +x "$GW/bin/"*
 # providers 안의 {"id": 도 있는 실제 모양 그대로 (OpenGateway /v1/models)
 pv='"providers":[{"id":"p1","region":"global"}]'
@@ -1767,29 +1773,42 @@ printf '{"object":"list","data":[%s,%s,%s,%s,%s]}\n' \
   "{\"id\":\"x/chat\",\"object\":\"model\",\"status\":\"active\",\"endpoints\":[\"chat_completions\"],$pv}" \
   "{\"id\":\"x/old\",\"object\":\"model\",\"status\":\"deprecated\",\"endpoints\":[\"messages\",\"responses\"],$pv}" > "$GW/stub/resp"
 printf 'codex --sandbox workspace-write\ncodex --model gpt-x\nclaude --permission-mode bypassPermissions\nclaude --model opus-x\nclaude --effort xhigh\n' > "$GW/defaults"
-awg() { env -u OPENGATEWAY_API_KEY PATH="$GW/bin:/usr/bin:/bin" GW_STUB="$GW/stub" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" AW_DEFAULTS="$GW/defaults" "$AW" "$@"; }
+awg() { env -u OPENGATEWAY_API_KEY PATH="$GW/bin:/usr/bin:/bin" GW_STUB="$GW/stub" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" AW_GATEWAY_KEYS="$GW/keys" AW_DEFAULTS="$GW/defaults" "$AW" "$@"; }
 
 has "만든 게이트웨이가 없으면 그렇게 알림" "$(awg gateway)" "만든 게이트웨이가 없습니다"
 out=$(awg gateway add opengateway --model x/both 2>&1)
 has "add: 알려진 게이트웨이의 주소로 모델 목록을 봄" "$(cat "$GW/stub/args")" "https://apis.opengateway.ai/v1/models"
 has "add: codex 프로필을 만듦" "$out" "codex : 만듦"
 has "add: claude 프로필을 만듦" "$out" "claude: 만듦"
-has "add: 키가 셸에 없으면 알려 줌" "$out" "이 셸에 \$OPENGATEWAY_API_KEY 가 없습니다"
+has "add: 키가 없으면 넣는 법을 알려 줌" "$out" "키: 아직 없습니다. 넣기: aw gateway key opengateway"
 cf="$GW/codex/opengateway.config.toml"; cd_="$GW/cp/opengateway"
 check "codex 파일 첫 줄은 aw 표식" "# aw gateway: opengateway" "$(head -1 "$cf" | cut -c1-25)"
 has "codex 파일에 게이트웨이 정의 (/v1)" "$(cat "$cf")" 'base_url = "https://apis.opengateway.ai/v1"'
 has "codex 파일에 모델" "$(cat "$cf")" 'model = "x/both"'
 has "codex 파일에서 앱 도구를 끔" "$(cat "$cf")" "apps = false"
 has "claude 프로필에 주소 (/v1 없이)" "$(cat "$cd_/settings.json")" '"ANTHROPIC_BASE_URL": "https://apis.opengateway.ai"'
-has "claude 프로필은 키를 환경변수에서 읽음" "$(cat "$cd_/settings.json")" 'printf %s \"$OPENGATEWAY_API_KEY\"'
+has "claude 프로필은 키를 환경변수에서, 없으면 키 파일에서 읽음" "$(cat "$cd_/settings.json")" "printf %s \\\"\${OPENGATEWAY_API_KEY:-\$(cat '$GW/keys/opengateway' 2>/dev/null)}"
 if [ -f "$cd_/.aw-gateway" ]; then ok "claude 프로필에 aw 표식"; else ng "claude 프로필에 표식이 없음"; fi
 out=$(env OPENGATEWAY_API_KEY=sekrit PATH="$GW/bin:/usr/bin:/bin" GW_STUB="$GW/stub" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" "$AW" gateway add opengateway --model x/both 2>&1)
 hasnt "키는 curl 의 인자에 없음" "$(cat "$GW/stub/args")" "sekrit"
 hasnt "키 값은 만든 파일에 없음" "$(cat "$cf" "$cd_/settings.json" "$cd_/.aw-gateway")" "sekrit"
 has "키는 표준 입력의 설정으로" "$(cat "$GW/stub/config")" "Bearer sekrit"
 has "다시 add 하면 바꿈" "$out" "codex : 바꿈"
-has "상태: 키가 있음" "$(env OPENGATEWAY_API_KEY=k PATH="$GW/bin:/usr/bin:/bin" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" "$AW" gateway)" "키 \$OPENGATEWAY_API_KEY: 있음"
-has "상태: 키가 없음" "$(awg gateway)" "키 \$OPENGATEWAY_API_KEY: 없음"
+has "상태: 셸의 환경변수" "$(env OPENGATEWAY_API_KEY=k PATH="$GW/bin:/usr/bin:/bin" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" AW_GATEWAY_KEYS="$GW/keys" "$AW" gateway)" "키: 환경변수 \$OPENGATEWAY_API_KEY"
+has "상태: 키가 없음" "$(awg gateway)" "키: 없음 — 넣기: aw gateway key opengateway"
+
+# 키 넣기/빼기: 파일은 나만 읽기, 워커에는 환경변수로 넘기고 기록에는 안 남김
+printf 'k-123456789abcdef\n' | awg gateway key opengateway >/dev/null 2>&1
+check "key: 표준 입력의 키를 넣음" "k-123456789abcdef" "$(cat "$GW/keys/opengateway" 2>/dev/null)"
+check "key: 나만 읽기 (600)" 600 "$(stat -c %a "$GW/keys/opengateway" 2>/dev/null || stat -f %Lp "$GW/keys/opengateway")"
+has "상태: 넣어 둔 키 (가려서)" "$(awg gateway)" "넣어 둠 (k-12…cdef"
+hasnt "상태에 키 전체는 안 보임" "$(awg gateway)" "k-123456789abcdef"
+awg gateway models opengateway >/dev/null 2>&1
+has "모델 목록도 넣어 둔 키로" "$(cat "$GW/stub/config")" "Bearer k-123456789abcdef"
+if awg gateway key nosuchgw k >/dev/null 2>&1; then ng "모르는 게이트웨이에 키를 넣음"; else ok "key: 모르는 게이트웨이는 거절"; fi
+awg gateway key opengateway 'k-arg-0123456789' >/dev/null 2>&1
+check "key: 인자로 줘도 됨" "k-arg-0123456789" "$(cat "$GW/keys/opengateway" 2>/dev/null)"
+printf 'k-123456789abcdef\n' | awg gateway key opengateway >/dev/null 2>&1
 
 out=$(awg gateway models opengateway codex)
 has "models codex: Responses 를 지원하는 모델" "$out" "x/resp"
@@ -1832,7 +1851,16 @@ awg wait gw-c >/dev/null 2>&1
 r=$(awg result gw-c)
 hasnt "codex --profile: 기본 모델이 안 붙음" "$r" "gpt-x"
 has "codex --profile: 다른 기본 옵션은 붙음" "$r" "workspace-write"
+has "codex 게이트웨이 워커에 넣어 둔 키가 넘어감" "$r" "KEY=k-123456789abcdef"
+if grep -rq 'k-123456789abcdef' "$AW_HOME/workers/gw-c/launch.sh" "$AW_HOME/workers/gw-c/run.sh" "$AW_HOME/workers/gw-c/meta" "$AW_HOME/workers/gw-c/cmd" "$AW_HOME/workers/gw-c/cmd.orig"; then
+  ng "키가 워커 기록 파일에 남음"
+else ok "키는 워커 기록 파일(launch.sh, run.sh, meta, cmd)에 안 남음"; fi
 awg run -n gw-m -- codex exec --json -m mine-model 작업 >/dev/null 2>&1; awg wait gw-m >/dev/null 2>&1
+has "게이트웨이가 아닌 워커에는 키를 안 넘김" "$(awg result gw-m)" "KEY="
+hasnt "게이트웨이가 아닌 워커에는 키 값이 없음" "$(awg result gw-m)" "k-123456789abcdef"
+env OPENGATEWAY_API_KEY=k-from-env PATH="$GW/bin:/usr/bin:/bin" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" AW_GATEWAY_KEYS="$GW/keys" AW_DEFAULTS="$GW/defaults" "$AW" run -n gw-e -- codex exec --json --profile opengateway 작업 >/dev/null 2>&1
+awg wait gw-e >/dev/null 2>&1
+has "셸의 환경변수가 키 파일보다 먼저" "$(awg result gw-e)" "KEY=k-from-env"
 hasnt "codex -m 은 --model 과 같은 옵션" "$(awg result gw-m)" "gpt-x"
 awg run -n gw-p -- codex exec --json --profile nomodel 작업 >/dev/null 2>&1; awg wait gw-p >/dev/null 2>&1
 has "모델을 정하지 않는 프로필이면 기본 모델이 붙음" "$(awg result gw-p)" "gpt-x"
@@ -1840,6 +1868,7 @@ awg run -n gw-l --profile opengateway -- claude -p 작업 >/dev/null 2>&1; awg w
 r=$(awg result gw-l)
 hasnt "claude --profile(게이트웨이): 기본 모델이 안 붙음" "$r" "opus-x"
 has "claude --profile(게이트웨이): 수준 줄은 붙음" "$r" "xhigh"
+has "claude 게이트웨이 워커에도 키가 넘어감" "$r" "KEY=k-123456789abcdef"
 awg run -n gw-w --profile work -- claude -p 작업 >/dev/null 2>&1; awg wait gw-w >/dev/null 2>&1
 has "모델을 정하지 않는 claude 프로필이면 기본 모델이 붙음" "$(awg result gw-w)" "opus-x"
 # 이어하기: codex 의 --profile 은 exec 의 옵션이라 resume 앞에 둠 (뒤에 두면 codex 가 거절)
@@ -1847,17 +1876,25 @@ awg resume gw-c -n gw-c2 -- 다음 >/dev/null 2>&1; awg wait gw-c2 >/dev/null 2>
 check "codex 이어하기는 --profile 과 기본 옵션을 resume 앞에 (모델 줄은 빠짐)" "exec --profile opengateway --sandbox workspace-write resume tid-gw" "$(awg result gw-c2 | sed -n '2,8p' | tr '\n' ' ' | sed 's/ $//')"
 awg resume gw-c2 -n gw-c3 -- 또 >/dev/null 2>&1; awg wait gw-c3 >/dev/null 2>&1
 check "이은 워커를 다시 이어도 같음" "exec --profile opengateway --sandbox workspace-write resume tid-gw" "$(awg result gw-c3 | sed -n '2,8p' | tr '\n' ' ' | sed 's/ $//')"
-awg rm gw-c gw-c2 gw-c3 gw-m gw-p gw-l gw-w >/dev/null 2>&1
+awg rm gw-c gw-c2 gw-c3 gw-m gw-p gw-l gw-w gw-e >/dev/null 2>&1
+
+has "key --rm: 키를 뺌" "$(awg gateway key opengateway --rm)" "키를 뺐습니다"
+if [ -e "$GW/keys/opengateway" ]; then ng "key --rm 뒤에 키 파일이 남음"; else ok "key --rm 이 키 파일을 지움"; fi
+printf 'k-123456789abcdef\n' | awg gateway key opengateway >/dev/null 2>&1
 
 has "rm: 지움" "$(awg gateway rm opengateway)" "지움:"
 if [ -e "$cf" ] || [ -e "$cd_" ]; then ng "rm 뒤에 남음"; else ok "rm 이 codex 파일과 claude 프로필을 지움"; fi
+if [ -e "$GW/keys/opengateway" ]; then ng "rm 뒤에 키가 남음"; else ok "rm 이 넣어 둔 키도 지움"; fi
 
 # aw uninstall 도 게이트웨이 프로필을 지움
 UH="$GW/uhome"; mkdir -p "$UH"
 awg gateway add opengateway --model x/both >/dev/null 2>&1
+printf 'k-123456789abcdef\n' | awg gateway key opengateway >/dev/null 2>&1
 out=$(env -u AW_DEFAULTS -u AW_BRIEF -u AW_PICK -u AW_PICK_KEYFILE -u AW_CONFIG HOME="$UH" XDG_CONFIG_HOME="$UH/.config" \
         AW_HOME="$UH/awhome" AW_PREFIX="$UH/bin" PATH="$GW/bin:/usr/bin:/bin" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" \
-        sh "$AW" uninstall --yes 2>&1)
+        AW_GATEWAY_KEYS="$GW/keys" sh "$AW" uninstall --yes 2>&1)
+has "uninstall 이 게이트웨이 키를 보여 줌" "$out" "$GW/keys/opengateway"
+if [ -e "$GW/keys/opengateway" ]; then ng "uninstall 뒤에 게이트웨이 키가 남음"; else ok "uninstall 이 게이트웨이 키를 지움"; fi
 has "uninstall 이 게이트웨이 프로필을 보여 줌" "$out" "== 게이트웨이 프로필"
 if [ -e "$cf" ] || [ -e "$cd_" ]; then ng "uninstall 뒤에 게이트웨이 프로필이 남음"; else ok "uninstall 이 게이트웨이 프로필을 지움"; fi
 if [ -f "$GW/codex/mine.config.toml" ]; then ok "uninstall 은 남의 codex 파일을 남김"; else ng "uninstall 이 남의 파일을 지움"; fi
