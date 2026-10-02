@@ -111,6 +111,7 @@ cd agent-worker
 | `aw brief [--init]` | [워커 지시문](#워커-지시문-brief) 확인 / 권장값으로 켜기 |
 | `aw pick [on\|off\|key]` / `aw pick -- '작업'` | (실험용) Jev 가 [작업에 맞는 에이전트·모델을 골라](#에이전트-고르기-aw-pick-실험용) 워커를 띄움 |
 | `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
+| `aw gateway [add\|models\|rm] [이름]` | OpenGateway 등 [게이트웨이의 모델](#게이트웨이-aw-gateway)을 codex·claude 프로필로 |
 | `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
 | `aw uninstall [--yes] [--dry-run]` | 워커 기록·설정·스킬·실행 파일을 모두 [제거](#제거) (터미널이면 한 번 물음) |
 | `aw version` | 버전 |
@@ -786,6 +787,43 @@ kiro-cli  20    auto                캐시 2m 전
 - 목록 명령이 느려서(실측: kiro-cli 1.4초, agy 4.7초, devin 5.5초) `~/.local/share/agent-worker/models/` 에 캐시합니다.
   `aw run` 은 캐시만 읽고, **찾는 모델이 캐시에 없을 때만** 한 번 새로 물어본 뒤 정합니다. 낡은 캐시 때문에 멀쩡한 기본을
   빼지 않고, 새로 받지 못하면 빼지 않습니다. codex 는 스스로 관리하는 파일을 그때그때 읽습니다.
+
+## 게이트웨이 (aw gateway)
+
+OpenAI·Anthropic 호환 API 를 내주는 게이트웨이(예: [OpenGateway](https://opengateway.ai/docs))의 모델을
+codex·claude 워커로 돌립니다. 게이트웨이 하나를 두 에이전트의 프로필로 만들어 두고, 띄울 때 프로필 이름만 줍니다.
+
+```sh
+# 1. 키: 셸 설정(~/.zshrc 등)에 넣고 새 셸에서
+export OPENGATEWAY_API_KEY="발급받은 키"
+
+# 2. 만들기 (모델을 빼면 deepseek/deepseek-v4.1-flash-ultrafast)
+aw gateway add opengateway [--model 모델]
+aw gateway models opengateway        # 쓸 수 있는 모델: codex 는 Responses, claude 는 Messages 지원 모델
+
+# 3. 띄우기 (--model 은 주지 않습니다)
+aw run -n ds -- codex exec --json --profile opengateway "작업"
+aw run -n ds --profile opengateway -- claude -p --output-format stream-json --verbose "작업"
+```
+
+| 만드는 것 | 위치 | |
+| --- | --- | --- |
+| codex 프로필 | `~/.codex/<이름>.config.toml` | 게이트웨이 정의(`<주소>/v1`, Responses API)까지 이 파일에 둡니다. `~/.codex/config.toml` 은 건드리지 않습니다 |
+| claude 프로필 | `~/.claude-profiles/<이름>/` | 평소 Claude 설정과 따로인 설정 폴더(Messages API). 모델 별명(opus, sonnet, haiku)도 모두 이 모델로 |
+
+- **키는 파일에 적지 않습니다.** 환경변수 이름만 적고 돌 때 읽습니다. 워커는 `aw run` 을 친 셸의 환경을
+  물려받습니다. `aw run -e` 로 넘기면 워커 기록(`launch.sh`)에 그대로 남으니 쓰지 마세요.
+- **add 는 게이트웨이의 모델 목록을 봅니다.** 목록에 없는 모델은 거절하고, 그 모델이 Responses 를 지원하지
+  않으면 codex 쪽을, Messages 를 지원하지 않으면 claude 쪽을 만들지 않습니다(예: OpenGateway 의 Claude 모델은
+  Responses 만 되어 codex 로만). 같은 이름으로 다시 하면 바꿉니다.
+- **프로필이 모델을 정하면 기본 옵션의 모델 줄은 빠집니다.** codex 는 `--profile` 의 파일에 `model =` 이 있을 때,
+  claude 는 `--profile` 의 `settings.json` 에 `ANTHROPIC_MODEL` 이 있을 때입니다. `aw resume` 도 같은 프로필로 잇습니다.
+- **codex 는 처음 보는 모델에서 ChatGPT 연결 앱의 도구 정의를 요청마다 통째로 넣습니다.** github, google_drive,
+  gmail 등을 합쳐 532KB, 요청당 입력이 약 17만 토큰이었습니다(아는 OpenAI 모델은 미뤄 둬서 약 1만 5천).
+  그래서 프로필에서 `apps = false` 로 끕니다. 끈 뒤 같은 작업의 입력이 68만에서 7만 8천 토큰으로 줄었습니다.
+- claude 쪽은 OpenGateway 가 입력 토큰을 0 으로 돌려줘서, 결과에 나오는 비용이 맞지 않습니다. 대시보드를 보세요.
+- 다른 게이트웨이: `aw gateway add <이름> --url https://… --key-env 변수 --model 모델`. 지우기는 `aw gateway rm <이름>`
+  이고, `aw uninstall` 도 aw 가 만든 프로필을 지웁니다. aw 가 만들지 않은 같은 이름의 파일은 건드리지 않습니다.
 
 ## 기본 옵션 (권한 우회, 모델)
 

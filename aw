@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.18.0
+AW_VERSION=0.19.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -47,6 +47,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw brief [--init]                    워커 프롬프트 앞에 붙는 지시문 (예상 소요 시간 등)
   aw pick [on|off|key] / -- '작업'     (실험용) Jev 가 작업에 맞는 에이전트·모델을 골라 워커를 띄움
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
+  aw gateway [add|models|rm] [이름]    OpenGateway 등 게이트웨이 모델을 codex·claude 프로필로
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
   aw uninstall [--yes] [--dry-run]     기록·설정·스킬·실행 파일을 모두 지움 (터미널이면 한 번 물음)
   aw version | aw help [주제]
@@ -77,6 +78,7 @@ wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 /
   aw help brief     워커 지시문: 붙는 곳, 끄는 법, 예상 소요 시간
   aw help pick      (실험용) 에이전트 고르기: 켜고 끄기, 키, 고르는 기준
   aw help models    설치된 CLI 의 모델 목록, 기본 옵션의 모델이 목록에 없을 때
+  aw help gateway   게이트웨이(OpenGateway 등) 모델로 워커 띄우기: 만들기, 키, 띄우는 법
 USAGE
 }
 
@@ -169,6 +171,35 @@ T
       ;;
     defaults) cmd_defaults ;;
     models) models_usage ;;
+    gateway) cat <<'T'
+aw gateway — OpenAI·Anthropic 호환 게이트웨이(OpenGateway 등)의 모델을 codex·claude 워커로
+
+  aw gateway add opengateway                      만들기 (모델: deepseek/deepseek-v4.1-flash-ultrafast)
+  aw gateway add opengateway --model 모델          다른 모델로 (다시 하면 바꿈)
+  aw gateway add 이름 --url https://… --key-env 변수 --model 모델   다른 게이트웨이
+  aw gateway                                      만든 것, 키가 있는지
+  aw gateway models opengateway [codex|claude]    쓸 수 있는 모델
+  aw gateway rm opengateway                       지우기 (aw uninstall 도 지움)
+
+띄우기 (--model 은 주지 않아도 됩니다. 프로필이 모델을 정하면 기본 옵션의 모델 줄은 빠집니다)
+  aw run -n ds -- codex exec --json --profile opengateway "작업"
+  aw run -n ds --profile opengateway -- claude -p --output-format stream-json --verbose "작업"
+
+만드는 파일 (aw 가 만든 것만 바꾸고 지웁니다. 사용자의 ~/.codex/config.toml 은 건드리지 않습니다)
+  codex   $CODEX_HOME/<이름>.config.toml   Responses API (<주소>/v1). codex --profile <이름>
+  claude  ~/.claude-profiles/<이름>/        Messages API. 평소 Claude 설정과 따로인 프로필 (aw run --profile)
+add 는 게이트웨이의 모델 목록으로 그 모델이 어느 API 로 되는지 보고, 안 되는 쪽은 만들지 않습니다.
+
+키: 파일에 적지 않고 환경변수 이름만 적습니다 (opengateway 는 OPENGATEWAY_API_KEY).
+  셸 설정(~/.zshrc 등)에 export 하세요. 워커는 aw run 을 친 셸의 환경을 물려받습니다.
+  aw run -e 로 넘기면 워커 기록(launch.sh)에 그대로 남으니 쓰지 마세요.
+
+알아둘 점
+  codex 는 처음 보는 모델에서 ChatGPT 연결 앱(github, gmail …)의 도구 정의를 요청마다 통째로 넣습니다
+  (실측: 요청당 입력 약 17만 토큰). 그래서 프로필에서 apps = false 로 끕니다.
+  claude 쪽은 게이트웨이가 입력 토큰을 0 으로 돌려주면 결과의 비용이 맞지 않습니다. 게이트웨이 대시보드를 보세요.
+T
+      ;;
     brief)
       cat <<'T'
 워커 지시문 (brief)
@@ -625,9 +656,23 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
       [ -n "$rsid" ] || return 3
       [ "${1:-}" = exec ] || return 4
       shift
+      # --profile 은 exec 의 옵션이라 resume 앞에 둡니다 (resume 뒤에 두면 codex 가 거절, 실측).
+      # aw gateway 로 만든 프로필로 띄운 워커도 같은 게이트웨이·모델로 이어집니다.
+      rprof=''; rpskip=0; rn0=$#
+      for ra in "$@"; do
+        if [ "$rpskip" -eq 1 ]; then rprof=$ra; rpskip=0; continue; fi
+        case "$ra" in
+          --profile | -p) rpskip=1; continue ;;
+          --profile=*) rprof=${ra#--profile=}; continue ;;
+        esac
+        set -- "$@" "$ra"
+      done
+      shift "$rn0"
       # 이미 이어하기 명령이면 'resume <id>' 를 걷어내고 새로 붙입니다.
       [ "${1:-}" = resume ] && { shift; [ $# -gt 0 ] && case "$1" in -*) ;; *) shift ;; esac; }
-      printf '%s\nexec\nresume\n%s\n' "$rprog" "$rsid"
+      printf '%s\nexec\n' "$rprog"
+      [ -n "$rprof" ] && printf -- '--profile\n%s\n' "$rprof"
+      printf 'resume\n%s\n' "$rsid"
       resume_rest codex "$rhas" "$@"
       printf '%s\n' "$rp"
       ;;
@@ -723,6 +768,7 @@ flag_family() { # <명령 이름> <옵션>
   case "${1##*/}:$2" in
     kiro-cli:--agent-engine | kiro-cli:--v[123]) printf '%s\n' --agent-engine --v1 --v2 --v3 ;;
     kiro-cli:--trust-all-tools | kiro-cli:-a)    printf '%s\n' --trust-all-tools -a ;;
+    codex:--model | codex:-m)                     printf '%s\n' --model -m ;;
     *) printf '%s\n' "$2" ;;
   esac
 }
@@ -1020,6 +1066,30 @@ model_known() { # <에이전트> <모델>
 }
 
 # 기본 옵션 묶음이 고르는 모델 (--model X, --model=X, -m X). 없으면 빈 값
+# 프로필이 모델을 정하는지 봅니다. 정하면 그 프로필 이름을 냅니다.
+#   codex   --profile/-p 이름 → $CODEX_HOME/<이름>.config.toml 에 model = 줄이 있음
+#   claude  aw run --profile 이름 → <CLAUDE_PROFILE_ROOT>/<이름>/settings.json 에 ANTHROPIC_MODEL 이 있음
+profile_model() { # <인자...>
+  case "${1##*/}" in
+    codex)
+      pm_n=''; shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --profile | -p) pm_n=${2:-}; [ $# -gt 1 ] && shift ;;
+          --profile=*) pm_n=${1#--profile=} ;;
+        esac
+        shift
+      done
+      [ -n "$pm_n" ] && grep -q '^[[:space:]]*model[[:space:]]*=' "${CODEX_HOME:-$HOME/.codex}/$pm_n.config.toml" 2>/dev/null \
+        && printf '%s' "$pm_n" ;;
+    claude)
+      [ -n "${profile:-}" ] && [ "$profile" != default ] \
+        && grep -q '"ANTHROPIC_MODEL"' "${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}/$profile/settings.json" 2>/dev/null \
+        && printf '%s' "$profile" ;;
+  esac
+  return 0
+}
+
 group_model() { # <묶음>
   printf '%s\n' "$1" | LC_ALL=C awk '{ for (i = 1; i <= NF; i++) {
     if (($i == "--model" || $i == "-m") && i < NF) { print $(i + 1); exit }
@@ -1175,8 +1245,15 @@ run_argv() { # <인자...>
   # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
   if [ "$no_defaults" -ne 1 ]; then
     dgroups=$(defaults_for "$1")
+    rw_pm=$(profile_model "$@")
     while IFS= read -r dg; do
       [ -n "$dg" ] || continue
+      # 프로필이 모델을 정하면(aw gateway 로 만든 것 등) 모델 줄은 붙이지 않습니다.
+      # 붙이면 그 프로필이 모르는 모델(게이트웨이에 없는 모델 등)로 바뀝니다.
+      if [ -n "$rw_pm" ] && [ -n "$(group_model "$dg")" ]; then
+        pdropped="${pdropped:+$pdropped, }$dg"
+        continue
+      fi
       # 그 줄의 옵션 중 하나라도 이미 있으면(사용자가 줬거나 앞 줄이 붙였으면) 줄 전체를
       # 건너뜁니다. --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
       # 붙거나, agy 의 --effort 처럼 사용자 값과 부딪치는 사고를 막습니다.
@@ -1223,7 +1300,7 @@ write_launch() { # <파일> <따옴표로 감싼 인자들>
 
 cmd_run() {
   name=''; dir=''; worktree=''; stdin_file='/dev/null'; tag=''; profile=''
-  envs=''; max_tokens=''; no_defaults="${AW_NO_DEFAULTS:-0}"; added=''; mdropped=''
+  envs=''; max_tokens=''; no_defaults="${AW_NO_DEFAULTS:-0}"; added=''; mdropped=''; pdropped=''
   no_brief="${AW_NO_BRIEF:-0}"; briefed=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1305,7 +1382,7 @@ cmd_run() {
   # 첫 판과 같은 지시문·기본 옵션이 붙게 하위 셸에서 run_argv 를 한 번 더 돌립니다.
   fb_words=''
   if [ -n "${run_fallback:-}" ]; then
-    fb_words=$(stdin_file=$stdin_orig; added=''; mdropped=''; eval "set -- $run_fallback"; run_argv "$@"; printf '%s' "$rw_words")
+    fb_words=$(stdin_file=$stdin_orig; added=''; mdropped=''; pdropped=''; eval "set -- $run_fallback"; run_argv "$@"; printf '%s' "$rw_words")
   fi
 
   # setsid 가 있으면 워커를 새 프로세스 그룹의 리더로 띄울 수 있습니다.
@@ -1401,6 +1478,7 @@ cmd_run() {
   say "  명령: $(meta_get "$wd" cmdline)"
   [ -n "$added" ] && [ "$no_defaults" -ne 1 ] && say "  (기본 옵션이 붙었습니다: $added — 끄려면 --no-defaults)"
   [ -n "$mdropped" ] && say "  (기본 옵션 '$mdropped' 는 뺐습니다: 모델이 ${1##*/} 의 모델 목록에 없음. ${1##*/} 기본 모델로 돕니다 — aw models ${1##*/})"
+  [ -n "$pdropped" ] && say "  (기본 옵션 '$pdropped' 는 뺐습니다: 프로필 $(profile_model "$@") 에 모델이 정해져 있음)"
   [ "$briefed" -eq 1 ] && say "  (지시문이 붙었습니다: $(tilde "$AW_BRIEF") — 끄려면 --no-brief)"
   say "  보기: aw logs $name -f    기다리기: aw wait $name    결과: aw result $name"
 }
@@ -3397,6 +3475,273 @@ cmd_setup() {
   say "끝. 새로 넣은 스킬은 에이전트를 새로 시작하면 보입니다.   스킬 상태: aw skill"
 }
 
+# ---------------------------------------------------------------- 게이트웨이 (OpenAI·Anthropic 호환 API)
+
+# 게이트웨이 하나를 codex 와 claude 의 프로필로 만듭니다. aw 는 자기가 만든 파일만 다룹니다.
+#   codex   $CODEX_HOME/<이름>.config.toml   codex exec --profile <이름>   (Responses API, <주소>/v1)
+#   claude  <CLAUDE_PROFILE_ROOT>/<이름>/      aw run --profile <이름> -- claude   (Messages API, <주소>)
+# 게이트웨이 정의를 codex 프로필 파일 안에 두어 사용자의 config.toml 은 건드리지 않습니다.
+# 키는 파일에 적지 않고 환경변수 이름만 적습니다. 돌 때 그 변수에서 읽습니다.
+# 표식: codex 파일의 첫 줄 주석, claude 폴더의 .aw-gateway. 표식이 없으면 덮어쓰거나 지우지 않습니다.
+GW_MARK='# aw gateway:'
+
+gw_codex_file() { printf '%s/%s.config.toml' "${CODEX_HOME:-$HOME/.codex}" "$1"; }
+gw_claude_dir() { printf '%s/%s' "${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}" "$1"; }
+gw_codex_ours() { [ -f "$1" ] && head -1 "$1" 2>/dev/null | grep -q "^$GW_MARK"; }
+gw_claude_ours() { [ -f "$1/.aw-gateway" ]; }
+
+# 알려진 게이트웨이: 이름 → "주소 키변수 기본모델"
+gw_preset() {
+  case "$1" in
+    opengateway) printf '%s\n' 'https://apis.opengateway.ai OPENGATEWAY_API_KEY deepseek/deepseek-v4.1-flash-ultrafast' ;;
+    *) return 1 ;;
+  esac
+}
+
+gw_valid_var() { case "$1" in '' | [0-9]* | *[!A-Za-z0-9_]*) return 1 ;; esac; return 0; }
+gw_key_value() { gw_valid_var "$1" || return 0; eval "printf '%s' \"\${$1:-}\""; }
+
+# 만든 게이트웨이 이름들 (codex 파일과 claude 폴더 중 어느 쪽이든)
+gw_names() {
+  for gn_f in "${CODEX_HOME:-$HOME/.codex}"/*.config.toml; do
+    gw_codex_ours "$gn_f" && basename "$gn_f" .config.toml
+  done
+  for gn_f in "${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}"/*/.aw-gateway; do
+    [ -f "$gn_f" ] && basename "$(dirname "$gn_f")"
+  done
+  return 0
+}
+
+# 이름 → "주소<TAB>키변수<TAB>codex 모델<TAB>claude 모델". 만든 파일, 없으면 알려진 게이트웨이에서 읽습니다.
+gw_info() { # <이름>
+  gi_url=''; gi_key=''; gi_cm=''; gi_lm=''
+  gi_cf=$(gw_codex_file "$1"); gi_cd=$(gw_claude_dir "$1")
+  if gw_codex_ours "$gi_cf"; then
+    gi_url=$(sed -n 's/^base_url = "\(.*\)"$/\1/p' "$gi_cf" | head -1); gi_url=${gi_url%/v1}
+    gi_key=$(sed -n 's/^env_key = "\(.*\)"$/\1/p' "$gi_cf" | head -1)
+    gi_cm=$(sed -n 's/^model = "\(.*\)"$/\1/p' "$gi_cf" | head -1)
+  fi
+  if gw_claude_ours "$gi_cd"; then
+    [ -n "$gi_url" ] || gi_url=$(sed -n 's/^url=//p' "$gi_cd/.aw-gateway")
+    [ -n "$gi_key" ] || gi_key=$(sed -n 's/^key_env=//p' "$gi_cd/.aw-gateway")
+    gi_lm=$(sed -n 's/^model=//p' "$gi_cd/.aw-gateway")
+  fi
+  if [ -z "$gi_url" ] && gi_p=$(gw_preset "$1"); then
+    gi_url=${gi_p%% *}; gi_p=${gi_p#* }; gi_key=${gi_p%% *}
+  fi
+  [ -n "$gi_url" ] || return 1
+  printf '%s\t%s\t%s\t%s\n' "$gi_url" "$gi_key" "$gi_cm" "$gi_lm"
+}
+
+# 게이트웨이의 모델 목록(OpenAI 형식 /v1/models) → "모델<TAB>지원 API(쉼표)<TAB>상태" 줄들. 못 받으면 1.
+# 지원 API 와 상태는 OpenGateway 처럼 endpoints·status 를 주는 곳만 채워집니다.
+# 키는 curl 의 인자에 넣으면 ps 로 보이므로 설정(-K -)을 표준 입력으로 넘깁니다.
+gw_fetch_models() { # <주소> <키변수>
+  command -v curl >/dev/null 2>&1 || return 1
+  gf_tmp=$(mktemp "${TMPDIR:-/tmp}/aw-gw.XXXXXX") || return 1
+  gf_key=$(gw_key_value "$2")
+  gf_code=$( { [ -z "$gf_key" ] || printf 'header = "Authorization: Bearer %s"\n' "$gf_key"; } \
+    | curl -sS -K - --connect-timeout 5 --max-time 20 -o "$gf_tmp" -w '%{http_code}' "$1/v1/models" 2>/dev/null) || gf_code=000
+  if [ "$gf_code" != 200 ]; then rm -f "$gf_tmp"; return 1; fi
+  # 한 줄짜리 JSON 을 모델마다 줄로 나눕니다. providers 안의 {"id": 도 갈라지므로 "object":"model" 인 줄만 씁니다.
+  gf_out=$(awk '{ gsub(/\{"id":"/, "\n{\"id\":\""); print }' "$gf_tmp" | awk '
+    /"object":"model"/ {
+      id = $0; sub(/^\{"id":"/, "", id); sub(/".*/, "", id)
+      ep = ""; if (match($0, /"endpoints":\[[^]]*\]/)) { ep = substr($0, RSTART + 13, RLENGTH - 14); gsub(/"/, "", ep) }
+      st = ""; if (match($0, /"status":"[^"]*"/)) st = substr($0, RSTART + 10, RLENGTH - 11)
+      print id "\t" ep "\t" st
+    }')
+  rm -f "$gf_tmp"
+  [ -n "$gf_out" ] || return 1
+  printf '%s\n' "$gf_out"
+}
+
+gw_codex_text() { # <이름> <주소> <키변수> <모델>
+  cat <<EOF
+$GW_MARK $1 — aw 가 만든 파일입니다. 바꾸기: aw gateway add $1 --model …   지우기: aw gateway rm $1
+# codex --profile $1 로 쓸 때 기본 설정(config.toml) 위에 얹힙니다. 키는 환경변수 $3 에서 읽습니다.
+model_provider = "$1"
+model = "$4"
+
+[model_providers."$1"]
+name = "$1"
+base_url = "$2/v1"
+env_key = "$3"
+wire_api = "responses"
+
+# ChatGPT 연결 앱(github, google_drive, gmail …)의 도구 정의를 codex 는 아는 OpenAI 모델에서는 미뤄 두지만
+# 처음 보는 모델에서는 요청마다 통째로 넣습니다 (실측: 532KB, 요청당 입력 약 17만 토큰). 게이트웨이로는 끕니다.
+[features]
+apps = false
+EOF
+}
+
+# Claude Code 는 모델 별명(opus, sonnet, haiku)으로 하위 에이전트를 띄우므로 별명도 모두 이 모델로 돌립니다.
+gw_claude_text() { # <주소> <키변수> <모델>
+  cat <<EOF
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "$1",
+    "ANTHROPIC_MODEL": "$3",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "$3",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "$3",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "$3",
+    "ANTHROPIC_SMALL_FAST_MODEL": "$3",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "$3",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "apiKeyHelper": "printf %s \\"\$$2\\""
+}
+EOF
+}
+
+gw_add() { # <이름> [--url 주소] [--key-env 변수] [--model 모델]
+  [ $# -gt 0 ] || die "게이트웨이 이름이 필요합니다.   예) aw gateway add opengateway"
+  ga_n=$1; shift
+  case "$ga_n" in -*) die "먼저 게이트웨이 이름을 주세요.   예) aw gateway add opengateway" ;; esac
+  valid_name "$ga_n" || die "이름은 영문/숫자/. _ - 만 쓸 수 있습니다: $ga_n"
+  ga_url=''; ga_key=''; ga_model=''
+  if ga_p=$(gw_preset "$ga_n"); then
+    ga_url=${ga_p%% *}; ga_p=${ga_p#* }; ga_key=${ga_p%% *}; ga_model=${ga_p#* }
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --url)       ga_url="${2:?--url 에 주소가 필요합니다}"; shift 2 ;;
+      --url=*)     ga_url=${1#--url=}; shift ;;
+      --key-env)   ga_key="${2:?--key-env 에 환경변수 이름이 필요합니다}"; shift 2 ;;
+      --key-env=*) ga_key=${1#--key-env=}; shift ;;
+      --model)     ga_model="${2:?--model 에 모델이 필요합니다}"; shift 2 ;;
+      --model=*)   ga_model=${1#--model=}; shift ;;
+      *) die "알 수 없는 옵션: $1   (aw gateway --help)" ;;
+    esac
+  done
+  [ -n "$ga_url" ] || die "주소가 필요합니다: aw gateway add $ga_n --url https://… --key-env 변수 --model 모델   (알려진 이름: opengateway)"
+  [ -n "$ga_key" ] || die "키를 담을 환경변수 이름이 필요합니다: --key-env 변수"
+  [ -n "$ga_model" ] || die "모델이 필요합니다: --model 모델"
+  gw_valid_var "$ga_key" || die "환경변수 이름이 잘못됐습니다: $ga_key"
+  ga_url=${ga_url%/}; ga_url=${ga_url%/v1}
+  case "$ga_url" in http://* | https://*) ;; *) die "주소는 http:// 나 https:// 로 시작해야 합니다: $ga_url" ;; esac
+  case "$ga_url$ga_model" in *[\"\\\ \	]*) die "주소나 모델 이름에 따옴표, 역슬래시, 공백을 쓸 수 없습니다." ;; esac
+
+  # 모델이 어느 API 로 되는지 봅니다: codex 는 Responses, claude 는 Messages.
+  ga_codex=1; ga_claude=1; ga_ep=''
+  if ga_list=$(gw_fetch_models "$ga_url" "$ga_key"); then
+    ga_line=$(printf '%s\n' "$ga_list" | awk -F '\t' -v m="$ga_model" '$1 == m' | head -1)
+    [ -n "$ga_line" ] || die "$ga_n 의 모델 목록에 없는 모델입니다: $ga_model   (목록: aw gateway models $ga_n)"
+    ga_ep=$(printf '%s' "$ga_line" | cut -f2)
+    ga_st=$(printf '%s' "$ga_line" | cut -f3)
+    if [ -n "$ga_ep" ]; then
+      case ",$ga_ep," in *,responses,*) ;; *) ga_codex=0 ;; esac
+      case ",$ga_ep," in *,messages,*) ;; *) ga_claude=0 ;; esac
+      [ "$ga_codex" -eq 1 ] || [ "$ga_claude" -eq 1 ] \
+        || die "$ga_model 은 Responses(codex)도 Messages(claude)도 지원하지 않습니다 (지원: $ga_ep)."
+    fi
+    case "$ga_st" in deprecated | retired) warn "주의: $ga_model 은 게이트웨이 목록에서 $ga_st 상태입니다." ;; esac
+  else
+    warn "모델 목록($ga_url/v1/models)을 받지 못해 모델이 있는지, 어느 API 로 되는지 확인하지 못했습니다."
+  fi
+
+  say "게이트웨이 $ga_n: $ga_url   모델 $ga_model   키는 \$$ga_key 에서 읽음"
+  ga_cf=$(gw_codex_file "$ga_n")
+  # 다른 모델로 다시 만들 때 그 모델로 못 쓰는 쪽의 옛 프로필은 지웁니다 (옛 모델로 남지 않게).
+  if [ "$ga_codex" -eq 0 ]; then
+    say "  codex : 만들지 않음 — 이 모델은 Responses API 를 지원하지 않습니다 (지원: $ga_ep)"
+    gw_codex_ours "$ga_cf" && rm -f "$ga_cf" && say "          전에 만든 $(tilde "$ga_cf") 는 지웠습니다"
+  elif [ -e "$ga_cf" ] && ! gw_codex_ours "$ga_cf"; then
+    warn "  codex : 건너뜀 — aw 가 만들지 않은 같은 이름의 파일이 있습니다: $(tilde "$ga_cf")"
+  else
+    ga_v=만듦; [ -e "$ga_cf" ] && ga_v=바꿈
+    mkdir -p "$(dirname "$ga_cf")" || die "폴더를 만들 수 없습니다: $(dirname "$ga_cf")"
+    gw_codex_text "$ga_n" "$ga_url" "$ga_key" "$ga_model" > "$ga_cf.tmp" && mv "$ga_cf.tmp" "$ga_cf" \
+      || die "쓸 수 없습니다: $ga_cf"
+    say "  codex : $ga_v $(tilde "$ga_cf")"
+    say "          aw run -n 이름 -- codex exec --json --profile $ga_n \"작업\""
+  fi
+  ga_cd=$(gw_claude_dir "$ga_n")
+  if [ "$ga_claude" -eq 0 ]; then
+    say "  claude: 만들지 않음 — 이 모델은 Messages API 를 지원하지 않습니다 (지원: $ga_ep)"
+    gw_claude_ours "$ga_cd" && rm -rf "$ga_cd" && say "          전에 만든 $(tilde "$ga_cd") 는 지웠습니다"
+  elif [ -e "$ga_cd" ] && ! gw_claude_ours "$ga_cd"; then
+    warn "  claude: 건너뜀 — aw 가 만들지 않은 같은 이름의 프로필이 있습니다: $(tilde "$ga_cd")"
+  else
+    ga_v=만듦; [ -e "$ga_cd" ] && ga_v=바꿈
+    mkdir -p "$ga_cd" && chmod 700 "$ga_cd" || die "폴더를 만들 수 없습니다: $ga_cd"
+    gw_claude_text "$ga_url" "$ga_key" "$ga_model" > "$ga_cd/settings.json.tmp" \
+      && mv "$ga_cd/settings.json.tmp" "$ga_cd/settings.json" || die "쓸 수 없습니다: $ga_cd/settings.json"
+    printf 'name=%s\nurl=%s\nkey_env=%s\nmodel=%s\n' "$ga_n" "$ga_url" "$ga_key" "$ga_model" > "$ga_cd/.aw-gateway"
+    say "  claude: $ga_v $(tilde "$ga_cd")"
+    say "          aw run -n 이름 --profile $ga_n -- claude -p --output-format stream-json --verbose \"작업\""
+  fi
+  if [ -z "$(gw_key_value "$ga_key")" ]; then
+    say "  키: 이 셸에 \$$ga_key 가 없습니다. 셸 설정(~/.zshrc 등)에 넣고 새 셸에서 쓰세요:"
+    say "        export $ga_key=\"발급받은 키\"      (aw run -e 로 넘기면 워커 기록에 남으니 쓰지 마세요)"
+  fi
+  return 0
+}
+
+gw_status() {
+  gs_names=$(gw_names | LC_ALL=C sort -u)
+  if [ -z "$gs_names" ]; then
+    say "만든 게이트웨이가 없습니다. 만들기: aw gateway add opengateway   (자세히: aw help gateway)"
+    return 0
+  fi
+  for gs_n in $gs_names; do
+    gs_i=$(gw_info "$gs_n") || continue
+    gs_url=$(printf '%s' "$gs_i" | cut -f1); gs_key=$(printf '%s' "$gs_i" | cut -f2)
+    gs_k='없음 (셸 설정에 export 필요)'; [ -n "$(gw_key_value "$gs_key")" ] && gs_k='있음'
+    say "$gs_n  $gs_url   키 \$$gs_key: $gs_k"
+    gs_cm=$(printf '%s' "$gs_i" | cut -f3); gs_lm=$(printf '%s' "$gs_i" | cut -f4)
+    [ -n "$gs_cm" ] && say "  codex   $gs_cm   $(tilde "$(gw_codex_file "$gs_n")")   codex exec --json --profile $gs_n"
+    [ -n "$gs_lm" ] && say "  claude  $gs_lm   $(tilde "$(gw_claude_dir "$gs_n")")   aw run --profile $gs_n -- claude -p ..."
+  done
+  say ""
+  say "모델 목록: aw gateway models <이름>   바꾸기: aw gateway add <이름> --model …   지우기: aw gateway rm <이름>"
+}
+
+gw_models() { # <이름> [codex|claude]
+  [ $# -gt 0 ] || die "게이트웨이 이름이 필요합니다.   예) aw gateway models opengateway"
+  gm_i=$(gw_info "$1") || die "모르는 게이트웨이입니다: $1   (aw gateway 로 확인, 알려진 이름: opengateway)"
+  gm_url=$(printf '%s' "$gm_i" | cut -f1); gm_key=$(printf '%s' "$gm_i" | cut -f2)
+  gm_list=$(gw_fetch_models "$gm_url" "$gm_key") || die "모델 목록을 받지 못했습니다: $gm_url/v1/models"
+  case "${2:-}" in
+    codex)  printf '%s\n' "$gm_list" | awk -F '\t' '$2 == "" || ("," $2 ",") ~ /,responses,/ { print $1 }' ;;
+    claude) printf '%s\n' "$gm_list" | awk -F '\t' '$2 == "" || ("," $2 ",") ~ /,messages,/ { print $1 }' ;;
+    '')
+      say "$(padw 47 모델)codex  claude 상태"
+      printf '%s\n' "$gm_list" | awk -F '\t' '
+        { c = ($2 == "" || ("," $2 ",") ~ /,responses,/) ? "o" : "-"
+          l = ($2 == "" || ("," $2 ",") ~ /,messages,/) ? "o" : "-"
+          if (c == "-" && l == "-") { other++; next }
+          printf "%-46s %-6s %-6s %s\n", $1, c, l, $3 }
+        END { if (other) printf "\n(codex·claude 로 쓸 수 없는 모델 %d개는 뺐습니다: 이미지, 임베딩, chat 전용 등)\n", other }' ;;
+    *) die "codex 나 claude 만 줄 수 있습니다: $2" ;;
+  esac
+}
+
+gw_rm() { # <이름>
+  [ $# -gt 0 ] || die "지울 게이트웨이 이름이 필요합니다.   예) aw gateway rm opengateway"
+  gr_any=0
+  gr_cf=$(gw_codex_file "$1"); gr_cd=$(gw_claude_dir "$1")
+  if gw_codex_ours "$gr_cf"; then rm -f "$gr_cf" && say "지움: $(tilde "$gr_cf")"; gr_any=1
+  elif [ -e "$gr_cf" ]; then say "남김: $(tilde "$gr_cf")  (aw 가 만든 파일이 아닙니다)"; fi
+  # Claude Code 가 그 프로필 폴더에 남긴 것(.claude.json, 세션 등)도 함께 지웁니다.
+  if gw_claude_ours "$gr_cd"; then rm -rf "$gr_cd" && say "지움: $(tilde "$gr_cd")"; gr_any=1
+  elif [ -e "$gr_cd" ]; then say "남김: $(tilde "$gr_cd")  (aw 가 만든 프로필이 아닙니다)"; fi
+  [ "$gr_any" -eq 1 ] || say "지울 것이 없습니다: $1"
+  return 0
+}
+
+cmd_gateway() {
+  case "${1:-}" in
+    '' | status) gw_status ;;
+    add)    shift; gw_add "$@" ;;
+    models) shift; gw_models "$@" ;;
+    rm | remove) shift; gw_rm "$@" ;;
+    -h | --help) help_topic gateway ;;
+    *) die "알 수 없는 하위 명령: $1   (aw gateway --help)" ;;
+  esac
+}
+
 # ---------------------------------------------------------------- 제거
 
 # aw 가 이 컴퓨터에 남긴 것을 모두 지웁니다: 워커 기록(실행 중이면 멈추고, worktree 도), 설정 파일,
@@ -3411,6 +3756,7 @@ aw 가 이 컴퓨터에 남긴 것을 모두 지웁니다. 지울 것을 먼저 
   워커 기록      실행 중인 워커는 멈춥니다. -w 로 만든 worktree 도 지웁니다
                  (브랜치는 남지만, 커밋하지 않은 변경은 사라집니다).
   설정 파일      기본 옵션, 지시문, 컨텍스트 한도표, aw pick 설명과 키
+  게이트웨이     aw gateway 로 만든 codex·claude 프로필
   에이전트 스킬  aw 가 넣은 것만 (같은 이름의 다른 스킬은 남김)
   실행 파일      설치 위치(--prefix, 기본 ~/.local/bin)의 aw 와 지금 돌린 aw.
                  저장소에서 ./aw uninstall 로 돌리면 저장소의 aw 는 남깁니다.
@@ -3512,6 +3858,19 @@ cmd_uninstall() {
   fi
 
   say ""
+  say "== 게이트웨이 프로필 (aw gateway)"
+  un_gws=$(gw_names | LC_ALL=C sort -u)
+  if [ -n "$un_gws" ]; then
+    for ug in $un_gws; do
+      gw_codex_ours "$(gw_codex_file "$ug")" && say "  $(tilde "$(gw_codex_file "$ug")")"
+      gw_claude_ours "$(gw_claude_dir "$ug")" && say "  $(tilde "$(gw_claude_dir "$ug")")"
+    done
+    un_any=1
+  else
+    say "  없음"
+  fi
+
+  say ""
   say "== 에이전트 스킬"
   un_skills=0; un_kept=0
   while IFS= read -r ur; do
@@ -3566,6 +3925,7 @@ EOF_ROOTS
     printf '%s\n' "$un_cfgs" | while IFS= read -r uc; do rm -f "$uc" && say "지움: $(tilde "$uc")"; done
     rmdir "$un_cfgdir" 2>/dev/null || true
   fi
+  for ug in $un_gws; do gw_rm "$ug" | sed -n 's/^지움: /지움: /p'; done
   if [ "$un_skills" -eq 1 ]; then
     sk_dry=0
     un_skill_roots | while IFS= read -r ur; do skill_del "$ur"; done | sed -n 's/^  뺌: /지움: /p'
@@ -3722,6 +4082,9 @@ aw rm review
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
   `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
+- **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
+  codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
+  붙이지 않습니다(프로필이 정함). 키를 `-e` 로 넘기지 않습니다(워커 기록에 남음). 자세히: `aw help gateway`.
 - **claude·agy·kiro-cli 는 `stream-json`** 으로 띄웁니다. 도중 진행이 출력에 쌓여 `aw peek` 으로 보이고, 끝난 뒤
   `--field` 는 `json` 과 똑같이 됩니다. codex 의 `--json` 도 처음부터 한 줄씩 나옵니다.
 - **claude·codex·kiro-cli 는 프롬프트를 맨 끝 인자로** 둡니다. `aw resume` 이 맨 끝을 프롬프트로 보고 갈아 끼웁니다.
@@ -3831,6 +4194,7 @@ case "$sub" in
   pick)    cmd_pick "$@" ;;
   skill)   cmd_skill "$@" ;;
   setup)   cmd_setup "$@" ;;
+  gateway) cmd_gateway "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   version|--version|-v) say "aw $AW_VERSION" ;;
   help|--help|-h) help_topic "${1:-}" ;;

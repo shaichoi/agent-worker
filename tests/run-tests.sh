@@ -30,6 +30,8 @@ export AW_PICK="$TMPROOT/pick" AW_PICK_KEYFILE="$TMPROOT/typesafe-key"
 unset TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL AW_PICK_MIN_CONFIDENCE AW_PICK_FALLBACK
 # 모델 목록도 이 컴퓨터의 codex 설정(~/.codex)을 읽지 않게 합니다 (그 시험은 따로 가짜를 둠).
 export CODEX_HOME="$TMPROOT/no-codex-home"
+# claude 프로필(aw run --profile, aw gateway)도 이 컴퓨터의 ~/.claude-profiles 를 건드리지 않게 합니다.
+export CLAUDE_PROFILE_ROOT="$TMPROOT/claude-profiles"
 
 head_ "1. 문법 검사"
 for s in sh bash zsh; do
@@ -477,7 +479,7 @@ for want in "aw run" "aw wait" "wait 종료 코드" "running / done" "aw help ag
 done
 lines=$(printf '%s\n' "$h" | wc -l)
 if [ "$lines" -lt 60 ]; then ok "개요가 짧음 (${lines}줄)"; else ng "개요가 너무 김 (${lines}줄)"; fi
-for topic in agents defaults files limits peek brief pick models; do
+for topic in agents defaults files limits peek brief pick models gateway; do
   if "$AW" help "$topic" >/dev/null 2>&1; then ok "aw help $topic"; else ng "aw help $topic 실패"; fi
   case "$h" in *"aw help $topic"*) ok "개요의 자세히에 $topic 이 있음" ;; *) ng "개요에 aw help $topic 안내 없음" ;; esac
 done
@@ -1715,6 +1717,130 @@ has "pick: 목록에 없는 줄은 뺐다고 알림" "$out" "고르지 않은 �
 has "pick: 남은 한 줄은 묻지 않고 씀" "$out" "고른 모델    : gpt-6-luna@medium   (모델 줄이 하나라 묻지 않았습니다)"
 has "pick 상태: 목록에 없는 줄 표시" "$(env PATH="$MB:$PK/bin:/usr/bin:/bin" CODEX_HOME="$MF/codex" AW_PICK="$MF/pick" "$AW" pick)" "(목록에 없음)"
 awm clean >/dev/null 2>&1
+
+head_ "23. 게이트웨이 (aw gateway)"
+# 네트워크에 나가지 않습니다. curl 은 정해 둔 모델 목록을 돌려주고, codex·claude 는 받은 인자를 찍습니다.
+GW="$TMPROOT/gw"; mkdir -p "$GW/bin" "$GW/stub" "$GW/codex" "$GW/cp"
+cat > "$GW/bin/curl" <<'STUB'
+#!/bin/sh
+d=$GW_STUB
+printf '%s\n' "$@" > "$d/args"
+cat > "$d/config"
+out=''
+while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2 ;; *) shift ;; esac; done
+cat "$d/resp" > "$out"
+cat "$d/code" 2>/dev/null || printf 200
+STUB
+cat > "$GW/bin/codex" <<'STUB'
+#!/bin/sh
+printf '{"type":"thread.started","thread_id":"tid-gw"}\n'
+printf '%s\n' "$@"
+STUB
+printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$GW/bin/claude"
+chmod +x "$GW/bin/"*
+# providers 안의 {"id": 도 있는 실제 모양 그대로 (OpenGateway /v1/models)
+pv='"providers":[{"id":"p1","region":"global"}]'
+printf '{"object":"list","data":[%s,%s,%s,%s,%s]}\n' \
+  "{\"id\":\"x/both\",\"object\":\"model\",\"status\":\"active\",\"endpoints\":[\"chat_completions\",\"messages\",\"responses\"],$pv}" \
+  "{\"id\":\"x/resp\",\"object\":\"model\",\"status\":\"active\",\"endpoints\":[\"chat_completions\",\"responses\"],$pv}" \
+  "{\"id\":\"x/msg\",\"object\":\"model\",\"status\":\"active\",\"endpoints\":[\"chat_completions\",\"messages\"],$pv}" \
+  "{\"id\":\"x/chat\",\"object\":\"model\",\"status\":\"active\",\"endpoints\":[\"chat_completions\"],$pv}" \
+  "{\"id\":\"x/old\",\"object\":\"model\",\"status\":\"deprecated\",\"endpoints\":[\"messages\",\"responses\"],$pv}" > "$GW/stub/resp"
+printf 'codex --sandbox workspace-write\ncodex --model gpt-x\nclaude --permission-mode bypassPermissions\nclaude --model opus-x\nclaude --effort xhigh\n' > "$GW/defaults"
+awg() { env -u OPENGATEWAY_API_KEY PATH="$GW/bin:/usr/bin:/bin" GW_STUB="$GW/stub" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" AW_DEFAULTS="$GW/defaults" "$AW" "$@"; }
+
+has "만든 게이트웨이가 없으면 그렇게 알림" "$(awg gateway)" "만든 게이트웨이가 없습니다"
+out=$(awg gateway add opengateway --model x/both 2>&1)
+has "add: 알려진 게이트웨이의 주소로 모델 목록을 봄" "$(cat "$GW/stub/args")" "https://apis.opengateway.ai/v1/models"
+has "add: codex 프로필을 만듦" "$out" "codex : 만듦"
+has "add: claude 프로필을 만듦" "$out" "claude: 만듦"
+has "add: 키가 셸에 없으면 알려 줌" "$out" "이 셸에 \$OPENGATEWAY_API_KEY 가 없습니다"
+cf="$GW/codex/opengateway.config.toml"; cd_="$GW/cp/opengateway"
+check "codex 파일 첫 줄은 aw 표식" "# aw gateway: opengateway" "$(head -1 "$cf" | cut -c1-25)"
+has "codex 파일에 게이트웨이 정의 (/v1)" "$(cat "$cf")" 'base_url = "https://apis.opengateway.ai/v1"'
+has "codex 파일에 모델" "$(cat "$cf")" 'model = "x/both"'
+has "codex 파일에서 앱 도구를 끔" "$(cat "$cf")" "apps = false"
+has "claude 프로필에 주소 (/v1 없이)" "$(cat "$cd_/settings.json")" '"ANTHROPIC_BASE_URL": "https://apis.opengateway.ai"'
+has "claude 프로필은 키를 환경변수에서 읽음" "$(cat "$cd_/settings.json")" 'printf %s \"$OPENGATEWAY_API_KEY\"'
+if [ -f "$cd_/.aw-gateway" ]; then ok "claude 프로필에 aw 표식"; else ng "claude 프로필에 표식이 없음"; fi
+out=$(env OPENGATEWAY_API_KEY=sekrit PATH="$GW/bin:/usr/bin:/bin" GW_STUB="$GW/stub" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" "$AW" gateway add opengateway --model x/both 2>&1)
+hasnt "키는 curl 의 인자에 없음" "$(cat "$GW/stub/args")" "sekrit"
+hasnt "키 값은 만든 파일에 없음" "$(cat "$cf" "$cd_/settings.json" "$cd_/.aw-gateway")" "sekrit"
+has "키는 표준 입력의 설정으로" "$(cat "$GW/stub/config")" "Bearer sekrit"
+has "다시 add 하면 바꿈" "$out" "codex : 바꿈"
+has "상태: 키가 있음" "$(env OPENGATEWAY_API_KEY=k PATH="$GW/bin:/usr/bin:/bin" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" "$AW" gateway)" "키 \$OPENGATEWAY_API_KEY: 있음"
+has "상태: 키가 없음" "$(awg gateway)" "키 \$OPENGATEWAY_API_KEY: 없음"
+
+out=$(awg gateway models opengateway codex)
+has "models codex: Responses 를 지원하는 모델" "$out" "x/resp"
+hasnt "models codex: Messages 만 되는 모델은 뺌" "$out" "x/msg"
+out=$(awg gateway models opengateway claude)
+has "models claude: Messages 를 지원하는 모델" "$out" "x/msg"
+hasnt "models claude: chat 전용은 뺌" "$out" "x/chat"
+hasnt "providers 의 id 는 모델로 치지 않음" "$(awg gateway models opengateway)" "p1"
+
+# 모델이 Responses 만 되면 claude 쪽은 만들지 않고, 전에 만든 claude 프로필은 지움
+out=$(awg gateway add opengateway --model x/resp 2>&1)
+has "Responses 만 되는 모델: claude 는 만들지 않음" "$out" "claude: 만들지 않음"
+if [ -e "$cd_" ]; then ng "옛 모델의 claude 프로필이 남음"; else ok "옛 모델의 claude 프로필은 지움"; fi
+has "codex 는 새 모델로" "$(cat "$cf")" 'model = "x/resp"'
+out=$(awg gateway add gw-msg --url https://gw.example/v1/ --key-env GWKEY --model x/msg 2>&1)
+if [ -e "$GW/codex/gw-msg.config.toml" ]; then ng "Messages 만 되는 모델인데 codex 를 만듦"; else ok "Messages 만 되는 모델: codex 는 만들지 않음"; fi
+has "주소 끝의 /v1/ 은 떼고 씀" "$(cat "$GW/cp/gw-msg/settings.json")" '"ANTHROPIC_BASE_URL": "https://gw.example"'
+if awg gateway add gw-chat --url https://gw.example --key-env GWKEY --model x/chat >/dev/null 2>&1; then ng "chat 전용 모델을 받아들임"; else ok "codex·claude 둘 다 안 되는 모델은 거절"; fi
+if awg gateway add gw-none --url https://gw.example --key-env GWKEY --model x/nope >/dev/null 2>&1; then ng "목록에 없는 모델을 받아들임"; else ok "목록에 없는 모델은 거절"; fi
+if [ -e "$GW/codex/gw-chat.config.toml" ] || [ -e "$GW/codex/gw-none.config.toml" ] || [ -e "$GW/cp/gw-none" ]; then ng "거절했는데 파일을 만듦"; else ok "거절하면 아무것도 만들지 않음"; fi
+has "deprecated 모델은 알리고 만듦" "$(awg gateway add gw-old --url https://gw.example --key-env GWKEY --model x/old 2>&1)" "deprecated 상태입니다"
+if awg gateway add 'bad name' --url https://gw.example --key-env K --model x/both >/dev/null 2>&1; then ng "잘못된 이름을 받아들임"; else ok "잘못된 이름은 거절"; fi
+if awg gateway add gw-inj --url https://gw.example --key-env 'K;touch /tmp/aw-gw-inj' --model x/both >/dev/null 2>&1; then ng "잘못된 환경변수 이름을 받아들임"; else ok "잘못된 환경변수 이름은 거절"; fi
+printf 500 > "$GW/stub/code"
+has "목록을 못 받으면 확인 못 했다고 알리고 만듦" "$(awg gateway add gw-off --url https://gw.example --key-env GWKEY --model whatever 2>&1)" "확인하지 못했습니다"
+if [ -f "$GW/codex/gw-off.config.toml" ] && [ -f "$GW/cp/gw-off/settings.json" ]; then ok "그때는 codex·claude 둘 다 만듦"; else ng "목록 없이 만들지 못함"; fi
+rm -f "$GW/stub/code"
+# aw 가 만들지 않은 같은 이름의 파일은 건드리지 않음
+printf 'model = "mine"\n' > "$GW/codex/mine.config.toml"
+has "남의 codex 파일은 건너뜀" "$(awg gateway add mine --url https://gw.example --key-env GWKEY --model x/both 2>&1)" "건너뜀"
+check "남의 codex 파일은 그대로" 'model = "mine"' "$(cat "$GW/codex/mine.config.toml")"
+has "남의 파일은 rm 도 남김" "$(awg gateway rm mine)" "남김"
+if [ -f "$GW/codex/mine.config.toml" ] && [ ! -e "$GW/cp/mine" ]; then ok "rm 은 aw 가 만든 것만 지움"; else ng "rm 이 남의 파일을 지웠거나 우리 것을 남김"; fi
+
+# 띄우기: 프로필이 모델을 정하면 기본 옵션의 모델 줄은 빠지고 나머지는 붙음
+awg gateway add opengateway --model x/both >/dev/null 2>&1
+out=$(awg run -n gw-c -- codex exec --json --profile opengateway 작업 2>&1)
+has "codex --profile: 기본 모델을 뺐다고 알림" "$out" "프로필 opengateway 에 모델이 정해져 있음"
+awg wait gw-c >/dev/null 2>&1
+r=$(awg result gw-c)
+hasnt "codex --profile: 기본 모델이 안 붙음" "$r" "gpt-x"
+has "codex --profile: 다른 기본 옵션은 붙음" "$r" "workspace-write"
+awg run -n gw-m -- codex exec --json -m mine-model 작업 >/dev/null 2>&1; awg wait gw-m >/dev/null 2>&1
+hasnt "codex -m 은 --model 과 같은 옵션" "$(awg result gw-m)" "gpt-x"
+awg run -n gw-p -- codex exec --json --profile nomodel 작업 >/dev/null 2>&1; awg wait gw-p >/dev/null 2>&1
+has "모델을 정하지 않는 프로필이면 기본 모델이 붙음" "$(awg result gw-p)" "gpt-x"
+awg run -n gw-l --profile opengateway -- claude -p 작업 >/dev/null 2>&1; awg wait gw-l >/dev/null 2>&1
+r=$(awg result gw-l)
+hasnt "claude --profile(게이트웨이): 기본 모델이 안 붙음" "$r" "opus-x"
+has "claude --profile(게이트웨이): 수준 줄은 붙음" "$r" "xhigh"
+awg run -n gw-w --profile work -- claude -p 작업 >/dev/null 2>&1; awg wait gw-w >/dev/null 2>&1
+has "모델을 정하지 않는 claude 프로필이면 기본 모델이 붙음" "$(awg result gw-w)" "opus-x"
+# 이어하기: codex 의 --profile 은 exec 의 옵션이라 resume 앞에 둠 (뒤에 두면 codex 가 거절)
+awg resume gw-c -n gw-c2 -- 다음 >/dev/null 2>&1; awg wait gw-c2 >/dev/null 2>&1
+check "codex 이어하기는 --profile 을 resume 앞에" "exec --profile opengateway resume tid-gw" "$(awg result gw-c2 | sed -n '2,6p' | tr '\n' ' ' | sed 's/ $//')"
+awg resume gw-c2 -n gw-c3 -- 또 >/dev/null 2>&1; awg wait gw-c3 >/dev/null 2>&1
+check "이은 워커를 다시 이어도 같음" "exec --profile opengateway resume tid-gw" "$(awg result gw-c3 | sed -n '2,6p' | tr '\n' ' ' | sed 's/ $//')"
+awg rm gw-c gw-c2 gw-c3 gw-m gw-p gw-l gw-w >/dev/null 2>&1
+
+has "rm: 지움" "$(awg gateway rm opengateway)" "지움:"
+if [ -e "$cf" ] || [ -e "$cd_" ]; then ng "rm 뒤에 남음"; else ok "rm 이 codex 파일과 claude 프로필을 지움"; fi
+
+# aw uninstall 도 게이트웨이 프로필을 지움
+UH="$GW/uhome"; mkdir -p "$UH"
+awg gateway add opengateway --model x/both >/dev/null 2>&1
+out=$(env -u AW_DEFAULTS -u AW_BRIEF -u AW_PICK -u AW_PICK_KEYFILE -u AW_CONFIG HOME="$UH" XDG_CONFIG_HOME="$UH/.config" \
+        AW_HOME="$UH/awhome" AW_PREFIX="$UH/bin" PATH="$GW/bin:/usr/bin:/bin" CODEX_HOME="$GW/codex" CLAUDE_PROFILE_ROOT="$GW/cp" \
+        sh "$AW" uninstall --yes 2>&1)
+has "uninstall 이 게이트웨이 프로필을 보여 줌" "$out" "== 게이트웨이 프로필"
+if [ -e "$cf" ] || [ -e "$cd_" ]; then ng "uninstall 뒤에 게이트웨이 프로필이 남음"; else ok "uninstall 이 게이트웨이 프로필을 지움"; fi
+if [ -f "$GW/codex/mine.config.toml" ]; then ok "uninstall 은 남의 codex 파일을 남김"; else ng "uninstall 이 남의 파일을 지움"; fi
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
