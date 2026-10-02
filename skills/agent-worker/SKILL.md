@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.20.1"
+  version: "0.21.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -136,6 +136,8 @@ aw rm review
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
   `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
+- **계정(프로필)**: 사용자가 claude 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- claude …` 입니다
+  (`~/.claude-profiles/<이름>`, 기본 계정은 `default`). 사용자가 셸에 `AW_CLAUDE_PROFILE` 을 두었으면 그 프로필이 기본입니다.
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
   붙이지 않습니다(프로필이 정함). 키는 사용자가 `aw gateway key <이름>` 으로 넣습니다. 키를 `-e` 로 넘기지
@@ -189,7 +191,8 @@ aw resume review -- '지적한 것 중 첫 번째를 고쳐줘'    # → review-
 aw resume review-r1 -- '테스트도 추가해줘'             # → review-r2
 ```
 
-원래 명령·디렉터리·`--profile` 을 물려받고 프롬프트만 바꿉니다. `-e` 환경변수는 이어지지
+원래 명령·디렉터리·`--profile` 을 물려받고 프롬프트만 바꿉니다(프로필 없이 띄운 claude 워커는 기본
+계정으로 잇습니다. 지금 셸의 `AW_CLAUDE_PROFILE` 을 따르면 세션을 못 찾아서입니다). `-e` 환경변수는 이어지지
 않으니 다시 줍니다. 세션 ID 는 `aw status <이름>` 에 보입니다. devin 은 세션 ID 를 못 뽑아
 그 디렉터리의 가장 최근 대화(`-c`)로 이어 가므로 정확하지 않습니다.
 

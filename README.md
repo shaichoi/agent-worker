@@ -142,7 +142,7 @@ if aw wait build test; then echo "둘 다 성공"; else echo "실패한 워커 �
 | `-f, --stdin-file <파일>` | 표준 입력으로 물릴 파일 |
 | `-e, --env KEY=VAL` | 환경변수 (여러 번 가능) |
 | `--tag <문자열>` | 분류용 꼬리표 |
-| `--profile <이름>` | `CLAUDE_CONFIG_DIR`을 그 프로필로 (Claude Code 편의) |
+| `--profile <이름>` | `CLAUDE_CONFIG_DIR`을 그 프로필로 (Claude Code 편의). `default` 는 기본 계정. 늘 쓰려면 `AW_CLAUDE_PROFILE` |
 | `--max-input-tokens N` | 컨텍스트 경고 기준을 직접 지정 (`0`이면 끄기) |
 | `--no-defaults` | 에이전트별 기본 옵션을 붙이지 않음 |
 | `--no-brief` | 워커 지시문을 붙이지 않음 |
@@ -349,8 +349,18 @@ aw wait c1 && aw result c1 --field result      # 성공 여부: --field is_error
 계정이 여러 개면 [claude-profiles](https://github.com/shaichoi/claude-profiles)와 함께 씁니다.
 
 ```sh
-aw run -n c2 --profile work-sub -- claude -p "작업"
+aw run -n c2 --profile work-sub -- claude -p "작업"     # 이번만 ~/.claude-profiles/work-sub 로
+export AW_CLAUDE_PROFILE=work-sub                        # 셸 설정에 두면 claude 워커는 늘 그 프로필로
+aw run -n c3 --profile default -- claude -p "작업"      # 이번만 기본 계정(~/.claude)으로
 ```
+
+- 고르는 순서는 `--profile` → `AW_CLAUDE_PROFILE` → 셸의 `CLAUDE_CONFIG_DIR` 입니다. `AW_CLAUDE_PROFILE` 은 claude 워커에만
+  붙고(`aw pick` 이 claude 를 고른 때 포함), 다른 에이전트에는 붙지 않습니다. 띄울 때 어디서 온 프로필인지 알려 줍니다.
+- `claude-use 이름` 으로 바꾼 셸에서 띄우면 그 계정으로 돌고, aw 가 프로필 이름을 기록해 `aw peek`(대화 기록)과
+  `aw resume`(세션)이 그 프로필을 봅니다.
+- `--profile default` 는 셸이 `claude-use` 상태여도 `CLAUDE_CONFIG_DIR` 을 지워 기본 계정으로 돌립니다(`claude-with default` 와 같음).
+- `aw resume` 은 지금 셸의 설정과 상관없이 원래 워커의 프로필로 잇습니다. 프로필 없이 띄운 워커는 기본 계정으로 잇습니다.
+- 프로필 폴더가 없으면 claude 가 로그인 안 된 새 설정으로 돌아서, 띄울 때 알려 줍니다.
 
 ### devin
 
@@ -487,7 +497,8 @@ aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
 
 원래 명령을 그대로 물려받고 프롬프트만 갈아 끼웁니다. 실행할 명령을 화면에
 찍어 주니 무엇이 붙었는지 바로 보입니다. 새 이름은 `<원래이름>-r1`, `-r2` 로
-붙고 `-n` 으로 바꿀 수 있습니다. 작업 디렉터리와 `--profile` 도 물려받습니다.
+붙고 `-n` 으로 바꿀 수 있습니다. 작업 디렉터리와 `--profile` 도 물려받습니다. 프로필 없이 띄운 claude 워커는
+지금 셸의 `AW_CLAUDE_PROFILE`·`claude-use` 와 상관없이 기본 계정으로 잇습니다(다른 계정으로는 세션을 못 찾음).
 
 | 에이전트 | 이어하기 | 비고 |
 | --- | --- | --- |
@@ -958,7 +969,7 @@ mytool 128000
 
 | 파일 | 내용 |
 | --- | --- |
-| `meta` | 이름, 디렉터리, 시작 시각, 부팅 ID, worktree, 꼬리표 |
+| `meta` | 이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표. aw 가 코드를 바꿨으면 원래 코드와 사유(`agent_exit`, `fail_reason`) |
 | `cmd` | 실행한 인자 (한 줄에 하나) |
 | `out` / `err` | 표준 출력 / 표준 오류 |
 | `exit` | 종료 코드 (생기면 끝난 것) |
@@ -966,7 +977,8 @@ mytool 128000
 | `run.sh` / `launch.sh` | 실제로 돌린 스크립트 (그대로 다시 실행 가능) |
 | `fallback.sh`, `out.model`, `err.model` | `aw pick` 이 고른 모델이 거부될 때 대신 돌리는 스크립트와 첫 시도의 출력 |
 
-상태는 `running`(pid 살아 있음), `done`(코드 0), `failed`(0 아님), `stopped`(`aw stop`),
+상태는 `running`(pid 살아 있음), `done`(코드 0), `failed`(0 아님. kiro-cli 의 거절·권한 거부는 코드 0 이어도
+aw 가 1 로 남김, [위](#kiro-cli--kiro-cli) 참고), `stopped`(`aw stop`),
 `lost`(종료 코드 없이 프로세스가 사라짐)입니다. 재부팅 전에 띄운 워커도 `lost` 입니다. pid 는 재부팅 뒤 다른
 프로세스가 다시 쓰므로, 띄울 때 `meta` 에 부팅 ID 를 적어 두고 다르면 pid 를 보지 않습니다(`aw stop` 도 신호를 보내지 않음).
 
@@ -985,6 +997,7 @@ mytool 128000
 | `AW_PREFIX` | `~/.local/bin` | `install.sh` / `aw uninstall` 의 설치 위치 |
 | `AW_WORKER` | (워커 안에서만) | `aw` 가 워커에 넣어 주는 그 워커 이름. 중첩 확인용 |
 | `AW_QUIET` | `300` | `aw peek` 이 조용함을 알리는 기준(초) |
+| `AW_CLAUDE_PROFILE` | (없음) | `--profile` 을 주지 않은 claude 워커가 쓸 프로필 (`~/.claude-profiles/<이름>`, `default` 는 기본 계정) |
 | `AW_BRIEF` | `~/.config/agent-worker/brief` | 워커 지시문 파일 |
 | `AW_NO_BRIEF` | (없음) | `1` 이면 지시문을 붙이지 않음 |
 | `AW_PICK` | `~/.config/agent-worker/pick` | `aw pick` 의 후보 설명 파일 (있으면 켜짐) |

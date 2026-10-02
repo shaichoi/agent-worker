@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.20.1
+AW_VERSION=0.21.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -62,7 +62,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
 run 옵션
   -n 이름     -d 디렉터리     -w 브랜치(worktree 격리)
   -f 파일     표준 입력으로 물림 (기본 /dev/null 이라 멈추지 않음)
-  -e K=V      환경변수        --profile 이름   CLAUDE_CONFIG_DIR 지정
+  -e K=V      환경변수        --profile 이름   CLAUDE_CONFIG_DIR 지정 (늘: AW_CLAUDE_PROFILE)
   --tag 문자열                --max-input-tokens N
   --no-defaults / --no-brief  권한 옵션 / 지시문을 이번만 끔
 
@@ -105,7 +105,9 @@ claude — Claude Code
   aw result c1 --field result        # 성공 여부: --field is_error (true/false)
   --output-format json 도 됩니다. 끝날 때까지 출력이 비지만 aw peek 은 대화 기록에서 읽습니다.
   이어하기: --resume <session_id>  (aw resume 이 알아서 붙입니다)
-  계정 분리: aw run --profile work-sub -- claude -p "작업"
+  계정 분리: aw run --profile work-sub -- claude -p "작업"   (~/.claude-profiles/work-sub)
+            늘 그 계정으로: 셸 설정에 export AW_CLAUDE_PROFILE=work-sub. 한 번만 기본 계정: --profile default
+            claude-use 로 바꾼 셸에서 띄워도 그 프로필을 기록해 peek·resume 이 따라갑니다.
 
 agy — Antigravity CLI (Gemini)
   aw run -n a1 -- agy --output-format stream-json -p='작업'
@@ -268,7 +270,8 @@ peek 의 줄
                 claude 대화 기록에서 읽음. 모르는 형식은 마지막 줄(긴 줄은 끝)을 그대로
   worktree      -w 로 띄웠으면 바뀐 파일 수
   답            끝난 워커의 최종 답 한 줄 (kiro-cli 는 마지막 말. finalText 는 진행 줄까지 이어 붙여서)
-  주의          kiro-cli 가 모델 거절로 도중에 멈췄으면 (코드 0 이라 따로 알림)
+  주의          kiro-cli 가 모델 거절로 멈췄거나 쓰기·명령을 거부당했으면 사유와 함께
+                (kiro 는 코드 0 이지만 aw 는 코드 1 로 남김, aw status 의 실패 사유)
 
 생각하는 동안 밖에서 보이는 것 (실측: 도구 없이 머리로 계산하는 문제)
   claude stream-json  몇 초마다 thinking_tokens (json 으로 띄우면 없음)
@@ -281,7 +284,8 @@ T
       ;;
     files) printf '워커 기록: %s/<이름>/\n\n' "$AW_WORKERS"; cat <<'T'
 
-  meta      이름, 디렉터리, 시작 시각, 부팅 ID, worktree, 꼬리표, 토큰 추정치, 세션 ID
+  meta      이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표, 토큰 추정치, 세션 ID,
+            aw 가 코드를 바꿨으면 원래 코드와 사유 (agent_exit, fail_reason: kiro-cli 의 거절·권한 거부)
   cmd       실행한 인자 (한 줄에 하나)
   cmd.orig  기본 옵션을 붙이기 전, 사용자가 준 인자 (aw resume 이 씀)
   out / err 표준 출력 / 표준 오류
@@ -293,7 +297,7 @@ T
 
 모델 목록 캐시: $AW_HOME/models/<에이전트>   (aw models, codex 는 ~/.codex 의 파일을 바로 읽음)
 기계로 읽으려면: aw list --json
-환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_QUIET,
+환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_QUIET, AW_CLAUDE_PROFILE,
           AW_PICK, AW_PICK_KEYFILE, AW_PICK_MIN_CONFIDENCE, AW_PICK_FALLBACK, AW_PICK_WITHOUT,
           TYPESAFE_API_KEY (aw help pick)
 워커 안에서는 AW_WORKER 에 그 워커 이름이 들어 있습니다 (중첩 확인용).
@@ -981,7 +985,8 @@ cmd_defaults() {
   say ""
   say "권한 우회는 그 에이전트가 승인 없이 파일을 고치고 명령을 실행한다는 뜻입니다."
   say "무인으로 돌릴 때는 -w 로 worktree 를 떼어 놓는 편을 권합니다."
-  say "kiro-cli 는 --trust-all-tools 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로 끝납니다."
+  say "kiro-cli 는 --trust-all-tools 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로 끝납니다"
+  say "(aw 는 그 워커를 실패로 남기지만, 작업은 못 한 채입니다)."
   say ""
   say "devin 줄의 --respect-workspace-trust false 는 작업 공간 신뢰 검사를 끕니다."
   say "-w 가 만드는 worktree 는 실행 시점에 새로 생기는 경로라 미리 신뢰 등록을"
@@ -1370,11 +1375,30 @@ cmd_run() {
     stdin_file=$(CDPATH= cd -- "$(dirname -- "$stdin_file")" && pwd)/$(basename -- "$stdin_file")
   fi
 
-  # 프로필 편의 (claude 전용)
+  # 프로필 편의 (claude 전용). --profile 이 먼저, 없으면 AW_CLAUDE_PROFILE (셸 설정에 두면 늘),
+  # 그것도 없으면 셸의 CLAUDE_CONFIG_DIR (claude-use 로 바꾼 셸) 를 그대로 물려받되 이름을 기록합니다.
+  # 이름을 알아야 peek 이 대화 기록을, resume 이 세션을 그 프로필에서 찾습니다.
+  # default 는 CLAUDE_CONFIG_DIR 을 지웁니다 (claude-with default 처럼: 같은 경로라도 변수가 있으면 계정 정보가 비어 보임).
+  profile_from=''
+  pf_root="${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}"
+  if [ -z "$profile" ] && [ "${1##*/}" = claude ]; then
+    if [ -n "${AW_CLAUDE_PROFILE:-}" ]; then
+      profile=$AW_CLAUDE_PROFILE; profile_from=AW_CLAUDE_PROFILE
+    elif [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+      case "${CLAUDE_CONFIG_DIR%/}" in
+        "$pf_root"/*) profile=${CLAUDE_CONFIG_DIR%/}; profile=${profile#"$pf_root"/}; profile_from=CLAUDE_CONFIG_DIR
+                      case "$profile" in */*) profile=''; profile_from='' ;; esac ;;
+      esac
+    fi
+  fi
   if [ -n "$profile" ]; then
+    valid_name "$profile" || die "프로필 이름은 영문/숫자/. _ - 만 쓸 수 있습니다: $profile"
     case "$profile" in
-      default) ;;
-      *) add_env "CLAUDE_CONFIG_DIR=${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}/$profile" ;;
+      default) envs="${envs}unset CLAUDE_CONFIG_DIR
+" ;;
+      *) add_env "CLAUDE_CONFIG_DIR=$pf_root/$profile"
+         [ -d "$pf_root/$profile" ] \
+           || warn "  (프로필 폴더가 없습니다: $(tilde "$pf_root/$profile") — claude 는 로그인 안 된 새 설정으로 돕니다. claude-use $profile 로 만드세요)" ;;
     esac
   fi
 
@@ -1524,6 +1548,7 @@ KIRO
   say "  디렉터리: $dir"
   [ -n "$wt" ] && say "  worktree: $wt  (브랜치 $worktree)"
   say "  명령: $(meta_get "$wd" cmdline)"
+  [ -n "$profile_from" ] && say "  (claude 프로필: $profile — $profile_from 에서. 이번만 다르게: --profile 이름, 기본 계정: --profile default)"
   [ -n "$added" ] && [ "$no_defaults" -ne 1 ] && say "  (기본 옵션이 붙었습니다: $added — 끄려면 --no-defaults)"
   [ -n "$mdropped" ] && say "  (기본 옵션 '$mdropped' 는 뺐습니다: 모델이 ${1##*/} 의 모델 목록에 없음. ${1##*/} 기본 모델로 돕니다 — aw models ${1##*/})"
   [ -n "$pdropped" ] && say "  (기본 옵션 '$pdropped' 는 뺐습니다: 프로필 $(profile_model "$@") 에 모델이 정해져 있음)"
@@ -1896,6 +1921,9 @@ cmd_resume() {
   # 프로필도 물려받습니다. 세션이 그 CLAUDE_CONFIG_DIR 안에 있어서,
   # 기본 프로필로 이어하면 --resume 이 세션을 못 찾습니다.
   sprof=$(meta_get "$sd" profile)
+  # 프로필 없이 띄운 claude 워커는 기본 계정으로 잇습니다 (지금 셸의 AW_CLAUDE_PROFILE·claude-use 를 따르면 세션을 못 찾음).
+  sprog=$(sed -n 1p "$sd/cmd.orig" 2>/dev/null); [ -n "$sprog" ] || sprog=$(sed -n 1p "$sd/cmd" 2>/dev/null)
+  [ -z "$sprof" ] && [ "${sprog##*/}" = claude ] && sprof=default
   [ -n "$sprof" ] && opts="$opts --profile $(shquote "$sprof")"
   # codex 는 기본 옵션을 resume 앞에 붙입니다 (run_argv). 프롬프트 뒤에 붙이면 codex 가 거절합니다.
 
@@ -4244,6 +4272,8 @@ aw rm review
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
   `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
+- **계정(프로필)**: 사용자가 claude 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- claude …` 입니다
+  (`~/.claude-profiles/<이름>`, 기본 계정은 `default`). 사용자가 셸에 `AW_CLAUDE_PROFILE` 을 두었으면 그 프로필이 기본입니다.
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
   붙이지 않습니다(프로필이 정함). 키는 사용자가 `aw gateway key <이름>` 으로 넣습니다. 키를 `-e` 로 넘기지
@@ -4297,7 +4327,8 @@ aw resume review -- '지적한 것 중 첫 번째를 고쳐줘'    # → review-
 aw resume review-r1 -- '테스트도 추가해줘'             # → review-r2
 ```
 
-원래 명령·디렉터리·`--profile` 을 물려받고 프롬프트만 바꿉니다. `-e` 환경변수는 이어지지
+원래 명령·디렉터리·`--profile` 을 물려받고 프롬프트만 바꿉니다(프로필 없이 띄운 claude 워커는 기본
+계정으로 잇습니다. 지금 셸의 `AW_CLAUDE_PROFILE` 을 따르면 세션을 못 찾아서입니다). `-e` 환경변수는 이어지지
 않으니 다시 줍니다. 세션 ID 는 `aw status <이름>` 에 보입니다. devin 은 세션 ID 를 못 뽑아
 그 디렉터리의 가장 최근 대화(`-c`)로 이어 가므로 정확하지 않습니다.
 

@@ -28,6 +28,8 @@ export AW_DEFAULTS="$NO_DEFAULTS"
 # aw pick 도 이 컴퓨터의 설정·키를 읽지 않게 합니다. 네트워크에는 나가지 않습니다 (curl 을 가짜로 바꿈).
 export AW_PICK="$TMPROOT/pick" AW_PICK_KEYFILE="$TMPROOT/typesafe-key"
 unset TYPESAFE_API_KEY TYPESAFE_BASE_URL TYPESAFE_DEFAULT_MODEL AW_PICK_MIN_CONFIDENCE AW_PICK_FALLBACK
+# claude 프로필도 이 컴퓨터의 셸 설정(claude-use, AW_CLAUDE_PROFILE)을 따르지 않게 합니다.
+unset AW_CLAUDE_PROFILE CLAUDE_CONFIG_DIR
 # 모델 목록도 이 컴퓨터의 codex 설정(~/.codex)을 읽지 않게 합니다 (그 시험은 따로 가짜를 둠).
 export CODEX_HOME="$TMPROOT/no-codex-home"
 # claude 프로필(aw run --profile, aw gateway)도 이 컴퓨터의 ~/.claude-profiles 를 건드리지 않게 합니다.
@@ -1920,6 +1922,33 @@ if [ -e "$GW/keys/opengateway" ]; then ng "uninstall 뒤에 게이트웨이 키�
 has "uninstall 이 게이트웨이 프로필을 보여 줌" "$out" "== 게이트웨이 프로필"
 if [ -e "$cf" ] || [ -e "$cd_" ]; then ng "uninstall 뒤에 게이트웨이 프로필이 남음"; else ok "uninstall 이 게이트웨이 프로필을 지움"; fi
 if [ -f "$GW/codex/mine.config.toml" ]; then ok "uninstall 은 남의 codex 파일을 남김"; else ng "uninstall 이 남의 파일을 지움"; fi
+
+head_ "24. claude 프로필 (--profile, AW_CLAUDE_PROFILE, claude-use)"
+PF="$TMPROOT/pf"; mkdir -p "$PF/bin" "$PF/root/work" "$PF/root/acct"
+printf '#!/bin/sh\nprintf "{\\"session_id\\":\\"S1\\"}\\n"\nprintf "CFG=%%s\\n" "${CLAUDE_CONFIG_DIR:-}"\n' > "$PF/bin/claude"; chmod +x "$PF/bin/claude"
+awf() { env -u AW_CLAUDE_PROFILE -u CLAUDE_CONFIG_DIR PATH="$PF/bin:/usr/bin:/bin" AW_DEFAULTS="$NO_DEFAULTS" CLAUDE_PROFILE_ROOT="$PF/root" "$@"; }
+cfg() { awf "$AW" wait "$1" >/dev/null 2>&1; awf "$AW" result "$1" | sed -n 's/^CFG=//p'; }
+out=$(awf env AW_CLAUDE_PROFILE=work "$AW" run -n pf1 -- claude -p x 2>&1)
+check "AW_CLAUDE_PROFILE: claude 워커가 그 프로필로" "$PF/root/work" "$(cfg pf1)"
+has "AW_CLAUDE_PROFILE: 어디서 온 프로필인지 알림" "$out" "claude 프로필: work — AW_CLAUDE_PROFILE 에서"
+check "AW_CLAUDE_PROFILE: meta 에 프로필" "work" "$(sed -n 's/^profile=//p' "$AW_HOME/workers/pf1/meta")"
+awf env AW_CLAUDE_PROFILE=work "$AW" run -n pf2 --profile acct -- claude -p x >/dev/null 2>&1
+check "--profile 이 AW_CLAUDE_PROFILE 보다 먼저" "$PF/root/acct" "$(cfg pf2)"
+out=$(awf env CLAUDE_CONFIG_DIR="$PF/root/acct" "$AW" run -n pf3 -- claude -p x 2>&1)
+check "claude-use 로 바꾼 셸: 그 계정으로" "$PF/root/acct" "$(cfg pf3)"
+check "claude-use 로 바꾼 셸: 프로필 이름을 기록" "acct" "$(sed -n 's/^profile=//p' "$AW_HOME/workers/pf3/meta")"
+awf env CLAUDE_CONFIG_DIR="$PF/root/acct" "$AW" run -n pf4 --profile default -- claude -p x >/dev/null 2>&1
+check "--profile default 는 셸의 CLAUDE_CONFIG_DIR 을 지움" "" "$(cfg pf4)"
+awf env AW_CLAUDE_PROFILE=work "$AW" run -n pf5 -- sh -c 'echo "CFG=${CLAUDE_CONFIG_DIR:-}"' >/dev/null 2>&1
+check "AW_CLAUDE_PROFILE 은 claude 가 아닌 명령에 안 붙음" "" "$(cfg pf5)"
+awf "$AW" run -n pf6 -- claude -p x >/dev/null 2>&1; awf "$AW" wait pf6 >/dev/null 2>&1
+awf env AW_CLAUDE_PROFILE=work "$AW" resume pf6 -n pf6r -- y >/dev/null 2>&1
+check "기본 계정으로 띄운 워커는 AW_CLAUDE_PROFILE 이 있어도 기본 계정으로 이음" "" "$(cfg pf6r)"
+awf "$AW" resume pf1 -n pf1r -- y >/dev/null 2>&1
+check "프로필로 띄운 워커는 그 프로필로 이음" "$PF/root/work" "$(cfg pf1r)"
+has "프로필 폴더가 없으면 알림" "$(awf env AW_CLAUDE_PROFILE=nosuch "$AW" run -n pf7 -- claude -p x 2>&1)" "프로필 폴더가 없습니다"
+if awf "$AW" run -n pf8 --profile '../x' -- claude -p x >/dev/null 2>&1; then ng "잘못된 프로필 이름을 받아들임"; else ok "잘못된 프로필 이름은 거절"; fi
+awf "$AW" rm pf1 pf2 pf3 pf4 pf5 pf6 pf6r pf1r pf7 >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
