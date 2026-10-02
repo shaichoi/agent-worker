@@ -102,6 +102,7 @@ cd agent-worker
 | `aw result <이름> [--field K]` | 출력 전문, 또는 JSON 필드 하나 |
 | `aw resume <이름> -- '프롬프트'` | 그 워커의 대화를 이어서 새 워커로 |
 | `aw wait <이름...> [--timeout N] [--idle N]` | 끝날 때까지 대기 (실패면 0이 아닌 코드). `--idle` 은 [조용함](#조용할-때-생각-중인가-멈췄나) 알림 |
+| `aw say <이름> [--now\|--interrupt] -- '메시지'` | 도는 claude 워커에 [같은 세션으로 메시지](#도는-중에-메시지-넣기-aw-say)를 넣음 |
 | `aw stop <이름...>` | 프로세스 그룹째 종료 |
 | `aw rm <이름...>` / `aw clean [--all]` | 기록 정리 (worktree 도 함께) |
 | `aw prune [--dry-run]` | 프로세스가 사라진 워커(`lost`)만 정리. 그룹에 산 것이 있거나 worktree 에 변경이 있으면 남김 |
@@ -146,6 +147,7 @@ if aw wait build test; then echo "둘 다 성공"; else echo "실패한 워커 �
 | `--max-input-tokens N` | 컨텍스트 경고 기준을 직접 지정 (`0`이면 끄기) |
 | `--no-defaults` | 에이전트별 기본 옵션을 붙이지 않음 |
 | `--no-brief` | 워커 지시문을 붙이지 않음 |
+| `--no-say` | claude 를 [도는 중에 메시지를 받게](#도는-중에-메시지-넣기-aw-say) 띄우지 않음 (예전처럼 프롬프트를 인자로) |
 
 ## 쓰는 법
 
@@ -175,6 +177,36 @@ aw run -n featB -w feat/b -- claude -p "B 기능 구현"
 
 각 워커는 `<저장소>/.aw-worktrees/<이름>`에서 새 브랜치로 돌고, `aw rm`이 worktree까지 정리합니다.
 `aw`가 만든 worktree만 지우고 사용자가 만든 것은 건드리지 않습니다.
+
+## 도는 중에 메시지 넣기 (aw say)
+
+도는 claude 워커를 멈추지 않고 같은 세션에 메시지를 넣습니다. 방향이 틀린 걸 보고 바로잡거나 일을 더할 때 씁니다.
+
+```sh
+aw run -n c1 -- claude -p --output-format stream-json --verbose "로그인 버그를 고쳐줘"
+aw say c1 -- "테스트도 같이 추가해줘"               # 지금 도는 도구가 끝나면 같은 턴 안에서 반영
+aw say c1 --now -- "그건 그만하고 README 부터"      # 도구가 끝나면 하던 턴을 끊고 이 메시지로
+aw say c1 --interrupt -- "빌드 멈추고 설정부터 봐"  # 도는 도구를 바로 끊고 이 메시지로
+aw say c1 -f more.md                                # 파일 내용을 메시지로
+```
+
+- **claude 만 됩니다.** `claude -p --output-format stream-json` 으로 띄우면 aw 가 알아서 받을 수 있게 둡니다.
+  claude 의 `--input-format stream-json` 으로 표준 입력을 열어 두고, 프롬프트(지시문 포함)를 그 첫 줄로 넣습니다.
+  이 모드에서는 인자의 프롬프트를 claude 가 무시해서입니다(실측). `aw status`·`aw list` 의 명령에는 프롬프트가
+  그대로 보이고, `aw resume` 도 똑같이 잇습니다. 끄려면 `aw run --no-say`(또는 `AW_NO_SAY=1`)입니다.
+- **언제 끝나나:** 넣은 메시지가 모두 전달되고(`--replay-user-messages` 의 되돌림으로 셈) 그 뒤 결과가 나오면 aw 가
+  입력을 닫고, claude 는 1~2초 안에 끝납니다(실측). 일하는 도중에 닫혀도 claude 는 그 턴을 마치고 끝납니다(실측).
+  그래서 마지막 메시지에 대한 답이 `aw result --field result` 입니다.
+- **늦으면 거절:** 일을 마치고 입력을 닫은 뒤에 넣으면 거절하고 `aw resume` 을 알려 줍니다. 끝난 워커도 같습니다.
+  `aw peek`·`aw status` 에 넣은 메시지 수와 그중 전달된 수가 보입니다.
+- **다른 에이전트:** codex 는 `codex exec` 로는 못 넣습니다(`codex queue` 는 다음 턴 대기열이라 exec 가 끝나면 버려짐,
+  실측). 도중에 넣는 `turn/steer` 는 codex 앱 서버에만 있습니다(스키마로 확인). kiro-cli·devin 은 ACP 모드에만 그런
+  기능이 있는 것으로 보여(실행 파일의 문자열, 돌려 보진 않음) 아직 다루지 않습니다. 이들은 멈추고 `aw resume` 으로
+  같은 세션을 잇습니다.
+- **`--interrupt` 는 메시지와 함께만** 받습니다. 끊기만 하면 결과가 안 나올 수 있어(그러면 입력을 닫을 때를 모름)
+  워커가 끝나지 않을 수 있어서입니다. 그냥 멈추려면 `aw stop` 입니다.
+- claude 가 입력을 읽지 않고 끝나도(오류 등) 워커는 그 코드로 끝납니다. aw 는 `tail -f inbox | claude` 로 띄우고,
+  claude 가 끝나면 그 자리에서 `tail` 을 끊습니다.
 
 ## 진행 상황 보기
 
@@ -970,11 +1002,13 @@ mytool 128000
 | 파일 | 내용 |
 | --- | --- |
 | `meta` | 이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표. aw 가 코드를 바꿨으면 원래 코드와 사유(`agent_exit`, `fail_reason`) |
-| `cmd` | 실행한 인자 (한 줄에 하나) |
+| `cmd` | 실행한 인자 (한 줄에 하나). `aw say` 모드면 프롬프트가 든 명령이고, 실제 실행은 `launch.sh` |
 | `out` / `err` | 표준 출력 / 표준 오류 |
 | `exit` | 종료 코드 (생기면 끝난 것) |
 | `input_tokens_est` / `context_limit` | 입력 크기 어림값과 적용된 한도 (meta 안) |
 | `run.sh` / `launch.sh` | 실제로 돌린 스크립트 (그대로 다시 실행 가능) |
+| `inbox` | (`aw say`) claude 의 표준 입력. 첫 줄이 프롬프트, `aw say` 가 한 줄씩 덧붙임 |
+| `say.sh`, `tailpid`, `inbox.closed` | (`aw say`) 일을 마치면 입력을 닫는 감시, inbox 를 따라가는 `tail`, 닫았다는 표시 |
 | `fallback.sh`, `out.model`, `err.model` | `aw pick` 이 고른 모델이 거부될 때 대신 돌리는 스크립트와 첫 시도의 출력 |
 
 상태는 `running`(pid 살아 있음), `done`(코드 0), `failed`(0 아님. kiro-cli 의 거절·권한 거부는 코드 0 이어도
@@ -1000,6 +1034,7 @@ aw 가 1 로 남김, [위](#kiro-cli--kiro-cli) 참고), `stopped`(`aw stop`),
 | `AW_CLAUDE_PROFILE` | (없음) | `--profile` 을 주지 않은 claude 워커가 쓸 프로필 (`~/.claude-profiles/<이름>`, `default` 는 기본 계정) |
 | `AW_BRIEF` | `~/.config/agent-worker/brief` | 워커 지시문 파일 |
 | `AW_NO_BRIEF` | (없음) | `1` 이면 지시문을 붙이지 않음 |
+| `AW_NO_SAY` | (없음) | `1` 이면 claude 를 도는 중에 메시지를 받게 띄우지 않음 (`--no-say`) |
 | `AW_PICK` | `~/.config/agent-worker/pick` | `aw pick` 의 후보 설명 파일 (있으면 켜짐) |
 | `AW_PICK_KEYFILE` | `~/.config/agent-worker/typesafe-key` | `aw pick key` 가 키를 저장하는 파일 |
 | `AW_PICK_MIN_CONFIDENCE` | `0.5` | `aw pick` 이 띄우는 확신 하한 |

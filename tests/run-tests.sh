@@ -1950,5 +1950,123 @@ has "프로필 폴더가 없으면 알림" "$(awf env AW_CLAUDE_PROFILE=nosuch "
 if awf "$AW" run -n pf8 --profile '../x' -- claude -p x >/dev/null 2>&1; then ng "잘못된 프로필 이름을 받아들임"; else ok "잘못된 프로필 이름은 거절"; fi
 awf "$AW" rm pf1 pf2 pf3 pf4 pf5 pf6 pf6r pf1r pf7 >/dev/null 2>&1
 
+head_ "25. 도는 중에 메시지 넣기 (aw say)"
+# 가짜 claude: 표준 입력의 user 줄마다 받았다는 표시(isReplay)와 결과를 냄. 내용에 SLEEP 이 있으면 3초 쉼. EOF 면 끝남 (실측과 같은 모양).
+SY="$TMPROOT/say"; mkdir -p "$SY/bin"
+cat > "$SY/bin/claude" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$@" > "$SAY_ARGS"
+while IFS= read -r line; do
+  case "$line" in *'"type":"user"'*) ;; *) continue ;; esac
+  printf '{"type":"user","message":{"role":"user","content":"x"},"isReplay":true}\n'
+  case "$line" in *SLEEP*) sleep 3 ;; esac
+  c=$(printf '%s' "$line" | sed 's/.*"content":"\(.*\)"}}$/\1/')
+  printf '{"duration_api_ms":1,"type":"result","num_turns":1,"result":"got: %s","session_id":"SY1"}\n' "$c"
+done
+FAKE
+chmod +x "$SY/bin/claude"
+aws() { env PATH="$SY/bin:/usr/bin:/bin" AW_DEFAULTS="$NO_DEFAULTS" AW_BRIEF="$SY/no-brief" SAY_ARGS="$SY/args" "$AW" "$@"; }
+SC='claude -p --output-format stream-json --verbose'
+
+t0=$(date +%s)
+out=$(aws run -n sy1 -- $SC '첫 "프롬프트" \ 탭	끝' 2>&1)
+aws wait sy1 --timeout 20 >/dev/null 2>&1; rc=$?
+check "say 모드 워커도 일을 마치면 끝남" 0 "$rc"
+if [ $(( $(date +%s) - t0 )) -lt 10 ]; then ok "결과 뒤 곧 끝남 (입력을 닫음)"; else ng "결과 뒤에도 안 끝남"; fi
+has "띄울 때 aw say 를 알려 줌" "$out" "도는 중에 메시지 넣기: aw say sy1"
+check "프롬프트(따옴표, 역슬래시, 탭)가 그대로 전달됨" 'got: 첫 "프롬프트" \ 탭	끝' "$(aws result sy1 --field result)"
+check "인자에서 프롬프트는 빠지고 입력 옵션이 붙음" "-p --output-format stream-json --verbose --input-format stream-json --replay-user-messages" "$(tr '\n' ' ' < "$SY/args" | sed 's/ $//')"
+has "명령 기록(meta)에는 프롬프트가 그대로" "$(aws status sy1)" '첫 "프롬프트"'
+check "meta 에 say=1" 1 "$(sed -n 's/^say=//p' "$AW_HOME/workers/sy1/meta")"
+
+aws run -n sy2 -- $SC 'SLEEP 먼저' >/dev/null 2>&1; sleep 1
+out=$(aws say sy2 -- '둘째 메시지' 2>&1)
+has "say: 넣었다고 알림" "$out" "sy2: 넣었습니다"
+has "say: 넣은 수와 전달 수" "$out" "넣은 메시지 1개, 그중 전달 0개"
+has "peek: 도는 중에도 넣은 메시지를 보여 줌" "$(aws peek sy2)" "넣은 메시지 1개"
+aws wait sy2 --timeout 30 >/dev/null 2>&1
+check "넣은 메시지까지 처리하고 끝남 (마지막 결과)" "got: 둘째 메시지" "$(aws result sy2 --field result)"
+has "status: 넣은 메시지와 전달 수" "$(aws status sy2)" "넣은 메시지 1개, 그중 전달 1개"
+if aws say sy2 -- '늦음' >/dev/null 2>&1; then ng "끝난 워커에 넣음"; else ok "끝난 워커에는 거절 (aw resume 안내)"; fi
+has "끝난 워커면 aw resume 을 알려 줌" "$(aws say sy2 -- 늦음 2>&1)" "aw resume sy2"
+
+aws run -n sy3 -- $SC 'SLEEP 먼저' >/dev/null 2>&1; sleep 1
+aws say sy3 --now -- 지금 >/dev/null 2>&1
+aws say sy3 --interrupt -- 끊고 >/dev/null 2>&1
+has "--now 는 priority now" "$(sed -n 2p "$AW_HOME/workers/sy3/inbox")" '"priority":"now"'
+has "--interrupt 는 끊기 요청" "$(sed -n 3p "$AW_HOME/workers/sy3/inbox")" '"subtype":"interrupt"'
+has "--interrupt 뒤에 메시지" "$(sed -n 4p "$AW_HOME/workers/sy3/inbox")" '"content":"끊고"'
+aws wait sy3 --timeout 30 >/dev/null 2>&1
+check "--now·--interrupt 뒤에도 끝남" 0 "$(cat "$AW_HOME/workers/sy3/exit")"
+
+# 끝나는 중(입력을 닫은 뒤)에는 넣지 않음
+aws run -n sy4 -- $SC 'SLEEP 먼저' >/dev/null 2>&1; sleep 1
+: > "$AW_HOME/workers/sy4/inbox.closed"
+if aws say sy4 -- 늦음 >/dev/null 2>&1; then ng "닫힌 입력에 넣음"; else ok "입력을 닫은 뒤에는 거절"; fi
+check "닫은 뒤에는 inbox 에 안 붙음" 1 "$(grep -c '"type":"user"' "$AW_HOME/workers/sy4/inbox")"
+kill "$(cat "$AW_HOME/workers/sy4/tailpid")" 2>/dev/null; aws wait sy4 --timeout 20 >/dev/null 2>&1
+
+# -f 의 프롬프트도 첫 메시지로 (줄바꿈은 \n)
+printf '사양 첫 줄\n둘째 줄\n' > "$SY/spec.md"
+aws run -n sy5 -f "$SY/spec.md" -- $SC >/dev/null 2>&1; aws wait sy5 --timeout 20 >/dev/null 2>&1
+has "-f 의 프롬프트가 첫 메시지" "$(head -1 "$AW_HOME/workers/sy5/inbox")" '"content":"사양 첫 줄\n둘째 줄"'
+# 지시문(brief)은 첫 메시지 앞에
+printf '먼저 계획을 적으세요.\n' > "$SY/brief"
+env AW_BRIEF="$SY/brief" PATH="$SY/bin:/usr/bin:/bin" AW_DEFAULTS="$NO_DEFAULTS" SAY_ARGS="$SY/args" "$AW" run -n sy6 -- $SC 일 >/dev/null 2>&1
+aws wait sy6 --timeout 20 >/dev/null 2>&1
+has "지시문은 첫 메시지 앞에 붙음" "$(head -1 "$AW_HOME/workers/sy6/inbox")" '"content":"먼저 계획을 적으세요.\n\n일"'
+
+# 끄기: --no-say, AW_NO_SAY, 사용자가 준 --input-format, 파일과 인자 프롬프트를 같이 준 경우
+aws run -n sy7 --no-say -- $SC 그대로 >/dev/null 2>&1; aws wait sy7 --timeout 10 >/dev/null 2>&1
+if [ -e "$AW_HOME/workers/sy7/inbox" ]; then ng "--no-say 인데 inbox 를 만듦"; else ok "--no-say 면 예전처럼 띄움"; fi
+has "--no-say 면 프롬프트는 인자로" "$(cat "$SY/args")" "그대로"
+env AW_NO_SAY=1 PATH="$SY/bin:/usr/bin:/bin" AW_DEFAULTS="$NO_DEFAULTS" SAY_ARGS="$SY/args" "$AW" run -n sy8 -- $SC 그대로 >/dev/null 2>&1
+aws wait sy8 --timeout 10 >/dev/null 2>&1
+if [ -e "$AW_HOME/workers/sy8/inbox" ]; then ng "AW_NO_SAY 인데 inbox 를 만듦"; else ok "AW_NO_SAY=1 도 끔"; fi
+aws run -n sy9 -- $SC --input-format text 그대로 >/dev/null 2>&1; aws wait sy9 --timeout 10 >/dev/null 2>&1
+if [ -e "$AW_HOME/workers/sy9/inbox" ]; then ng "--input-format 을 줬는데 say 모드"; else ok "--input-format 을 직접 주면 그대로"; fi
+aws run -n sy10 -f "$SY/spec.md" -- $SC '이것도' >/dev/null 2>&1; aws wait sy10 --timeout 10 >/dev/null 2>&1
+if [ -e "$AW_HOME/workers/sy10/inbox" ]; then ng "파일과 인자 프롬프트를 같이 줬는데 say 모드"; else ok "파일과 인자 프롬프트를 같이 주면 그대로"; fi
+aws run -n sy11 -- claude -p --output-format json 그대로 >/dev/null 2>&1; aws wait sy11 --timeout 10 >/dev/null 2>&1
+if [ -e "$AW_HOME/workers/sy11/inbox" ]; then ng "stream-json 이 아닌데 say 모드"; else ok "stream-json 이 아니면 그대로"; fi
+"$AW" run -n sy12 -- sleep 5 >/dev/null 2>&1
+has "say 모드가 아닌 워커는 거절" "$("$AW" say sy12 -- 안녕 2>&1)" "도는 중에 메시지를 받지 않습니다"
+"$AW" stop sy12 >/dev/null 2>&1
+
+# aw stop 하면 tail 과 감시(say.sh)도 남지 않음
+aws run -n sy14 -- $SC 'SLEEP 먼저' >/dev/null 2>&1; sleep 1
+aws stop sy14 >/dev/null 2>&1; sleep 2
+if pgrep -f "tail -n +1 -f $AW_HOME/workers/sy14/inbox" >/dev/null 2>&1 || pgrep -f "$AW_HOME/workers/sy14/say.sh" >/dev/null 2>&1; then
+  ng "aw stop 뒤에 tail 이나 감시가 남음"
+else ok "aw stop 뒤에 tail·감시가 남지 않음"; fi
+# 붙이다 죽은 aw say 의 잠금이 남아도 감시가 치우고 입력을 닫음 (워커가 끝남)
+aws run -n sy15 -- $SC 'SLEEP 먼저' >/dev/null 2>&1
+mkdir "$AW_HOME/workers/sy15/inbox.lock"; touch -t 202001010000 "$AW_HOME/workers/sy15/inbox.lock"
+aws wait sy15 --timeout 30 >/dev/null 2>&1; rc=$?
+check "오래 남은 잠금이 있어도 워커가 끝남" 0 "$rc"
+
+# claude 가 입력을 읽지 않고 바로 끝나도 워커는 끝남 (tail 이 남아 매달리지 않음)
+printf '#!/bin/sh\necho "{\\"type\\":\\"result\\",\\"num_turns\\":1,\\"result\\":\\"bye\\"}"\nexit 3\n' > "$SY/bin/claude"
+aws run -n sy13 -- $SC x >/dev/null 2>&1
+aws wait sy13 --timeout 15 >/dev/null 2>&1; rc=$?
+check "claude 가 입력을 안 읽고 끝나도 워커가 끝나고 그 코드를 남김" 1 "$rc"
+check "그 코드 그대로" 3 "$(cat "$AW_HOME/workers/sy13/exit" 2>/dev/null)"
+if pgrep -f "tail -n +1 -f $AW_HOME/workers/sy13/inbox" >/dev/null 2>&1; then ng "tail 이 남음"; else ok "tail 이 남지 않음"; fi
+
+# 이어하기도 say 모드 (새 프롬프트가 첫 메시지)
+cat > "$SY/bin/claude" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$@" > "$SAY_ARGS"
+while IFS= read -r line; do
+  case "$line" in *'"type":"user"'*) ;; *) continue ;; esac
+  printf '{"type":"user","message":{"role":"user","content":"x"},"isReplay":true}\n'
+  printf '{"duration_api_ms":1,"type":"result","num_turns":1,"result":"ok","session_id":"SY1"}\n'
+done
+FAKE
+aws resume sy1 -n sy1r -- 이어서 >/dev/null 2>&1; aws wait sy1r --timeout 20 >/dev/null 2>&1
+has "이어하기도 새 프롬프트를 첫 메시지로" "$(head -1 "$AW_HOME/workers/sy1r/inbox" 2>/dev/null)" '"content":"이어서"'
+has "이어하기는 --resume 세션으로" "$(cat "$SY/args")" "SY1"
+aws rm sy1 sy1r sy2 sy3 sy4 sy5 sy6 sy7 sy8 sy9 sy10 sy11 sy12 sy13 sy14 sy15 >/dev/null 2>&1
+
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
