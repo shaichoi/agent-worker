@@ -203,7 +203,7 @@ review  running  3m12s  claude
 | 조용함 | 출력, 새 명령, 파일 변경, 생각 신호가 모두 멈춘 지 `AW_QUIET` 초(기본 300)가 넘으면 알립니다 |
 | worktree | `-w` 로 띄웠으면 지금까지 바뀐 파일 수 |
 | 답 | 끝난 워커면 JSON 결과의 최종 답 한 줄. kiro-cli 는 마지막 말 (`finalText` 는 그 턴의 말을 진행 줄까지 구분 없이 이어 붙여서) |
-| 주의 | kiro-cli 가 모델 거절로 도중에 멈췄으면 사유와 함께 (코드 0 이라 따로 알림) |
+| 주의 | kiro-cli 가 모델 거절로 도중에 멈췄거나 쓰기·명령을 거부당했으면 사유와 함께 (kiro 는 코드 0 이지만 aw 는 실패로 남김) |
 
 **claude 를 `--output-format json` 으로 띄워도 보입니다.** 이 형식은 끝날 때 한 번에 나와서 도중엔 출력이
 비어 있습니다. 대신 claude 는 도는 동안 `~/.claude/sessions/<pid>.json` 에 세션 ID 를 적고, 대화 기록
@@ -446,7 +446,8 @@ aw wait k1 && aw result k1 --field finalText
   **따로** 붙입니다. `--model` 만 직접 줘도 엔진 줄은 붙고, 엔진을 직접 고르면(`--agent-engine v2`, `--v2`)
   엔진 줄이 빠집니다. `--v2` 와 `--agent-engine` 을 같이 주면 kiro-cli 가 오류를 내서 둘을 같은 옵션으로 봅니다.
 - **권한**: `--trust-all-tools`(`-a`) 가 없으면 파일 쓰기·명령이 거부되는데도 **코드 0** 으로 끝나고
-  `finalText` 에만 못 했다고 적힙니다. 기본 옵션을 켜 두면 붙습니다. `-a` 와 같이 주면 오류라 같은 옵션으로 봅니다.
+  `finalText` 에만 못 했다고 적힙니다(오류 출력에는 `[denied] tool permission approval is not supported …`).
+  기본 옵션을 켜 두면 붙습니다. `-a` 와 같이 주면 오류라 같은 옵션으로 봅니다.
 - **프롬프트**는 `chat` 뒤 맨 끝 인자로 둡니다. `aw resume` 이 `chat --resume-id <sessionId>` 를 붙이고 맨 끝을 갈아 끼웁니다.
   v3 는 v2 로 시작한 세션도 이어받아서, 중간에 엔진이 바뀌어도 이어집니다.
 - **거절**: 모델이 거절하면 도중에 멈추고도 마지막 `runFinished` 에 `status: success`, `stopReason: end_turn` 을 적고
@@ -454,6 +455,10 @@ aw wait k1 && aw result k1 --field finalText
   `stopReason: content_filtered` 와 `stopDetails.refusal.category` 에만 남습니다. `aw peek` 이 `주의` 줄로 사유와 함께
   알려 줍니다. 생각 과정을 적어 달라는 프롬프트는 생각 빼내기(`REASONING_EXTRACTION`)로 거절당했습니다(Opus 5.5,
   Opus 5 모두). 그래서 [지시문](#워커-지시문-brief)에서도 그런 문장을 뺐습니다.
+- **코드 0 인 실패는 aw 가 실패로**: 위의 거절과 권한 거부는 kiro-cli 가 코드 0 으로 끝나도 aw 가 **코드 1**(`failed`)로
+  남기고, `meta` 에 원래 코드(`agent_exit=0`)와 사유(`fail_reason=model_refused` / `tools_denied`)를 적습니다.
+  `aw wait`·`aw status` 가 사유를 보여 줍니다. 확실한 신호만 봅니다. 도구 호출의 `failed`(테스트 실패, 없는 파일 읽기 등)는
+  작업 도중의 정상 과정이라 보지 않고, 답으로만 "못 했다" 고 한 경우도 코드로는 잡히지 않습니다.
 
 생각하는 동안에도 생각 내용 조각이 몇 초마다 출력에 흘러서 `aw peek` 에 `생각 중: 약 N자째` 로 보입니다.
 

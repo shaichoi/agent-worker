@@ -1115,13 +1115,35 @@ printf '%s\n' '{"type":"sessionUpdate","data":{"update":{"sessionUpdate":"agent_
 FAKE
 env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n kr-refused --no-defaults -- kiro-cli chat --output-format stream-json "생각" >/dev/null 2>&1
 "$AW" wait kr-refused --timeout 10 >/dev/null 2>&1
-check "kiro-cli: 거절당해도 코드 0 (그대로 전함)" 0 "$(cat "$AW_HOME/workers/kr-refused/exit")"
+check "kiro-cli: 코드 0 이어도 거절이면 실패(1)로 남김" 1 "$(cat "$AW_HOME/workers/kr-refused/exit")"
+check "kiro-cli: 원래 코드와 사유를 meta 에" "agent_exit=0 fail_reason=model_refused" "$(grep -E '^(agent_exit|fail_reason)=' "$AW_HOME/workers/kr-refused/meta" | tr '\n' ' ' | sed 's/ $//')"
+has "kiro-cli: status 에 실패 사유" "$("$AW" status kr-refused)" "실패 사유: kiro-cli 는 코드 0 이었지만 모델이 거절해"
+has "kiro-cli: wait 에도 사유" "$("$AW" wait kr-refused 2>&1)" "failed (종료 코드 1 — kiro-cli 는 코드 0 이었지만 모델이 거절해"
 out=$("$AW" peek kr-refused)
 has "kiro-cli: 거절로 멈췄다고 사유와 함께 알림" "$out" "주의        : 모델이 거절해 도중에 멈췄습니다 (content_filtered, REASONING_EXTRACTION)"
 has "kiro-cli: 생각 빼내기면 지시문을 보라고 알림" "$out" "지시문(aw brief)"
 printf '%s\n' '#!/bin/sh' "printf '%s\\n' '{\"type\":\"runFinished\",\"data\":{\"status\":\"success\",\"stopReason\":\"end_turn\",\"finalText\":\"정상 답\"}}'" > "$IH/fakebin/kiro-cli"
 env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n kr-ok --no-defaults -- kiro-cli chat --output-format stream-json "질문" >/dev/null 2>&1
 "$AW" wait kr-ok --timeout 10 >/dev/null 2>&1
+check "kiro-cli: 정상으로 끝나면 코드 0 그대로" 0 "$(cat "$AW_HOME/workers/kr-ok/exit")"
+# --trust-all-tools 없이 쓰기·명령을 거부당해도 코드 0 → 실패로 (오류 출력의 [denied] 줄, 실측 그대로)
+printf '%s\n' '#!/bin/sh' "printf '%s\\n' '{\"type\":\"runFinished\",\"data\":{\"status\":\"success\",\"stopReason\":\"end_turn\",\"finalText\":\"rejected\"}}'" \
+  "echo '[denied] tool permission approval is not supported in non-interactive mode. Use --trust-all-tools to auto-approve.' >&2" > "$IH/fakebin/kiro-cli"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n kr-denied --no-defaults -- kiro-cli chat --output-format stream-json "쓰기" >/dev/null 2>&1
+"$AW" wait kr-denied --timeout 10 >/dev/null 2>&1
+check "kiro-cli: 도구 거부도 실패(1)로" 1 "$(cat "$AW_HOME/workers/kr-denied/exit")"
+has "kiro-cli: 도구 거부 사유" "$("$AW" status kr-denied)" "쓰기·명령이 거부됨"
+has "kiro-cli: peek 이 도구 거부를 알림" "$("$AW" peek kr-denied)" "쓰기·명령이 거부됐습니다"
+# 도구 호출이 failed 여도(테스트 실패 같은 정상 과정) 끝까지 했으면 성공
+printf '%s\n' '#!/bin/sh' "printf '%s\\n' '{\"type\":\"sessionUpdate\",\"data\":{\"update\":{\"sessionUpdate\":\"tool_call_update\",\"status\":\"failed\"}}}' '{\"type\":\"runFinished\",\"data\":{\"status\":\"success\",\"stopReason\":\"end_turn\",\"finalText\":\"고침\"}}'" > "$IH/fakebin/kiro-cli"
+env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n kr-toolfail --no-defaults -- kiro-cli chat --output-format stream-json "고쳐" >/dev/null 2>&1
+"$AW" wait kr-toolfail --timeout 10 >/dev/null 2>&1
+check "kiro-cli: 도구 호출 하나가 failed 여도 끝까지 했으면 코드 0" 0 "$(cat "$AW_HOME/workers/kr-toolfail/exit")"
+# kiro-cli 가 아닌 명령은 출력에 같은 글이 있어도 그대로
+"$AW" run -n kr-other -- sh -c "echo 'The selected model cannot continue this conversation'" >/dev/null 2>&1
+"$AW" wait kr-other --timeout 10 >/dev/null 2>&1
+check "kiro-cli 가 아니면 코드를 바꾸지 않음" 0 "$(cat "$AW_HOME/workers/kr-other/exit")"
+printf '%s\n' '#!/bin/sh' "printf '%s\\n' '{\"type\":\"runFinished\",\"data\":{\"status\":\"success\",\"stopReason\":\"end_turn\",\"finalText\":\"정상 답\"}}'" > "$IH/fakebin/kiro-cli"
 out=$("$AW" peek kr-ok)
 has "정상으로 끝난 kiro-cli 의 답" "$out" "답          : 정상 답"
 hasnt "정상으로 끝난 kiro-cli 에는 주의가 없음" "$out" "주의        :"

@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.20.0
+AW_VERSION=0.20.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -157,14 +157,17 @@ kiro-cli — Kiro CLI
   이어하기: chat --resume-id <sessionId>  (aw resume 이 알아서 붙입니다)
   주의: 프롬프트는 chat 뒤, 맨 끝 인자로 둡니다.
         --trust-all-tools(-a) 가 없으면 파일 쓰기·명령을 거부당하고도 코드 0 으로
-        끝납니다. 답(finalText)에만 못 했다고 적힙니다. 기본 옵션을 켜 두면 붙습니다.
+        끝납니다. 기본 옵션을 켜 두면 붙습니다. 이때 aw 는 워커를 실패(코드 1)로
+        남깁니다 (meta: agent_exit=0, fail_reason=tools_denied).
         기본 엔진(v2)은 --model 을 무시합니다 (경고 "failed to set model ... Method
         not found" 뒤 Auto 로 돎). 모델을 고르려면 --agent-engine v3 가 필요하고,
         기본 옵션을 켜 두면 둘 다 붙습니다. 엔진을 직접 고르면(--agent-engine v2,
         --v2) aw 는 엔진 옵션을 붙이지 않습니다. 이때 --model 은 무시됩니다.
         모델이 거절하면(content_filtered) 도중에 멈추고도 status success, 코드 0 으로
-        끝납니다. 답은 "The selected model cannot continue this conversation…" 뿐이고,
-        aw peek 이 사유와 함께 알려 줍니다. 생각 과정을 적어 달라는 프롬프트는
+        끝납니다. 답은 "The selected model cannot continue this conversation…" 뿐입니다.
+        aw 는 이것도 실패(코드 1, fail_reason=model_refused)로 남기고, aw peek 이 사유를
+        알려 줍니다. 도구 호출의 실패(테스트 실패 등)는 정상 과정이라 보지 않습니다.
+        생각 과정을 적어 달라는 프롬프트는
         생각 빼내기(REASONING_EXTRACTION)로 거절당합니다 (실측).
   모델 목록: kiro-cli chat --list-models
 
@@ -1442,6 +1445,25 @@ cmd_run() {
       printf '  code=$?\n'
       printf 'fi\n'
     fi
+    # kiro-cli 는 실제로 못 했어도 코드 0 으로 끝나는 경우가 있습니다 (실측). 그때는 실패(1)로 남기고
+    # 원래 코드(agent_exit=0)와 사유(fail_reason)를 meta 에 적습니다. 확실한 신호만 봅니다.
+    #   model_refused  턴 끝의 stopReason content_filtered, 또는 답 "The selected model cannot continue this conversation"
+    #   tools_denied   --trust-all-tools 없이 비대화형이면 쓰기·명령을 거부하고 오류 출력에 "[denied] tool permission …"
+    # 도구 호출의 status failed 는 보지 않습니다. 테스트가 실패하는 것 같은 정상 과정에도 남습니다.
+    if [ "${1##*/}" = kiro-cli ]; then
+      kq_out=$(shquote "$wd/out"); kq_err=$(shquote "$wd/err"); kq_meta=$(shquote "$wd/meta")
+      cat <<KIRO
+if [ "\$code" -eq 0 ]; then
+  why=''
+  if grep -q '"stopReason":"content_filtered"' $kq_out 2>/dev/null || grep -q 'The selected model cannot continue this conversation' $kq_out 2>/dev/null; then
+    why=model_refused
+  elif grep -q 'tool permission approval is not supported' $kq_err 2>/dev/null; then
+    why=tools_denied
+  fi
+  if [ -n "\$why" ]; then printf 'agent_exit=0\nfail_reason=%s\n' "\$why" >> $kq_meta; code=1; fi
+fi
+KIRO
+    fi
     printf 'printf "%%s\\n" "$code" > %s/exit.tmp\n' "$(shquote "$wd")"
     printf 'mv %s/exit.tmp %s/exit\n' "$(shquote "$wd")" "$(shquote "$wd")"
     printf 'date +%%s > %s/finished\n' "$(shquote "$wd")"
@@ -1571,6 +1593,7 @@ cmd_status() {
   [ -n "$(meta_get "$d" tag)" ]      && say "  꼬리표   : $(meta_get "$d" tag)"
   [ -n "$(meta_get "$d" picked)" ]   && say "  aw pick  : $(meta_get "$d" picked) 를 고름$( [ -n "$(meta_get "$d" pick_confidence)" ] && printf ' (확신 %s)' "$(meta_get "$d" pick_confidence)" )$( [ -n "$(meta_get "$d" pick_model)" ] && printf ', 모델 %s' "$(meta_get "$d" pick_model)" )$( [ -n "$(meta_get "$d" pick_model_confidence)" ] && printf ' (확신 %s)' "$(meta_get "$d" pick_model_confidence)" )"
   [ -n "$(meta_get "$d" pick_jev_error)" ] && say "             Jev 를 못 써서 대신 띄움: $(meta_get "$d" pick_jev_error)"
+  [ -n "$(fail_reason_text "$d")" ] && say "  실패 사유: $(fail_reason_text "$d")"
   [ -n "$(meta_get "$d" pick_fallback)" ] && say "             모델이 거부돼(코드 $(meta_get "$d" pick_fallback)) 모델 없이 다시 돌림. 첫 시도: $d/out.model, err.model"
   sess=$(session_of "$d")
   [ -n "$sess" ] && say "  세션     : $sess"
@@ -1670,7 +1693,8 @@ cmd_wait() {
     done
     if [ -f "$d/exit" ]; then
       code=$(cat "$d/exit")
-      say "$n: $(state_of "$d") (종료 코드 $code)"
+      fr=$(fail_reason_text "$d")
+      say "$n: $(state_of "$d") (종료 코드 $code${fr:+ — $fr})"
       [ "$code" = 0 ] || rc=1
     fi
   done
@@ -2261,12 +2285,24 @@ kiro_thinking() { # <출력 파일>  → 지금 이어지는 생각의 글자 �
     /"sessionUpdate":"(agent_message_chunk|tool_call|tool_call_update)"/ || /"type":"runFinished"/ { on = 0 }
     END { if (on && n > 0) print n }'
 }
+# 코드 0 으로 끝났지만 aw 가 실패로 바꾼 사유 (run.sh 가 meta 에 적음)
+fail_reason_text() { # <워커디렉터리>
+  case "$(meta_get "$1" fail_reason)" in
+    model_refused) printf '%s' 'kiro-cli 는 코드 0 이었지만 모델이 거절해 도중에 멈춤, 사유는 aw peek' ;;
+    tools_denied)  printf '%s' 'kiro-cli 는 코드 0 이었지만 쓰기·명령이 거부됨, --trust-all-tools 필요 (aw defaults)' ;;
+  esac
+}
+
 # kiro-cli 는 모델이 거절해 도중에 멈춰도 runFinished 에 status success, stopReason end_turn 을
 # 적고 코드 0 으로 끝납니다. 거절은 턴 끝(turn_end)의 stopReason content_filtered 와
 # stopDetails.refusal.category 에만 남고, 답은 "The selected model cannot continue this
 # conversation…" 입니다 (실측). 그래서 peek 이 따로 알려 줍니다.
 kiro_refusal_note() { # <워커디렉터리>
   kr_o="$1/out"
+  if grep -q 'tool permission approval is not supported' "$1/err" 2>/dev/null; then
+    say "$(peek_label '주의')쓰기·명령이 거부됐습니다 (--trust-all-tools 없이 비대화형). 코드 0 이지만 하지 못했습니다."
+    say "                기본 옵션(aw defaults)을 켜 두면 --trust-all-tools 가 붙습니다."
+  fi
   if grep -q '"stopReason":"content_filtered"' "$kr_o" 2>/dev/null; then
     kr_cat=$(grep -o '"refusal":{"category":"[A-Z_]*"' "$kr_o" | tail -1 | sed 's/.*"category":"//; s/"$//')
   elif json_str finalText < "$kr_o" 2>/dev/null | grep -q 'The selected model cannot continue this conversation'; then
@@ -4219,10 +4255,10 @@ aw rm review
   `codex exec --json --skip-git-repo-check "작업"`
 - **agy** 는 `-p='작업'` 처럼 붙여 씁니다. `-p` 가 바로 다음 토큰을 프롬프트로 먹습니다.
 - **devin** 은 프롬프트가 `-p` 바로 뒤에 와야 합니다.
-- **kiro-cli** 는 `chat` 을 꼭 붙입니다. `--trust-all-tools` 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로
-  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다. 모델이 거절해도 코드 0 이고 답이
-  "The selected model cannot continue this conversation…" 뿐입니다. 그러면 실패로 보고 `aw peek` 으로 사유를
-  봅니다. kiro 에게는 생각 과정을 적어 달라고 쓰지 않습니다 (생각 빼내기로 거절당함).
+- **kiro-cli** 는 `chat` 을 꼭 붙입니다. kiro 는 모델이 거절하거나(content_filtered) `--trust-all-tools` 없이
+  쓰기·명령을 거부당해도 코드 0 으로 끝나는데, aw 가 이 둘은 실패(코드 1)로 남기고 `aw wait`·`aw status` 에
+  사유를 적습니다. 그 밖의 실패(답으로만 "못 했다" 고 한 경우)는 코드로 잡히지 않으니, 파일을 고친 작업은
+  답과 실제 변경을 확인합니다. kiro 에게는 생각 과정을 적어 달라고 쓰지 않습니다 (생각 빼내기로 거절당함).
 - 모델 목록: `agy models`, `devin models list`, `kiro-cli chat --list-models`. 주의할 점 전체: `aw help agents`.
 
 ## 긴 프롬프트

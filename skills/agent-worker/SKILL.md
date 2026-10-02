@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.20.0"
+  version: "0.20.1"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -147,10 +147,10 @@ aw rm review
   `codex exec --json --skip-git-repo-check "작업"`
 - **agy** 는 `-p='작업'` 처럼 붙여 씁니다. `-p` 가 바로 다음 토큰을 프롬프트로 먹습니다.
 - **devin** 은 프롬프트가 `-p` 바로 뒤에 와야 합니다.
-- **kiro-cli** 는 `chat` 을 꼭 붙입니다. `--trust-all-tools` 가 없으면 파일 쓰기를 거부당하고도 코드 0 으로
-  끝나니, 파일을 고친 작업은 답(`finalText`)과 실제 변경을 확인합니다. 모델이 거절해도 코드 0 이고 답이
-  "The selected model cannot continue this conversation…" 뿐입니다. 그러면 실패로 보고 `aw peek` 으로 사유를
-  봅니다. kiro 에게는 생각 과정을 적어 달라고 쓰지 않습니다 (생각 빼내기로 거절당함).
+- **kiro-cli** 는 `chat` 을 꼭 붙입니다. kiro 는 모델이 거절하거나(content_filtered) `--trust-all-tools` 없이
+  쓰기·명령을 거부당해도 코드 0 으로 끝나는데, aw 가 이 둘은 실패(코드 1)로 남기고 `aw wait`·`aw status` 에
+  사유를 적습니다. 그 밖의 실패(답으로만 "못 했다" 고 한 경우)는 코드로 잡히지 않으니, 파일을 고친 작업은
+  답과 실제 변경을 확인합니다. kiro 에게는 생각 과정을 적어 달라고 쓰지 않습니다 (생각 빼내기로 거절당함).
 - 모델 목록: `agy models`, `devin models list`, `kiro-cli chat --list-models`. 주의할 점 전체: `aw help agents`.
 
 ## 긴 프롬프트
