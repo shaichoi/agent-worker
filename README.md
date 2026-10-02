@@ -488,7 +488,7 @@ aw resume job-r1 -- '테스트도 추가해줘'                   # → job-r2
 | --- | --- | --- |
 | `claude` | `--resume <session_id>` | |
 | `agy` | `--conversation <conversation_id>` | |
-| `codex` | `codex exec resume <thread_id>` | 이 서브명령이 `--sandbox` 를 안 받아 기본 옵션을 자동으로 끕니다 |
+| `codex` | `codex exec resume <thread_id>` | 이 서브명령은 프롬프트 뒤 옵션과 `--sandbox` 를 안 받아, 기본 옵션을 `resume` 앞(`exec` 의 옵션 자리)에 붙입니다. 붙이지 않으면 모델이 `config.toml` 의 것으로 바뀝니다(실측: luna 로 시작한 대화가 astra 로) |
 | `devin` | `-c` | 텍스트만 내놓아 세션 ID 를 못 뽑습니다. 아래 참고 |
 | `kiro-cli` | `kiro-cli chat --resume-id <sessionId>` | `chat` 으로 시작한 워커만 |
 

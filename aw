@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.19.0
+AW_VERSION=0.19.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -140,8 +140,9 @@ devin
 codex — OpenAI Codex CLI
   aw run -n x1 -- codex exec --json "작업"
   aw run -n x2 -f spec.md -- codex exec --json -    # stdin 을 - 로 받습니다
-  이어하기: codex exec resume <thread_id>. 이 서브명령은 --sandbox 를 안 받아서
-            aw resume 이 기본 옵션을 자동으로 끕니다.
+  이어하기: codex exec resume <thread_id>. 이 서브명령은 프롬프트 뒤 옵션과 --sandbox 를
+            안 받아서, aw resume 은 기본 옵션을 resume 앞(exec 의 옵션 자리)에 붙입니다.
+            붙이지 않으면 모델이 config.toml 의 것으로 바뀝니다 (샌드박스는 세션에서 물려받음).
   주의: git 저장소 밖에서는 --skip-git-repo-check 가 필요합니다 (프롬프트 앞에).
         codex 의 workspace-write 샌드박스 안에서는 aw 를 못 돌립니다. 워커
         기록을 ~/.local/share 에 쓰고, 띄운 에이전트가 네트워크를 써야 해서입니다.
@@ -1246,6 +1247,7 @@ run_argv() { # <인자...>
   if [ "$no_defaults" -ne 1 ]; then
     dgroups=$(defaults_for "$1")
     rw_pm=$(profile_model "$@")
+    rw_nadd=0
     while IFS= read -r dg; do
       [ -n "$dg" ] || continue
       # 프로필이 모델을 정하면(aw gateway 로 만든 것 등) 모델 줄은 붙이지 않습니다.
@@ -1272,7 +1274,7 @@ run_argv() { # <인자...>
       while [ -n "$rest" ]; do
         tok=${rest%% *}
         case "$rest" in *' '*) rest=${rest#* } ;; *) rest='' ;; esac
-        [ -n "$tok" ] && set -- "$@" "$tok"
+        [ -n "$tok" ] && { set -- "$@" "$tok"; rw_nadd=$((rw_nadd + 1)); }
       done
     done <<DG
 $dgroups
@@ -1280,7 +1282,30 @@ DG
   fi
 
   rw_words=''
-  for a in "$@"; do rw_words="$rw_words $(shquote "$a")"; done
+  # codex exec resume 은 프롬프트 뒤의 옵션도, resume 뒤의 --sandbox 도 받지 않습니다 (실측).
+  # 그래서 이어하기면 붙인 기본 옵션을 resume 앞, exec 의 옵션 자리로 옮깁니다. 붙이지 않으면
+  # 샌드박스는 세션에서 물려받지만 모델은 config.toml 의 것으로 바뀝니다 (실측: luna 로 시작한 대화가 astra 로).
+  rw_res=0
+  if [ "${1##*/}" = codex ] && [ "${2:-}" = exec ] && [ "${rw_nadd:-0}" -gt 0 ] && [ "${no_defaults:-0}" -ne 1 ]; then
+    case "${3:-}:${5:-}:${4:-}" in
+      resume:*) rw_res=3 ;;
+      --profile:resume:* | -p:resume:*) rw_res=5 ;;
+      --profile=*:*:resume) rw_res=4 ;;
+    esac
+  fi
+  if [ "$rw_res" -gt 0 ]; then
+    rw_keep=$(($# - rw_nadd)); rw_i=0; rw_add=''
+    for a in "$@"; do rw_i=$((rw_i + 1)); [ "$rw_i" -gt "$rw_keep" ] && rw_add="$rw_add $(shquote "$a")"; done
+    rw_i=0
+    for a in "$@"; do
+      rw_i=$((rw_i + 1))
+      [ "$rw_i" -gt "$rw_keep" ] && break
+      [ "$rw_i" -eq "$rw_res" ] && rw_words="$rw_words$rw_add"
+      rw_words="$rw_words $(shquote "$a")"
+    done
+  else
+    for a in "$@"; do rw_words="$rw_words $(shquote "$a")"; done
+  fi
 }
 
 # 실행 스크립트 (인자를 따옴표로 보존). exec 라 종료 코드는 run.sh 가 받습니다.
@@ -1847,9 +1872,7 @@ cmd_resume() {
   # 기본 프로필로 이어하면 --resume 이 세션을 못 찾습니다.
   sprof=$(meta_get "$sd" profile)
   [ -n "$sprof" ] && opts="$opts --profile $(shquote "$sprof")"
-  # codex exec resume 은 프롬프트 뒤 플래그를 받지 않습니다.
-  cfile="$sd/cmd.orig"; [ -f "$cfile" ] || cfile="$sd/cmd"
-  case "$(head -1 "$cfile")" in *codex) opts="$opts --no-defaults" ;; esac
+  # codex 는 기본 옵션을 resume 앞에 붙입니다 (run_argv). 프롬프트 뒤에 붙이면 codex 가 거절합니다.
 
   set --
   while IFS= read -r a; do set -- "$@" "$a"; done <<ARGV

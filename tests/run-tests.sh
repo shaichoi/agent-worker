@@ -559,8 +559,8 @@ check "agy: --conversation 을 붙이고 -p= 를 갈아 끼움" \
 "$AW" wait r-codex >/dev/null 2>&1
 "$AW" resume r-codex -- 새프롬프트 >/dev/null 2>&1
 "$AW" wait r-codex-r1 >/dev/null 2>&1
-check "codex: exec resume 으로 바꾸고 --sandbox 를 떼어냄" \
-  "$(printf -- 'exec\nresume\nTID1\n--json\n새프롬프트')" \
+check "codex: exec resume 으로 바꾸고 기본 옵션은 resume 앞에" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n새프롬프트')" \
   "$("$AW" errs r-codex-r1)"
 
 # codex 의 stdin 표식 '-' 는 새 프롬프트와 같이 있으면 안 됩니다
@@ -570,8 +570,28 @@ printf '사양\n' > "$TMPROOT/rspec.md"
 "$AW" resume r-cxf -- 새프롬프트 >/dev/null 2>&1
 "$AW" wait r-cxf-r1 >/dev/null 2>&1
 check "codex: stdin 표식 - 를 걷어냄" \
-  "$(printf -- 'exec\nresume\nTID1\n--json\n새프롬프트')" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n새프롬프트')" \
   "$("$AW" errs r-cxf-r1)"
+# 이어하기에서도 기본 모델이 붙음 (안 붙으면 codex 가 config.toml 의 모델로 바꿈), 사용자가 준 모델은 그대로
+printf 'codex --sandbox workspace-write\ncodex --model gpt-d\n' > "$AW_DEFAULTS"
+"$AW" resume r-codex -n r-codex-m -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-codex-m >/dev/null 2>&1
+check "codex 이어하기: 기본 모델도 resume 앞에" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\n--model\ngpt-d\nresume\nTID1\n--json\n새프롬프트')" \
+  "$("$AW" errs r-codex-m)"
+"$AW" run -n r-cxm -- codex exec --json -m mine 원래 >/dev/null 2>&1
+"$AW" wait r-cxm >/dev/null 2>&1
+"$AW" resume r-cxm -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-cxm-r1 >/dev/null 2>&1
+check "codex 이어하기: 사용자가 준 모델이면 기본 모델은 안 붙음" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n-m\nmine\n새프롬프트')" \
+  "$("$AW" errs r-cxm-r1)"
+"$AW" resume r-codex -n r-codex-nd --no-defaults -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-codex-nd >/dev/null 2>&1
+check "codex 이어하기: --no-defaults 면 안 붙음" \
+  "$(printf -- 'exec\nresume\nTID1\n--json\n새프롬프트')" \
+  "$("$AW" errs r-codex-nd)"
+printf 'claude --permission-mode bypassPermissions\ncodex --sandbox workspace-write\n' > "$AW_DEFAULTS"
 
 # -f 로 돌린 워커는 인자에 프롬프트가 없으니 걷어낼 것도 없습니다
 "$AW" run -n r-cf -f "$TMPROOT/rspec.md" -- claude -p --output-format json >/dev/null 2>&1
@@ -1824,9 +1844,9 @@ awg run -n gw-w --profile work -- claude -p 작업 >/dev/null 2>&1; awg wait gw-
 has "모델을 정하지 않는 claude 프로필이면 기본 모델이 붙음" "$(awg result gw-w)" "opus-x"
 # 이어하기: codex 의 --profile 은 exec 의 옵션이라 resume 앞에 둠 (뒤에 두면 codex 가 거절)
 awg resume gw-c -n gw-c2 -- 다음 >/dev/null 2>&1; awg wait gw-c2 >/dev/null 2>&1
-check "codex 이어하기는 --profile 을 resume 앞에" "exec --profile opengateway resume tid-gw" "$(awg result gw-c2 | sed -n '2,6p' | tr '\n' ' ' | sed 's/ $//')"
+check "codex 이어하기는 --profile 과 기본 옵션을 resume 앞에 (모델 줄은 빠짐)" "exec --profile opengateway --sandbox workspace-write resume tid-gw" "$(awg result gw-c2 | sed -n '2,8p' | tr '\n' ' ' | sed 's/ $//')"
 awg resume gw-c2 -n gw-c3 -- 또 >/dev/null 2>&1; awg wait gw-c3 >/dev/null 2>&1
-check "이은 워커를 다시 이어도 같음" "exec --profile opengateway resume tid-gw" "$(awg result gw-c3 | sed -n '2,6p' | tr '\n' ' ' | sed 's/ $//')"
+check "이은 워커를 다시 이어도 같음" "exec --profile opengateway --sandbox workspace-write resume tid-gw" "$(awg result gw-c3 | sed -n '2,8p' | tr '\n' ' ' | sed 's/ $//')"
 awg rm gw-c gw-c2 gw-c3 gw-m gw-p gw-l gw-w >/dev/null 2>&1
 
 has "rm: 지움" "$(awg gateway rm opengateway)" "지움:"
