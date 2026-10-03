@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.22.2
+AW_VERSION=0.23.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -20,6 +20,7 @@ AW_BRIEF="${AW_BRIEF:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/brief}"
 AW_PICK="${AW_PICK:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/pick}"
 AW_PICK_KEYFILE="${AW_PICK_KEYFILE:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/typesafe-key}"
 AW_GATEWAY_KEYS="${AW_GATEWAY_KEYS:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/gateway-keys}"
+TAB=$(printf '\t')
 
 die()  { printf '%s\n' "$*" >&2; exit 1; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -34,7 +35,8 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw list [--json]                     목록과 상태
   aw wait <이름...> [--timeout N]      끝날 때까지 대기 (종료 코드로 성패)
   aw result <이름> [--field KEY]       출력 전문, 또는 JSON 필드 하나
-  aw resume <이름> -- '프롬프트'        그 워커의 대화를 이어서 새 워커로
+  aw resume <이름> [--fork] -- '프롬프트'   그 워커의 대화를 이어서 새 워커로 (같은 모델·수준)
+  aw resume --list [-d 경로] [--json]  이어할 만한 워커: 모델·수준, 캐시가 살아 있을지, 문맥 크기
   aw say <이름> [--now|--interrupt] -- '메시지'   도는 claude 워커에 같은 세션으로 메시지
   aw logs|errs <이름> [-f] [-n N]      표준 출력 / 표준 오류
   aw peek [이름...]                    지금 도는 명령, 최근 활동, worktree 변경
@@ -81,6 +83,7 @@ wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 /
   aw help pick      (실험용) 에이전트 고르기: 켜고 끄기, 키, 고르는 기준
   aw help models    설치된 CLI 의 모델 목록, 기본 옵션의 모델이 목록에 없을 때
   aw help gateway   게이트웨이(OpenGateway 등) 모델로 워커 띄우기: 만들기, 키, 띄우는 법
+  aw help resume    대화 이어하기: 언제 이을지 (캐시·문맥 실측), 갈래(--fork), 이어할 후보
 USAGE
 }
 
@@ -92,6 +95,7 @@ help_topic() {
 대화 이어하기는 aw resume <워커> -- '프롬프트' 로 합니다. 세션 ID 는 aw 가
 끝난 워커의 출력에서 찾아 meta 에 적어 둡니다 (aw status 에서 볼 수 있습니다).
 claude/codex/kiro-cli 는 프롬프트를 맨 끝 인자로 둬야 이어할 때 제대로 걷어냅니다.
+언제 이으면 좋은지, 갈래(--fork), 이어할 후보 보기: aw help resume
 
 진행을 보려면 claude·agy·kiro-cli 는 stream-json 으로 띄우세요. 도중 사건이 출력에 쌓여
 aw peek / aw logs -f 로 보이고, 끝난 뒤 --field 는 json 과 똑같이 됩니다.
@@ -307,8 +311,10 @@ T
     files) printf '워커 기록: %s/<이름>/\n\n' "$AW_WORKERS"; cat <<'T'
 
   meta      이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표, 토큰 추정치, 세션 ID,
+            이어한 출처 (resumed_from, 갈래면 fork_of),
             aw 가 코드를 바꿨으면 원래 코드와 사유 (agent_exit, fail_reason: kiro-cli 의 거절·권한 거부)
   cmd       실행한 인자 (한 줄에 하나). aw say 모드면 프롬프트가 든 명령이고, 실제 실행은 launch.sh
+  args      cmd 와 같은 인자를 따옴표로 감싼 그대로 (aw resume 이 원래 모델·수준을 여기서 읽음)
   cmd.orig  기본 옵션을 붙이기 전, 사용자가 준 인자 (한 줄에 하나)
   args.orig 같은 인자를 따옴표로 감싼 그대로 (aw resume 이 씀. 여러 줄 프롬프트도 온전)
   out / err 표준 출력 / 표준 오류
@@ -420,9 +426,67 @@ T
   aw status 에 보입니다.
 T
       ;;
+    resume) cat <<'T'
+대화 이어하기 (aw resume)
+
+  aw resume <워커> -- '새 프롬프트'          같은 세션으로 잇는 새 워커 (<워커>-r1, -r2 ...)
+  aw resume <워커> --fork -- '새 프롬프트'   갈래: 원래 세션은 두고 새 세션으로 (<워커>-f1 ...). claude·codex 만
+  aw resume --list [-d 경로] [--json]        이어할 만한 워커 (세션마다 마지막 것, 최근에 끝난 순)
+
+물려받는 것: 명령과 옵션, 디렉터리, claude 프로필, 그리고 모델·추론 수준.
+  모델·수준은 원래 워커가 실제로 쓴 것입니다 (넘긴 인자, codex 는 세션 파일의 turn_context 도 봄).
+  그사이 aw defaults 를 바꿨어도 원래 것으로 잇고, 지금 기본값과 다르면 한 줄 알립니다.
+  일부러 바꾸려면 --model, --effort (모델이 바뀌면 앞 대화를 캐시 없이 다시 읽음).
+  -e 환경변수는 이어지지 않으니 다시 줍니다. 여러 줄 프롬프트도 그대로 넘어갑니다 (0.22.2 부터).
+
+언제 이으면 좋은가 (새로 띄우는 것보다)
+  잇는 게 나음: 아래가 다 맞을 때
+    - 같은 저장소·같은 기능 근처의 다음 일. 앞 워커가 읽은 파일을 또 읽게 될 일 (리뷰 반영, 다음 단계, 테스트 추가)
+    - 같은 에이전트·모델·수준 (aw resume --list 의 "지금 기본값과 같음")
+    - 캐시가 살아 있음: claude 는 끝난 지 1시간 안, codex 는 30분 안
+    - 문맥이 크지 않음. 이으면 요청마다 앞 대화 전체를 다시 읽고(캐시라도 값의 10%), 창이 차면 압축돼 캐시와 세부를 잃음
+  새로 띄우는 게 나음
+    - 상관없는 일 (앞 대화가 잡음), 독립 검토·두 번째 의견 (앞 판단에 끌려감)
+    - 캐시가 식었고 다시 모으기 쉬운 문맥, 문맥이 크거나 이미 압축된 대화
+    - 그사이 파일이 많이 바뀜. 그래도 이으면 바뀐 것을 프롬프트에 적어 줌 (워커는 옛 내용을 기억함)
+  한 바탕에서 비슷한 일 여럿을 나란히: 저장소를 훑은 워커 하나를 --fork 로 여러 갈래.
+    claude 갈래는 앞 대화를 캐시로 같이 읽고, codex 갈래는 첫 요청에서 앞 대화를 다시 읽습니다 (아래 근거).
+
+근거 (이 컴퓨터의 claude·codex 기록으로 잰 것, 2026-10)
+  - codex 를 이으니 요청 13번·3분 45초에 걸쳐 쌓은 문맥 7.5만 토큰을 2분 뒤 첫 요청에서 99.8% 캐시로 읽고,
+    다음 일을 요청 3번·57초에 끝냄.
+  - claude (1시간짜리 캐시): 앞 요청과 60분 안이면 캐시 적중 중앙값 100% (표본 2천여 개), 1~2시간 7%, 2~24시간 6%.
+    식은 뒤 이으면 앞 대화 전체를 다시 씀 (1시간짜리 캐시 쓰기는 입력값의 2배, 캐시 읽기는 10%).
+  - codex: 30분 안 99.8~99.9% (표본 51), 4시간·14시간 뒤 18~21% (시스템 프롬프트쯤). 30분~4시간은 못 잼.
+  - codex 가 21~24만 토큰에서 압축된 세 번 모두 그 직후 적중 0%.
+  - 캐시는 모델마다 따로라 모델이 바뀌면 다시 읽음. 추론 수준만 바꿨을 때는 재 보지 못함.
+  - 갈래: claude (--fork-session) 는 첫 요청에서 앞 문맥 26,850 토큰을 다 캐시로 읽음. codex (exec fork) 는
+    같은 때 이어하기가 99% 를 읽은 것과 달리 12,288 토큰(시스템 프롬프트쯤, 75%)만 읽음. 캐시를 스레드마다
+    나누는 것으로 보임 (각 1번 잼). 그래도 다시 훑는 시간은 아낌.
+  - 게이트웨이(aw gateway)로 돈 claude 워커는 토큰 수를 0 으로 내서 캐시를 모름.
+
+같은 세션은 한 번에 한 워커만
+  그 세션을 쓰는 워커가 돌고 있으면 aw resume 이 거절합니다. 끝난 뒤 잇거나(aw wait), 나란히면 --fork.
+
+에이전트별
+  claude    --resume <session_id>, 갈래는 --fork-session
+  codex     codex exec resume <thread_id>, 갈래는 codex exec fork <thread_id>
+            기본 옵션은 resume·fork 앞(exec 의 옵션 자리)에, 모델·수준은 그 뒤 --model·-c model_reasoning_effort=
+  agy       --conversation <conversation_id>
+  kiro-cli  chat --resume-id <sessionId>
+  devin     세션 ID 를 못 뽑아 -c (그 디렉터리의 가장 최근 대화). 같은 디렉터리에 여럿이면 엉뚱할 수 있음
+  갈래는 claude·codex 만 됩니다 (kiro-cli·agy·devin 은 CLI 에 없음)
+
+aw resume --list 의 칸
+  캐시      살아 있을 것 (남은 시간) / 식었을 것 / 모름. claude 는 출력의 캐시 쓰기 종류로 1시간·5분을 앎
+  문맥      마지막 요청의 토큰 수 (codex 는 창의 %도, kiro-cli 는 %만). 이으면 요청마다 이만큼을 다시 읽음
+  기본값과  원래 모델·수준이 지금 기본 옵션과 같은지 (둘 다 아는 칸만 견줌)
+  비슷한 작업인지는 aw 가 판단하지 않습니다. 작업 첫 줄과 aw result 를 보고 고릅니다.
+T
+      ;;
     '') usage ;;
     *) warn "그런 도움말 주제가 없습니다: $1"
-       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief, pick, models"
+       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief, pick, models, gateway, resume"
        return 1 ;;
   esac
 }
@@ -656,7 +720,7 @@ old_flag_bool() { # <에이전트> <옵션>
 # 이어하기를 또 이어할 때 --resume 이 겹치지 않게 하는 것이 두 번째 몫입니다.
 resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <옛 기록(1/0)> <인자...>
   rmode=$1; rhas=$2; rold=$3; shift 3
-  rskip=0; rn=$#; ri=0; rval=0; rtail=0; rdrop=0; rlast=0
+  rskip=0; rn=$#; ri=0; rval=0; rtail=0; rdrop=0; rlast=0; rcpend=0
   for ra in "$@"; do
     ri=$((ri + 1))
     if [ "$rskip" -eq 1 ]; then
@@ -664,12 +728,27 @@ resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <옛
       # 값처럼 보이지 않으면(플래그면) 버리지 않고 살립니다.
       case "$ra" in -*) ;; *) continue ;; esac
     fi
+    # 모델·수준 옵션은 걷어냅니다. aw resume 이 원래 워커가 쓴 것(또는 --model, --effort 로 준 것)을 다시 넣습니다.
+    # codex 의 -c 는 값이 model_reasoning_effort=… 일 때만 걷습니다 (다른 설정은 남김).
+    if [ "$rcpend" -eq 1 ]; then
+      rcpend=0
+      case "$ra" in model_reasoning_effort=*) continue ;; esac
+      qwords -c; rval=1
+    fi
+    case "$ra" in
+      --*=*) [ -n "$(setting_kind "$rmode" "${ra%%=*}")" ] && continue ;;
+      -?*) if [ -n "$(setting_kind "$rmode" "$ra")" ]; then rskip=1; continue; fi ;;
+    esac
+    if [ "$rmode" = codex ] && [ "$ri" -lt "$rn" ]; then
+      case "$ra" in -c | --config) rcpend=1; continue ;; --config=model_reasoning_effort=*) continue ;; esac
+    fi
     case "$rmode" in
       claude)
         case "$ra" in
           --resume) rskip=1; continue ;;
           --resume=*) continue ;;
           -c | --continue) continue ;;
+          --fork-session) continue ;;
         esac
         # 프롬프트는 맨 끝 인자입니다.
         if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then rlast=1; continue; fi
@@ -733,14 +812,16 @@ resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <옛
 }
 
 # 이어하기 명령을 만들어 따옴표로 감싸 냅니다 (cmd_resume 이 eval "set -- …" 로 되돌림).
+# 모델·수준 옵션(따옴표 덩어리)은 프롬프트 바로 앞에 넣습니다 (devin 은 맨 뒤). 갈래(fork)는 claude 의
+# --fork-session, codex 의 exec fork 이고, 다른 에이전트는 5 로 끝납니다.
 #
 # 여기가 에이전트별 지식이 모이는 유일한 곳입니다. 새 에이전트를 붙이려면
 # 이 case 에 한 갈래만 더하면 됩니다.
 #
 # 프롬프트가 원래 어디 있었는지는 meta 의 stdin 으로 압니다. 파일을 물렸으면
 # 인자에는 프롬프트가 없고, /dev/null 이면 인자에 있었습니다.
-resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
-  rd=$1; rsid=$2; rp=$3
+resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트> [모델·수준 옵션] [갈래 1/0]
+  rd=$1; rsid=$2; rp=$3; rpin=${4:-}; rfork=${5:-0}
   set --
   if [ -f "$rd/args.orig" ]; then
     eval "set -- $(cat "$rd/args.orig")"; rold=0
@@ -757,13 +838,17 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
     claude)
       [ -n "$rsid" ] || return 3
       qwords "$rprog" --resume "$rsid"
+      [ "$rfork" -eq 1 ] && qwords --fork-session
       resume_rest claude "$rhas" "$rold" "$@"
+      printf '%s' "$rpin"
       qwords "$rp"
       ;;
     agy)
+      [ "$rfork" -eq 1 ] && return 5
       [ -n "$rsid" ] || return 3
       qwords "$rprog" --conversation "$rsid"
       resume_rest agy "$rhas" "$rold" "$@"
+      printf '%s' "$rpin"
       qwords "-p=$rp"
       ;;
     codex)
@@ -782,33 +867,346 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
         set -- "$@" "$ra"
       done
       shift "$rn0"
-      # 이미 이어하기 명령이면 'resume <id>' 를 걷어내고 새로 붙입니다.
-      [ "${1:-}" = resume ] && { shift; [ $# -gt 0 ] && case "$1" in -*) ;; *) shift ;; esac; }
+      # 이미 이어하기·갈래 명령이면 'resume <id>' / 'fork <id>' 를 걷어내고 새로 붙입니다.
+      case "${1:-}" in resume | fork) shift; [ $# -gt 0 ] && case "$1" in -*) ;; *) shift ;; esac ;; esac
       qwords "$rprog" exec
       [ -n "$rprof" ] && qwords --profile "$rprof"
-      qwords resume "$rsid"
+      if [ "$rfork" -eq 1 ]; then qwords fork "$rsid"; else qwords resume "$rsid"; fi
       resume_rest codex "$rhas" "$rold" "$@"
+      printf '%s' "$rpin"
       qwords "$rp"
       ;;
     devin)
+      [ "$rfork" -eq 1 ] && return 5
       # devin 은 프롬프트가 -p 바로 뒤에 와야 해서 앞으로 뺍니다.
       # 세션 ID 를 비대화형으로 얻을 길이 없어 보통 -c 로 갑니다.
       qwords "$rprog" -p "$rp"
       if [ -n "$rsid" ]; then qwords -r "$rsid"; else qwords -c; fi
       resume_rest devin "$rhas" "$rold" "$@"
+      printf '%s' "$rpin"
       ;;
     kiro-cli)
+      [ "$rfork" -eq 1 ] && return 5
       # v3 엔진은 v2 로 시작한 세션도 이어받습니다 (실측). 엔진이 바뀌어도 됩니다.
       [ -n "$rsid" ] || return 3
       [ "${1:-}" = chat ] || return 4
       shift
       qwords "$rprog" chat --resume-id "$rsid"
       resume_rest kiro-cli "$rhas" "$rold" "$@"
+      printf '%s' "$rpin"
       qwords "$rp"
       ;;
     *) return 2 ;;
   esac
   return 0
+}
+
+# ---------------------------------------------------------------- 이어하기: 설정 그대로, 갈래, 후보
+
+# 모델·추론 수준을 정하는 옵션입니다. 이어할 때는 원래 워커가 실제로 쓴 것을 그대로 씁니다. 캐시는 모델마다
+# 따로라서, 그사이 기본 옵션(aw defaults)이 바뀌어 다른 모델로 이으면 앞 대화를 통째로 다시 읽힙니다.
+# codex 의 수준은 옵션이 아니라 설정(model_reasoning_effort)이라 -c model_reasoning_effort=… 로 다룹니다.
+setting_kind() { # <에이전트> <옵션(=값 뺀 것)>  → model | effort | 빈 값
+  case "$1:$2" in
+    claude:--model | agy:--model | devin:--model | kiro-cli:--model | codex:--model | codex:-m) printf model ;;
+    claude:--effort | agy:--effort) printf effort ;;
+  esac
+}
+
+# 인자에서 모델과 수준을 찾습니다 → "모델<TAB>수준" (없으면 빈 칸)
+settings_in() { # <에이전트> <인자...>
+  si_ag=$1; shift; si_m=''; si_e=''; si_nx=''
+  for si_a in "$@"; do
+    if [ -n "$si_nx" ]; then
+      case "$si_nx" in
+        model) si_m=$si_a ;;
+        effort) si_e=$si_a ;;
+        cfg) case "$si_a" in model_reasoning_effort=*) si_e=$(printf '%s' "${si_a#*=}" | tr -d "\"'") ;; esac ;;
+      esac
+      si_nx=''; continue
+    fi
+    case "$si_a" in
+      -c | --config) [ "$si_ag" = codex ] && si_nx=cfg ;;
+      --config=model_reasoning_effort=*)
+        [ "$si_ag" = codex ] && si_e=$(printf '%s' "${si_a#--config=model_reasoning_effort=}" | tr -d "\"'") ;;
+      # setting_kind 과 같은 판단을 하위 셸 없이 합니다 (aw resume --list 가 워커마다 부름).
+      --model=* | -m=*) case "$si_ag:${si_a%%=*}" in codex:-m | *:--model) si_m=${si_a#*=} ;; esac ;;
+      --effort=*) case "$si_ag" in claude | agy) si_e=${si_a#*=} ;; esac ;;
+      --model) si_nx=model ;;
+      -m) [ "$si_ag" = codex ] && si_nx=model ;;
+      --effort) case "$si_ag" in claude | agy) si_nx=effort ;; esac ;;
+    esac
+  done
+  printf '%s\t%s' "$si_m" "$si_e"
+}
+
+# 기본 옵션의 한 줄이 모델·수준을 정하는 줄인지 (이어하기는 이런 줄을 붙이지 않고 원래 워커의 것을 씀)
+group_setting() { # <명령 이름> <묶음>
+  gs_c=${1##*/}; gs_rest=$2
+  while [ -n "$gs_rest" ]; do
+    gs_t=${gs_rest%% *}
+    case "$gs_rest" in *' '*) gs_rest=${gs_rest#* } ;; *) gs_rest='' ;; esac
+    case "$gs_t" in model_reasoning_effort=* | --config=model_reasoning_effort=*) [ "$gs_c" = codex ] && return 0 ;; esac
+    case "$gs_t" in -?*) [ -n "$(setting_kind "$gs_c" "${gs_t%%=*}")" ] && return 0 ;; esac
+  done
+  return 1
+}
+
+# 한 줄에 하나인 옛 기록(cmd, cmd.orig)을 따옴표 덩어리로 (qwords 와 같은 꼴, 줄마다 sed 를 안 띄움)
+qlines() { # <파일>
+  LC_ALL=C awk -v q="'" '{
+    s = $0; o = ""
+    while ((i = index(s, q)) > 0) { o = o substr(s, 1, i - 1) q "\\" q q; s = substr(s, i + 1) }
+    printf " %s%s%s", q, o s, q
+  }' "$1"
+}
+
+# 워커가 실제로 넘긴 인자 (따옴표 덩어리). 0.22.x 까지의 기록은 cmd 를 한 줄에 하나로 읽습니다.
+worker_args() { # <워커디렉터리>
+  if [ -f "$1/args" ]; then cat "$1/args"; return 0; fi
+  [ -f "$1/cmd" ] && qlines "$1/cmd"
+  return 0
+}
+
+# 사용자가 준 인자 (args.orig, 없으면 cmd.orig 를 한 줄에 하나로)
+worker_args_orig() { # <워커디렉터리>
+  if [ -f "$1/args.orig" ]; then cat "$1/args.orig"; return 0; fi
+  wo_f="$1/cmd.orig"; [ -f "$wo_f" ] || wo_f="$1/cmd"
+  [ -f "$wo_f" ] && qlines "$wo_f"
+  return 0
+}
+
+# codex 세션 파일의 마지막 turn_context 에 적힌 모델과 수준 → "모델<TAB>수준"
+codex_turn_setting() { # <세션 파일>
+  ct_l=$(grep '"type":"turn_context"' "$1" 2>/dev/null | tail -1)
+  printf '%s\t%s' "$(printf '%s' "$ct_l" | json_str model)" "$(printf '%s' "$ct_l" | json_str effort)"
+}
+
+# codex 설정 파일의 맨 위(표 밖) 값. 프로필 파일(<이름>.config.toml)이 먼저입니다.
+codex_cfg_get() { # <키> [프로필]
+  for cg_f in ${2:+"${CODEX_HOME:-$HOME/.codex}/$2.config.toml"} "${CODEX_HOME:-$HOME/.codex}/config.toml"; do
+    [ -f "$cg_f" ] || continue
+    cg_v=$(LC_ALL=C awk -v k="$1" '
+      /^[[:space:]]*\[/ { exit }
+      { l = $0; sub(/^[[:space:]]+/, "", l) }
+      index(l, k) == 1 {
+        r = substr(l, length(k) + 1)
+        if (r ~ /^[[:space:]]*=/) {
+          sub(/^[[:space:]]*=[[:space:]]*/, "", r); sub(/[[:space:]]*#.*/, "", r); gsub(/["\047]/, "", r); sub(/[[:space:]]+$/, "", r)
+          print r; exit
+        }
+      }' "$cg_f")
+    [ -n "$cg_v" ] && { printf '%s' "$cg_v"; return 0; }
+  done
+  return 0
+}
+
+# 원래 워커가 실제로 쓴 모델과 수준 → "모델<TAB>수준". 인자에서 찾고, codex 는 인자에 없으면 세션 파일에서
+# 찾습니다 (모델은 config.toml, 수준은 model_reasoning_effort 가 정해서 인자에 안 남음). 다만 codex 프로필
+# (aw gateway 등)로 띄운 워커의 모델은 프로필에 맡깁니다.
+orig_settings() { # <워커디렉터리> <에이전트>
+  os_d=$1; os_ag=$2
+  eval "set -- $(worker_args "$os_d")"
+  os_s=$(settings_in "$os_ag" "$@")
+  if [ "$os_ag" = codex ]; then
+    os_m=${os_s%%"$TAB"*}; os_e=${os_s#*"$TAB"}
+    shift; os_prof=$(codex_profile_arg "$@")
+    if [ -z "$os_m" ] || [ -z "$os_e" ]; then
+      os_r=$(codex_rollout "$os_d")
+      if [ -n "$os_r" ]; then
+        os_t=$(codex_turn_setting "$os_r")
+        [ -n "$os_m" ] || [ -n "$os_prof" ] || os_m=${os_t%%"$TAB"*}
+        [ -n "$os_e" ] || os_e=${os_t#*"$TAB"}
+      fi
+    fi
+    os_s="$os_m$TAB$os_e"
+  fi
+  printf '%s' "$os_s"
+}
+
+# 지금 같은 에이전트를 새로 띄우면 기본 옵션이 붙일 모델과 수준 → "모델<TAB>수준". codex 는 기본 옵션에
+# 없으면 설정 파일의 것입니다. 모델 목록은 새로 받지 않습니다 (모르면 그대로 붙는다고 봄).
+now_settings() { # <에이전트> <codex 프로필> <claude 프로필>
+  (
+    ns_ag=$1; ns_cp=$2
+    no_brief=1; no_defaults=0; added=''; mdropped=''; pdropped=''; profile=$3; stdin_file=/dev/null
+    wd=''; dir=$PWD; aw_pin=0; mk_norefresh=1
+    if [ "$ns_ag" = codex ]; then
+      if [ -n "$ns_cp" ]; then set -- codex exec --profile "$ns_cp"; else set -- codex exec; fi
+    else
+      set -- "$ns_ag"
+    fi
+    run_argv "$@"
+    eval "set -- $rw_words"
+    ns_s=$(settings_in "$ns_ag" "$@")
+    if [ "$ns_ag" = codex ]; then
+      ns_m=${ns_s%%"$TAB"*}; ns_e=${ns_s#*"$TAB"}
+      if [ -z "$ns_m" ] && [ -z "$(profile_model "$@")" ]; then ns_m=$(codex_cfg_get model "$ns_cp"); fi
+      [ -n "$ns_e" ] || ns_e=$(codex_cfg_get model_reasoning_effort "$ns_cp")
+      ns_s="$ns_m$TAB$ns_e"
+    fi
+    printf '%s' "$ns_s"
+  )
+}
+
+# 둘 다 아는 칸만 견줍니다 → same | different | unknown (견줄 칸이 없음)
+settings_cmp() { # <모델 A> <수준 A> <모델 B> <수준 B>
+  sc_r=unknown
+  if [ -n "$1" ] && [ -n "$3" ]; then [ "$1" = "$3" ] && sc_r=same || { printf different; return 0; }; fi
+  if [ -n "$2" ] && [ -n "$4" ]; then [ "$2" = "$4" ] && sc_r=same || { printf different; return 0; }; fi
+  printf '%s' "$sc_r"
+}
+
+settings_str() { # <모델> <수준>  → "모델 · 수준" (모르면 'CLI 기본')
+  printf '%s · %s' "${1:-CLI 기본}" "${2:-CLI 기본}"
+}
+
+# 이어하기 명령에 넣을 모델·수준 옵션 (따옴표 덩어리)
+pin_words() { # <에이전트> <모델> <수준>
+  [ -n "$2" ] && qwords --model "$2"
+  if [ -n "$3" ]; then
+    case "$1" in
+      claude | agy) qwords --effort "$3" ;;
+      codex) qwords -c "model_reasoning_effort=$3" ;;
+    esac
+  fi
+  return 0
+}
+
+# 도는 워커가 쓰는 세션 ID. aw resume 으로 띄운 것은 meta 에 있고, 그 전 기록이나 직접 --resume 으로 띄운 것은
+# 인자에서 찾습니다. 갈래(--fork-session, codex fork)는 새 세션에 쓰므로 셈에 넣지 않습니다.
+session_in_use() { # <워커디렉터리>
+  su_d=$1
+  su_s=$(meta_get "$su_d" session)
+  [ -n "$su_s" ] && { printf '%s' "$su_s"; return 0; }
+  [ -n "$(meta_get "$su_d" fork_of)" ] && return 0
+  eval "set -- $(worker_args "$su_d")"
+  su_prev=''; su_fork=0; su_s=''
+  for su_a in "$@"; do
+    case "$su_prev" in
+      --resume | --resume-id | --conversation | -r | resume)
+        [ -z "$su_s" ] && case "$su_a" in -*) ;; *) su_s=$su_a ;; esac ;;
+    esac
+    case "$su_a" in
+      --fork-session | fork) su_fork=1 ;;
+      --resume=* | --resume-id=* | --conversation=*) su_s=${su_a#*=} ;;
+    esac
+    su_prev=$su_a
+  done
+  [ "$su_fork" -eq 1 ] && return 0
+  printf '%s' "$su_s"
+}
+
+session_running() { # <세션ID>  → 그 세션으로 도는 워커 이름 (없으면 빈 값)
+  for sr_d in $(list_dirs); do
+    [ -f "$sr_d/exit" ] && continue
+    [ "$(state_of "$sr_d")" = running ] || continue
+    [ "$(session_in_use "$sr_d")" = "$1" ] && { basename "$sr_d"; return 0; }
+  done
+  return 0
+}
+
+# 캐시가 아직 살아 있을지 → "warm<TAB>남은 초" | "cold<TAB>" | "unknown<TAB>사유". 근거는 실측입니다 (aw help resume).
+#   claude  출력의 캐시 쓰기 종류로 수명을 압니다 (이 컴퓨터의 Claude Code 는 1시간짜리, 5분짜리면 5분).
+#           끝난 지 그보다 오래면 앞 대화 전체를 다시 씁니다 (1시간짜리는 입력값의 2배).
+#   codex   30분 안은 앞 문맥을 거의 다 다시 읽었고(중앙값 99.9%), 4시간 넘게 지나면 20% 안팎(시스템 프롬프트쯤).
+#           그 사이는 재 보지 못해 모름으로 둡니다.
+#   그 밖의 에이전트와 게이트웨이(aw gateway)는 모름.
+cache_state() { # <워커디렉터리> <에이전트> <끝난 뒤 초>
+  cs_d=$1; cs_ag=$2; cs_age=$3
+  case "$cs_ag" in
+    claude)
+      cs_p=$(meta_get "$cs_d" profile)
+      if [ -n "$cs_p" ] && [ "$cs_p" != default ] && gw_claude_ours "$(gw_claude_dir "$cs_p")"; then
+        printf 'unknown\t게이트웨이'; return 0
+      fi
+      if grep -q '"ephemeral_1h_input_tokens":[1-9]' "$cs_d/out" 2>/dev/null; then cs_ttl=3600
+      elif grep -q '"ephemeral_5m_input_tokens":[1-9]' "$cs_d/out" 2>/dev/null; then cs_ttl=300
+      else printf 'unknown\t캐시 기록 없음'; return 0
+      fi
+      if [ "$cs_age" -lt "$cs_ttl" ]; then printf 'warm\t%s' $((cs_ttl - cs_age)); else printf 'cold\t'; fi ;;
+    codex)
+      cs_cp=$(eval "set -- $(worker_args "$cs_d")"; shift; codex_profile_arg "$@")
+      if [ -n "$cs_cp" ] && gw_codex_ours "$(gw_codex_file "$cs_cp")"; then printf 'unknown\t게이트웨이'; return 0; fi
+      if [ "$cs_age" -lt 1800 ]; then printf 'warm\t%s' $((1800 - cs_age))
+      elif [ "$cs_age" -ge 14400 ]; then printf 'cold\t'
+      else printf 'unknown\t30분~4시간은 재 보지 못함'
+      fi ;;
+    *) printf 'unknown\t%s 는 캐시 수치를 안 냄' "$cs_ag" ;;
+  esac
+}
+
+# 마지막 요청의 문맥 크기 → "토큰<TAB>창의 %" (모르면 빈 칸). 이으면 요청마다 이만큼을 다시 읽습니다.
+#   claude    결과의 usage.iterations 마지막 것 (없으면 마지막 assistant 의 usage). 게이트웨이는 0 이라 모름
+#   codex     세션 파일의 마지막 token_count (last_token_usage, model_context_window)
+#   kiro-cli  출력의 contextUsage.usagePercentage
+context_of() { # <워커디렉터리> <에이전트>
+  cx_d=$1
+  case "$2" in
+    claude)
+      cx_l=$(grep '"cache_read_input_tokens"' "$cx_d/out" 2>/dev/null | tail -1)
+      case "$cx_l" in *'"iterations":['*) cx_l=${cx_l##*'"iterations":['} ;; esac
+      case "$cx_l" in *'{"input_tokens"'*) cx_l=${cx_l##*'{"input_tokens"'} ;; *) return 0 ;; esac
+      cx_l="\"input_tokens\"${cx_l%%[\{\}]*}"
+      cx_n=0
+      for cx_k in input_tokens cache_read_input_tokens cache_creation_input_tokens output_tokens; do
+        cx_v=$(printf '%s' "$cx_l" | sed -n 's/.*"'"$cx_k"'":\([0-9][0-9]*\).*/\1/p')
+        cx_n=$((cx_n + ${cx_v:-0}))
+      done
+      [ "$cx_n" -gt 0 ] && printf '%s\t' "$cx_n" ;;
+    codex)
+      cx_f=$(codex_rollout "$cx_d"); [ -n "$cx_f" ] || return 0
+      cx_l=$(grep '"type":"token_count"' "$cx_f" 2>/dev/null | grep '"last_token_usage"' | tail -1)
+      [ -n "$cx_l" ] || return 0
+      cx_w=$(printf '%s' "$cx_l" | sed -n 's/.*"model_context_window":\([0-9][0-9]*\).*/\1/p')
+      cx_l=${cx_l##*'"last_token_usage":{'}; cx_l=${cx_l%%\}*}
+      cx_i=$(printf '%s' "$cx_l" | sed -n 's/.*"input_tokens":\([0-9][0-9]*\).*/\1/p')
+      cx_o=$(printf '%s' "$cx_l" | sed -n 's/.*"output_tokens":\([0-9][0-9]*\).*/\1/p')
+      cx_n=$(( ${cx_i:-0} + ${cx_o:-0} ))
+      [ "$cx_n" -gt 0 ] || return 0
+      cx_p=''; [ -n "$cx_w" ] && [ "$cx_w" -gt 0 ] && cx_p=$((cx_n * 100 / cx_w))
+      printf '%s\t%s' "$cx_n" "$cx_p" ;;
+    kiro-cli)
+      cx_p=$(grep -o '"usagePercentage":[0-9.]*' "$cx_d/out" 2>/dev/null | tail -1 | sed 's/.*://')
+      [ -n "$cx_p" ] && printf '\t%s' "$(printf '%s' "$cx_p" | LC_ALL=C awk '{ printf "%d", $1 + 0.5 }')" ;;
+  esac
+  return 0
+}
+
+ktok() { # <토큰 수>  → 12K, 1.2M
+  if [ "$1" -lt 1000 ]; then printf '%s' "$1"
+  elif [ "$1" -lt 1000000 ]; then printf '%sK' $(( ($1 + 500) / 1000 ))
+  else printf '%s.%sM' $(($1 / 1000000)) $(( ($1 % 1000000) / 100000 ))
+  fi
+}
+
+# 워커가 받은 작업의 첫 줄 (지시문은 뺌). aw resume 으로 이은 워커면 그때 준 새 프롬프트입니다.
+prompt_head() { # <워커디렉터리>
+  ph_d=$1; ph_ag=$(agent_of "$ph_d"); ph_in=$(meta_get "$ph_d" stdin); ph_p=''
+  if [ -n "$ph_in" ] && [ "$ph_in" != /dev/null ]; then
+    [ -f "$ph_in" ] || return 0
+    # 지시문을 붙인 사본이면 첫 빈 줄 다음부터가 원래 글입니다.
+    if [ "$ph_in" = "$ph_d/prompt" ]; then awk 'f && NF { print; exit } !NF { f = 1 }' "$ph_in"
+    else awk 'NF { print; exit }' "$ph_in"; fi
+    return 0
+  fi
+  eval "set -- $(worker_args_orig "$ph_d")"
+  case "$ph_ag" in
+    agy)
+      ph_nx=0
+      for ph_a in "$@"; do
+        [ "$ph_nx" -eq 1 ] && { ph_p=$ph_a; ph_nx=0; continue; }
+        case "$ph_a" in -p | --prompt) ph_nx=1 ;; -p=* | --prompt=*) ph_p=${ph_a#*=} ;; esac
+      done ;;
+    devin)
+      ph_nx=''
+      for ph_a in "$@"; do
+        case "$ph_nx" in p) ph_p=$ph_a; ph_nx=''; continue ;; f) [ -f "$ph_a" ] && ph_p=$(awk 'NF { print; exit }' "$ph_a"); ph_nx=''; continue ;; esac
+        case "$ph_a" in -p | --print) ph_nx=p ;; --prompt-file) ph_nx=f ;; esac
+      done ;;
+    *) [ $# -gt 1 ] && eval "ph_p=\${$#}" ;;
+  esac
+  printf '%s\n' "$ph_p" | awk 'NF { print; exit }'
 }
 
 # ---------------------------------------------------------------- 에이전트별 기본 옵션
@@ -1174,6 +1572,7 @@ model_known() { # <에이전트> <모델>
   case "$mk_a" in codex | agy | devin | kiro-cli) ;; *) return 2 ;; esac
   if mk_l=$(models_list "$mk_a") && models_has "$mk_a" "$2" "$mk_l"; then return 0; fi
   if [ "$mk_a" = codex ]; then [ -n "$mk_l" ] && return 1; return 2; fi
+  [ "${mk_norefresh:-0}" -eq 1 ] && return 2
   models_refresh "$mk_a" || return 2
   mk_l=$(models_list "$mk_a") || return 2
   models_has "$mk_a" "$2" "$mk_l" && return 0
@@ -1367,6 +1766,9 @@ run_argv() { # <인자...>
       # 건너뜁니다. --permission-mode bypassPermissions 처럼 값이 딸린 옵션이 반쪽만
       # 붙거나, agy 의 --effort 처럼 사용자 값과 부딪치는 사고를 막습니다.
       group_given "$1" "$dg" "$@" && continue
+      # 이어하기는 원래 워커의 모델·수준을 인자로 넘기므로 기본 옵션의 모델·수준 줄은 붙이지 않습니다.
+      # 원래 워커에 모델 옵션이 없었으면(CLI 기본, 프로필이 정함) 그대로 그렇게 잇습니다.
+      [ "${aw_pin:-0}" -eq 1 ] && group_setting "$1" "$dg" && continue
       # 그 줄이 고르는 모델이 CLI 의 목록에 없으면(바뀌었거나 없어졌으면) 줄째 빼고 CLI 기본으로 돕니다.
       # 목록을 모르면(model_known 2) 그대로 붙입니다.
       rg_m=$(group_model "$dg")
@@ -1389,15 +1791,15 @@ DG
   fi
 
   rw_words=''
-  # codex exec resume 은 프롬프트 뒤의 옵션도, resume 뒤의 --sandbox 도 받지 않습니다 (실측).
+  # codex exec resume(과 fork)은 프롬프트 뒤의 옵션도, resume 뒤의 --sandbox 도 받지 않습니다 (실측).
   # 그래서 이어하기면 붙인 기본 옵션을 resume 앞, exec 의 옵션 자리로 옮깁니다. 붙이지 않으면
   # 샌드박스는 세션에서 물려받지만 모델은 config.toml 의 것으로 바뀝니다 (실측: luna 로 시작한 대화가 astra 로).
   rw_res=0
   if [ "${1##*/}" = codex ] && [ "${2:-}" = exec ] && [ "${rw_nadd:-0}" -gt 0 ] && [ "${no_defaults:-0}" -ne 1 ]; then
     case "${3:-}:${5:-}:${4:-}" in
-      resume:*) rw_res=3 ;;
-      --profile:resume:* | -p:resume:*) rw_res=5 ;;
-      --profile=*:*:resume) rw_res=4 ;;
+      resume:* | fork:*) rw_res=3 ;;
+      --profile:resume:* | -p:resume:* | --profile:fork:* | -p:fork:*) rw_res=5 ;;
+      --profile=*:*:resume | --profile=*:*:fork) rw_res=4 ;;
     esac
   fi
   if [ "$rw_res" -gt 0 ]; then
@@ -1662,6 +2064,7 @@ cmd_run() {
     write_launch "$wd/fallback.sh" "$fb_words" $say_flag
     : > "$wd/cmd.fallback"
     ( eval "set -- $fb_words"; for a in "$@"; do printf '%s\n' "$a"; done ) >> "$wd/cmd.fallback"
+    printf '%s' "$fb_words" > "$wd/args.fallback"
     : > "$wd/cmd.orig.fallback"
     ( eval "set -- $run_fallback"; for a in "$@"; do printf '%s\n' "$a"; done ) >> "$wd/cmd.orig.fallback"
     printf '%s' "$run_fallback" > "$wd/args.orig.fallback"
@@ -1683,7 +2086,7 @@ cmd_run() {
         "$PICK_FALLBACK_SECS" "$(shquote "$PICK_MODEL_REJECTED")" "$(shquote "$wd/out")" "$(shquote "$wd/err")"
       printf '  mv %s %s; mv %s %s\n' "$(shquote "$wd/out")" "$(shquote "$wd/out.model")" "$(shquote "$wd/err")" "$(shquote "$wd/err.model")"
       printf '  mv %s %s; mv %s %s\n' "$(shquote "$wd/cmd.fallback")" "$(shquote "$wd/cmd")" "$(shquote "$wd/cmd.orig.fallback")" "$(shquote "$wd/cmd.orig")"
-      printf '  mv %s %s\n' "$(shquote "$wd/args.orig.fallback")" "$(shquote "$wd/args.orig")"
+      printf '  mv %s %s; mv %s %s\n' "$(shquote "$wd/args.orig.fallback")" "$(shquote "$wd/args.orig")" "$(shquote "$wd/args.fallback")" "$(shquote "$wd/args")"
       printf '  printf "pick_fallback=%%s\\n" "$code" >> %s\n' "$(shquote "$wd/meta")"
       printf '  sh %s\n' "$(shquote "$wd/fallback.sh")"
       printf '  code=$?\n'
@@ -1713,9 +2116,10 @@ KIRO
     printf 'date +%%s > %s/finished\n' "$(shquote "$wd")"
   } > "$wd/run.sh"
 
-  # 사람이 읽을 명령 기록
+  # 사람이 읽을 명령 기록 (cmd), 따옴표로 감싼 그대로 (args: aw resume 이 원래 모델·수준을 여기서 읽음)
   : > "$wd/cmd"
   for a in "$@"; do printf '%s\n' "$a" >> "$wd/cmd"; done
+  qwords "$@" > "$wd/args"
 
   {
     printf 'name=%s\n' "$name"
@@ -1729,6 +2133,8 @@ KIRO
     [ -n "$mdropped" ] && printf 'default_model_dropped=%s\n' "$mdropped"
     [ "$say_mode" -eq 1 ] && printf 'say=1\n'
     [ -n "$wt" ]       && { printf 'worktree=%s\n' "$wt"; printf 'branch=%s\n' "$worktree"; }
+    # aw resume 이 넘긴 것: resumed_from(또는 fork_of)과 이어받은 세션 ID (도는 동안 같은 세션 쓰기를 막는 데 씀)
+    [ -n "${aw_meta_extra:-}" ] && printf '%s' "$aw_meta_extra"
     printf 'cmdline=%s\n' "$(printf '%s ' "$@" | sed 's/ $//' | tr '\n' ' ')"
   } > "$wd/meta"
 
@@ -1849,6 +2255,8 @@ cmd_status() {
   [ -n "$(meta_get "$d" pick_fallback)" ] && say "             모델이 거부돼(코드 $(meta_get "$d" pick_fallback)) 모델 없이 다시 돌림. 첫 시도: $d/out.model, err.model"
   sess=$(session_of "$d")
   [ -n "$sess" ] && say "  세션     : $sess"
+  [ -n "$(meta_get "$d" resumed_from)" ] && say "  이어하기 : $(meta_get "$d" resumed_from) 의 세션을 이음"
+  [ -n "$(meta_get "$d" fork_of)" ]      && say "  갈래     : $(meta_get "$d" fork_of) 의 세션에서 갈라짐 (원래 세션은 그대로)"
   say "  경과     : $(elapsed_str $((fin - started)))"
   say "  출력     : $d/out  ($(wc -c < "$d/out" 2>/dev/null || printf 0) bytes)"
   say "  오류     : $d/err  ($(wc -c < "$d/err" 2>/dev/null || printf 0) bytes)"
@@ -2174,11 +2582,33 @@ cmd_prune() {
   return 0
 }
 
+resume_usage() {
+  cat <<'U'
+사용법: aw resume <워커> [옵션] -- '새 프롬프트'
+        aw resume --list [-d 경로] [--agent 에이전트] [--json]
+
+같은 세션으로 대화를 잇는 새 워커를 띄웁니다 (<워커>-r1, -r2 ...). 원래 명령·디렉터리·프로필과
+모델·추론 수준을 그대로 물려받고 프롬프트만 바꿉니다. 언제 이으면 좋은지: aw help resume
+
+옵션
+  --fork          원래 세션은 그대로 두고 갈래를 새로 만들어 잇습니다 (<워커>-f1 ...). claude·codex 만 됩니다.
+                  같은 세션을 다른 워커가 쓰는 중일 때나, 한 바탕에서 여러 작업을 나란히 돌릴 때 씁니다
+  --model 모델    다른 모델로 잇습니다 (모델이 바뀌면 앞 대화를 캐시 없이 다시 읽음)
+  --effort 수준   다른 추론 수준으로 잇습니다 (claude·agy 는 --effort, codex 는 model_reasoning_effort)
+  -n 이름, -d 경로, --tag 문자열, -e K=V, --max-input-tokens N, --no-defaults, --no-brief, --no-say   aw run 과 같음
+
+--list  이어할 만한 워커를 세션마다 마지막 것 하나씩, 최근에 끝난 순으로 보여 줍니다. 모델·수준, 끝난 지,
+        캐시가 살아 있을지, 문맥 크기, 지금 기본값과 같은지, 디렉터리, 작업 첫 줄.
+        -d 는 그 경로 아래 워커만, --agent 는 그 에이전트만, --json 은 기계가 읽는 용
+U
+}
+
 cmd_resume() {
-  [ $# -gt 0 ] || die "이어할 워커 이름이 필요합니다.   예) aw resume job -- '이어서 해줘'"
+  [ $# -gt 0 ] || die "이어할 워커 이름이 필요합니다.   예) aw resume job -- '이어서 해줘'   (후보: aw resume --list)"
   case "$1" in
-    -h | --help) say "사용법: aw resume <워커> [-n 이름] [-d 경로] [--tag 문자열] -- '새 프롬프트'"; return 0 ;;
-    -*) die "먼저 이어할 워커 이름을 주세요.   예) aw resume job -- '...'" ;;
+    -h | --help) resume_usage; return 0 ;;
+    -l | --list) shift; resume_list "$@"; return $? ;;
+    -*) die "먼저 이어할 워커 이름을 주세요.   예) aw resume job -- '...'   (후보: aw resume --list)" ;;
   esac
   src=$1; shift
   need_worker "$src"
@@ -2186,42 +2616,84 @@ cmd_resume() {
   [ -f "$sd/exit" ] || die "$src 은 아직 실행 중입니다. aw wait $src 부터 하세요."
 
   # -- 앞은 aw 옵션, 뒤는 새 프롬프트입니다.
-  opts=''; name=''; dir=''
+  opts=''; name=''; dir=''; fork=0; set_m=''; set_e=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --) shift; break ;;
       -n | --name) name="${2:?--name 에 값이 필요합니다}"; shift 2 ;;
       -d | --dir)  dir="${2:?--dir 에 값이 필요합니다}"; shift 2 ;;
-      -h | --help) say "사용법: aw resume <워커> [-n 이름] [-d 경로] [--tag 문자열] -- '새 프롬프트'"; return 0 ;;
+      -h | --help) resume_usage; return 0 ;;
+      --fork)      fork=1; shift ;;
+      --model)     set_m="${2:?--model 에 모델이 필요합니다}"; shift 2 ;;
+      --effort)    set_e="${2:?--effort 에 수준이 필요합니다}"; shift 2 ;;
       --tag | --max-input-tokens | -e | --env)
         opts="$opts $(shquote "$1") $(shquote "${2:?$1 에 값이 필요합니다}")"; shift 2 ;;
       --no-defaults) opts="$opts --no-defaults"; shift ;;
       --no-brief)    opts="$opts --no-brief"; shift ;;
       --no-say)      opts="$opts --no-say"; shift ;;
-      -*) die "aw resume 이 모르는 옵션입니다: $1" ;;
+      -*) die "aw resume 이 모르는 옵션입니다: $1   (aw resume --help)" ;;
       *) break ;;
     esac
   done
   [ $# -gt 0 ] || die "새 프롬프트가 없습니다.   예) aw resume $src -- '이어서 해줘'"
   prompt=$*
 
+  sagent=$(agent_of "$sd")
+  if [ "$fork" -eq 1 ]; then
+    case "$sagent" in
+      claude | codex) ;;
+      agy | devin | kiro-cli) die "갈래(--fork)는 claude·codex 만 됩니다. $sagent 는 CLI 에 갈래 기능이 없습니다." ;;
+    esac
+  fi
   sid=$(session_of "$sd")
-  argv=$(resume_argv "$sd" "$sid" "$prompt") || case $? in
+
+  # 같은 세션을 다른 워커가 쓰고 있으면 막습니다. 둘이 같은 대화에 번갈아 쓰면 기록이 엉킵니다.
+  if [ "$fork" -eq 0 ] && [ -n "$sid" ]; then
+    busy=$(session_running "$sid")
+    [ -n "$busy" ] && die "$busy 가 같은 세션($sid)으로 아직 돌고 있습니다. 같은 대화에 둘이 쓰면 기록이 엉킵니다.
+   끝난 뒤 이으세요 (aw wait $busy). 나란히 돌리려면 갈래로: aw resume $src --fork -- '…' (claude·codex)"
+  fi
+
+  # 모델·추론 수준은 원래 워커가 실제로 쓴 것을 그대로 씁니다 (캐시는 모델마다 따로. aw help resume).
+  # --model·--effort 로 준 것이 있으면 그것을 씁니다.
+  os=$(orig_settings "$sd" "$sagent"); om=${os%%"$TAB"*}; oe=${os#*"$TAB"}
+  pm=$om; pe=$oe
+  [ -n "$set_m" ] && pm=$set_m
+  if [ -n "$set_e" ]; then
+    case "$sagent" in
+      claude | agy | codex) pe=$set_e ;;
+      devin) die "devin 은 추론 수준이 모델 이름에 들어 있습니다 (swe-2-medium, swe-2-high, swe-2-max). --model 로 주세요." ;;
+      *) die "$sagent 는 추론 수준 옵션이 없습니다. --model 만 바꿀 수 있습니다." ;;
+    esac
+  fi
+  pinw=$(pin_words "$sagent" "$pm" "$pe")
+
+  argv=$(resume_argv "$sd" "$sid" "$prompt" "$pinw" "$fork") || case $? in
     2) die "이어하기를 아는 에이전트가 아닙니다: $(meta_get "$sd" cmdline | cut -d' ' -f1)
    claude, agy, codex, devin, kiro-cli 만 지원합니다. 직접 명령을 써서 aw run 으로 돌리세요." ;;
     3) die "$src 의 출력에서 세션 ID 를 찾지 못했습니다.
    JSON 출력 옵션 없이 돌렸을 수 있습니다 (예: --output-format stream-json).
    aw status $src 로 확인하세요." ;;
     4) die "codex 는 exec, kiro-cli 는 chat 으로 시작한 워커만 이어할 수 있습니다." ;;
+    5) die "갈래(--fork)는 claude·codex 만 됩니다." ;;
     *) die "원래 명령을 읽을 수 없습니다: $src" ;;
   esac
 
-  # 새 이름: 원래이름-r1, -r2 ...
+  # 새 이름: 원래이름-r1, -r2 ... (갈래는 -f1, -f2 ...). 끝에 붙은 -rN 은 떼고 셉니다. 갈래를 이으면
+  # 갈래 이름을 남기고(job-f1 → job-f1-r1), 갈래를 또 만들면 -fN 도 뗍니다(job-f1-r1 → job-f2).
   if [ -z "$name" ]; then
-    base=${src%%-r[0-9]*}
+    base=$src
+    while :; do
+      case "$base" in
+        *-r[0-9] | *-r[0-9][0-9] | *-r[0-9][0-9][0-9]) base=${base%-*} ;;
+        *-f[0-9] | *-f[0-9][0-9] | *-f[0-9][0-9][0-9]) [ "$fork" -eq 1 ] || break; base=${base%-*} ;;
+        *) break ;;
+      esac
+    done
+    sfx=r; [ "$fork" -eq 1 ] && sfx=f
     i=1
-    while [ -d "$AW_WORKERS/$base-r$i" ]; do i=$((i + 1)); done
-    name="$base-r$i"
+    while [ -d "$AW_WORKERS/$base-$sfx$i" ]; do i=$((i + 1)); done
+    name="$base-$sfx$i"
   fi
   # 디렉터리: 원래 워커가 돌던 곳 (devin 의 -c 는 디렉터리 기준이라 특히 중요)
   [ -n "$dir" ] || dir=$(meta_get "$sd" dir)
@@ -2229,20 +2701,159 @@ cmd_resume() {
   # 기본 프로필로 이어하면 --resume 이 세션을 못 찾습니다.
   sprof=$(meta_get "$sd" profile)
   # 프로필 없이 띄운 claude 워커는 기본 계정으로 잇습니다 (지금 셸의 AW_CLAUDE_PROFILE·claude-use 를 따르면 세션을 못 찾음).
-  sprog=$(sed -n 1p "$sd/cmd.orig" 2>/dev/null); [ -n "$sprog" ] || sprog=$(sed -n 1p "$sd/cmd" 2>/dev/null)
-  [ -z "$sprof" ] && [ "${sprog##*/}" = claude ] && sprof=default
+  [ -z "$sprof" ] && [ "$sagent" = claude ] && sprof=default
   [ -n "$sprof" ] && opts="$opts --profile $(shquote "$sprof")"
   # codex 는 기본 옵션을 resume 앞에 붙입니다 (run_argv). 프롬프트 뒤에 붙이면 codex 가 거절합니다.
 
-  # 줄 단위로 읽지 않습니다. 0.22.1 까지는 그래서 여러 줄 프롬프트가 줄마다 다른 인자가 됐고,
-  # claude 는 첫 줄만 프롬프트로 받았습니다.
   eval "set -- $argv"
   if [ -z "$sid" ]; then
     warn "세션 ID 가 없어 devin 의 -c (그 디렉터리의 가장 최근 대화) 로 이어갑니다."
     warn "  같은 디렉터리에 devin 워커가 여럿이면 엉뚱한 대화를 집을 수 있습니다."
   fi
-  say "이어하기: $src → $name${sid:+  (세션 $sid)}"
+  if [ "$fork" -eq 1 ]; then
+    say "갈래: $src → $name  (세션 $sid 에서 새 세션으로. 원래 세션은 그대로)"
+  else
+    say "이어하기: $src → $name${sid:+  (세션 $sid)}"
+  fi
+  # 모델·수준 알림. 바꿨으면 바뀐 것을, 안 바꿨는데 지금 기본값과 다르면 원래 것을 쓴다는 것을 알립니다.
+  if [ -n "$set_m$set_e" ]; then
+    rs_note=''; [ "$pm" != "$om" ] && rs_note='   (모델이 바뀌어 앞 대화를 캐시 없이 다시 읽습니다)'
+    say "  모델·수준: $(settings_str "$om" "$oe") → $(settings_str "$pm" "$pe")$rs_note"
+  else
+    # --no-defaults 로 잇는다면 기본값과 견줄 까닭이 없습니다.
+    case "$opts" in *--no-defaults*) sagent_cmp=0 ;; *) sagent_cmp=1 ;; esac
+    scp=''; [ "$sagent" = codex ] && scp=$(eval "set -- $(worker_args "$sd")"; shift; codex_profile_arg "$@")
+    ns=$(now_settings "$sagent" "$scp" "$sprof"); nm=${ns%%"$TAB"*}; ne=${ns#*"$TAB"}
+    if [ "$sagent_cmp" -eq 1 ] && [ "$(settings_cmp "$pm" "$pe" "$nm" "$ne")" = different ]; then
+      say "  모델·수준: 원래 워커 그대로 $(settings_str "$pm" "$pe")   (지금 기본값은 $(settings_str "$nm" "$ne"))"
+      say "             기본값으로 바꿔 이으려면 --model ${nm:-…}${ne:+ --effort $ne}. 모델이 바뀌면 캐시를 못 씁니다"
+    fi
+  fi
+  if [ "$fork" -eq 1 ]; then
+    aw_meta_extra="fork_of=$src
+"
+  else
+    aw_meta_extra="resumed_from=$src
+${sid:+session=$sid
+}"
+  fi
+  aw_pin=1
   eval "cmd_run -n $(shquote "$name") -d $(shquote "$dir")$opts --" '"$@"'
+}
+
+# 이어할 만한 워커 (aw resume --list). 끝난 워커 중 세션 ID 가 있는 것을, 세션마다 가장 늦게 끝난 것
+# 하나씩, 최근에 끝난 순으로 냅니다. 같은 세션을 도는 워커가 쓰고 있으면 그 이름도 적습니다 (갈래만 됨).
+# "비슷한 작업인지" 는 aw 가 판단하지 않습니다. 부르는 쪽이 작업 첫 줄과 결과를 보고 고릅니다 (aw help resume).
+resume_list() { # [-d 경로] [--agent 에이전트] [--json]
+  rl_dir=''; rl_ag=''; rl_json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -d | --dir)
+        rl_dir=$(CDPATH= cd -- "${2:?-d 에 경로가 필요합니다}" 2>/dev/null && pwd) || die "디렉터리를 찾을 수 없습니다: $2"
+        shift 2 ;;
+      --agent) rl_ag="${2:?--agent 에 이름이 필요합니다}"; shift 2 ;;
+      --json) rl_json=1; shift ;;
+      -h | --help) resume_usage; return 0 ;;
+      *) die "aw resume --list 가 모르는 옵션입니다: $1   (aw resume --help)" ;;
+    esac
+  done
+  rl_now=$(now)
+  rl_us=$(printf '\037')
+  rl_busy=''
+  for rl_d in $(list_dirs); do
+    [ -f "$rl_d/exit" ] && continue
+    [ "$(state_of "$rl_d")" = running ] || continue
+    rl_s=$(session_in_use "$rl_d")
+    [ -n "$rl_s" ] && rl_busy="$rl_busy$rl_s $(basename "$rl_d")
+"
+  done
+  rl_rows=$(for rl_d in $(list_dirs); do
+      [ -f "$rl_d/exit" ] || continue
+      rl_f=$(cat "$rl_d/finished" 2>/dev/null || mtime_of "$rl_d/exit")
+      printf '%s\t%s\n' "${rl_f:-0}" "$rl_d"
+    done | sort -rn)
+  rl_seen=' '; rl_n=0; rl_nkeys=''
+  [ "$rl_json" -eq 1 ] && printf '['
+  while IFS="$TAB" read -r rl_f rl_d; do
+    [ -n "$rl_d" ] || continue
+    rl_a=$(agent_of "$rl_d")
+    case "$rl_a" in claude | codex | agy | kiro-cli | devin) ;; *) continue ;; esac
+    [ -n "$rl_ag" ] && [ "$rl_a" != "$rl_ag" ] && continue
+    rl_sid=$(session_of "$rl_d"); [ -n "$rl_sid" ] || continue
+    case "$rl_seen" in *" $rl_sid "*) continue ;; esac
+    rl_seen="$rl_seen$rl_sid "
+    rl_wdir=$(meta_get "$rl_d" dir)
+    if [ -n "$rl_dir" ]; then case "$rl_wdir" in "$rl_dir" | "$rl_dir"/*) ;; *) continue ;; esac; fi
+    rl_name=$(basename "$rl_d"); rl_st=$(state_of "$rl_d"); rl_code=$(cat "$rl_d/exit" 2>/dev/null)
+    rl_age=$((rl_now - rl_f)); [ "$rl_age" -ge 0 ] || rl_age=0
+    rl_os=$(orig_settings "$rl_d" "$rl_a"); rl_m=${rl_os%%"$TAB"*}; rl_e=${rl_os#*"$TAB"}
+    rl_cp=''; [ "$rl_a" = codex ] && rl_cp=$(eval "set -- $(worker_args "$rl_d")"; shift; codex_profile_arg "$@")
+    rl_prof=$(meta_get "$rl_d" profile); [ -z "$rl_prof" ] && [ "$rl_a" = claude ] && rl_prof=default
+    # 지금 기본값은 (에이전트, 프로필)마다 한 번만 셉니다.
+    rl_key="$rl_a|$rl_cp|$rl_prof"
+    rl_ns=$(printf '%s' "$rl_nkeys" | awk -F "$rl_us" -v k="$rl_key" '$1 == k { print $2; exit }')
+    if [ -z "$rl_ns" ]; then
+      rl_ns=$(now_settings "$rl_a" "$rl_cp" "$rl_prof")
+      rl_ns="${rl_ns%%"$TAB"*}|${rl_ns#*"$TAB"}"
+      rl_nkeys="$rl_nkeys$rl_key$rl_us$rl_ns
+"
+    fi
+    rl_nm=${rl_ns%%|*}; rl_ne=${rl_ns#*|}
+    rl_cmp=$(settings_cmp "$rl_m" "$rl_e" "$rl_nm" "$rl_ne")
+    # claude 를 모델 옵션 없이 띄웠으면 보여 주기만 출력의 모델로 (견주기에는 안 씀)
+    rl_mshow=$rl_m
+    [ -z "$rl_mshow" ] && [ "$rl_a" = claude ] && rl_mshow=$(grep -m1 '"subtype":"init"' "$rl_d/out" 2>/dev/null | json_str model)
+    rl_cs=$(cache_state "$rl_d" "$rl_a" "$rl_age"); rl_c=${rl_cs%%"$TAB"*}; rl_cx=${rl_cs#*"$TAB"}
+    rl_ctx=$(context_of "$rl_d" "$rl_a"); rl_ct=${rl_ctx%%"$TAB"*}; rl_cpct=${rl_ctx#*"$TAB"}
+    rl_task=$(prompt_head "$rl_d" | trunc_filter 120)
+    rl_tag=$(meta_get "$rl_d" tag)
+    rl_use=$(printf '%s' "$rl_busy" | awk -v s="$rl_sid" '$1 == s { print $2; exit }')
+    rl_n=$((rl_n + 1))
+    if [ "$rl_json" -eq 1 ]; then
+      [ "$rl_n" -gt 1 ] && printf ','
+      rl_left=null; [ "$rl_c" = warm ] && rl_left=$rl_cx
+      printf '\n  {"name":"%s","agent":"%s","state":"%s","exit":"%s","model":"%s","effort":"%s","defaults_model":"%s","defaults_effort":"%s","settings_match":"%s","finished":%s,"age_secs":%s,"cache":"%s","cache_left_secs":%s,"context_tokens":%s,"context_pct":%s,"dir":"%s","session":"%s","tag":"%s","task":"%s","in_use_by":"%s"}' \
+        "$rl_name" "$rl_a" "$rl_st" "$rl_code" "$(json_escape "$rl_mshow")" "$(json_escape "$rl_e")" \
+        "$(json_escape "$rl_nm")" "$(json_escape "$rl_ne")" "$rl_cmp" "$rl_f" "$rl_age" "$rl_c" "$rl_left" \
+        "${rl_ct:-null}" "${rl_cpct:-null}" "$(json_escape "$rl_wdir")" "$(json_escape "$rl_sid")" \
+        "$(json_escape "$rl_tag")" "$(json_escape "$rl_task")" "$rl_use"
+      continue
+    fi
+    [ "$rl_n" -eq 1 ] && say "이어할 만한 워커 (세션마다 마지막 워커, 최근에 끝난 순. 언제 이을지: aw help resume)"
+    rl_h="$rl_a · ${rl_mshow:-모델 CLI 기본} · ${rl_e:-수준 CLI 기본}"
+    [ "$rl_st" = done ] || rl_h="$rl_h   ($rl_st, 코드 $rl_code)"
+    say ""
+    say "$rl_name   $rl_h"
+    case "$rl_c" in
+      warm) rl_ctxt="캐시 살아 있을 것 (약 $((rl_cx / 60))분 남음)" ;;
+      cold) rl_ctxt="캐시 식었을 것" ;;
+      *) rl_ctxt="캐시 모름 ($rl_cx)" ;;
+    esac
+    rl_sz='문맥 모름'
+    if [ -n "$rl_ct" ]; then rl_sz="문맥 $(ktok "$rl_ct")${rl_cpct:+ (창의 $rl_cpct%)}"
+    elif [ -n "$rl_cpct" ]; then rl_sz="문맥 창의 $rl_cpct%"; fi
+    case "$rl_cmp" in
+      same) rl_dt='지금 기본값과 같음' ;;
+      different) rl_dt="지금 기본값과 다름 ($(settings_str "$rl_nm" "$rl_ne"))" ;;
+      *) rl_dt='기본값과 견줄 수 없음' ;;
+    esac
+    say "    끝난 지 $(elapsed_str "$rl_age") · $rl_ctxt · $rl_sz · $rl_dt"
+    say "    $(tilde "$rl_wdir")${rl_tag:+ · [$rl_tag]}${rl_task:+ · $rl_task}"
+    [ -n "$rl_use" ] && say "    도는 중: $rl_use 가 이 세션을 쓰고 있습니다. 끝난 뒤 잇거나 갈래로 (--fork, claude·codex)"
+  done <<ROWS
+$rl_rows
+ROWS
+  if [ "$rl_json" -eq 1 ]; then
+    [ "$rl_n" -gt 0 ] && printf '\n'
+    printf ']\n'
+    return 0
+  fi
+  if [ "$rl_n" -eq 0 ]; then
+    say "이어할 워커가 없습니다 (세션 ID 가 남은 끝난 워커가 없음${rl_dir:+, $(tilde "$rl_dir") 아래}${rl_ag:+, $rl_ag})."
+    return 0
+  fi
+  say ""
+  say "잇기: aw resume <이름> -- '…'    갈래: aw resume <이름> --fork -- '…' (claude·codex)"
 }
 
 # ---------------------------------------------------------------- 워커 지시문
@@ -4511,6 +5122,8 @@ aw rm review
 - 실패하면 `aw errs <이름>` 과 `aw logs <이름>` 을 먼저 봅니다. 전체 목록은 `aw list`.
 - **워커는 이 대화를 모릅니다.** 프롬프트에 목표, 관련 파일 경로, 제약, 원하는 출력 형식을
   전부 적습니다. 읽기만 할 작업이면 "파일을 고치지 마" 라고 분명히 씁니다.
+- **새로 띄우기 전에, 앞서 비슷한 일을 한 워커가 있으면 이을지 봅니다** (`aw resume --list -d .`).
+  앞 워커가 읽은 파일과 결정을 알고 캐시도 살아 있으면 훨씬 빠르고 쌉니다. 기준은 아래 [대화 이어하기](#대화-이어하기).
 - **지시문**: `aw brief` 가 켜져 있으면 aw 가 프롬프트 앞에 지시문을 붙입니다 (권장값: 첫 줄에 예상 소요
   시간을 적고, 오래 걸리면 몇 분마다 진행을 한 줄씩 남기기). 그러니 같은 요청을 프롬프트에 또 적지 않습니다.
   `aw peek` 이 그 예상 소요 시간을 경과와 견줘 보여 줍니다. 지시문이 작업과 맞지 않으면 `--no-brief`.
@@ -4629,13 +5242,26 @@ aw run -n k -f task.md -- kiro-cli chat --output-format stream-json
 ## 대화 이어하기
 
 ```sh
-aw resume review -- '지적한 것 중 첫 번째를 고쳐줘'    # → review-r1
+aw resume --list -d .                                  # 이어할 후보: 모델·수준, 캐시, 문맥, 작업 첫 줄
+aw resume review -- '지적한 것 중 첫 번째를 고쳐줘'    # → review-r1 (같은 세션)
 aw resume review-r1 -- '테스트도 추가해줘'             # → review-r2
+aw resume base --fork -- '같은 바탕에서 다른 일'       # → base-f1 (새 세션으로 갈라짐, claude·codex)
 ```
 
-원래 명령·디렉터리·`--profile` 을 물려받고 프롬프트만 바꿉니다(프로필 없이 띄운 claude 워커는 기본
-계정으로 잇습니다. 지금 셸의 `AW_CLAUDE_PROFILE` 을 따르면 세션을 못 찾아서입니다). `-e` 환경변수는 이어지지
-않으니 다시 줍니다. 세션 ID 는 `aw status <이름>` 에 보입니다. devin 은 세션 ID 를 못 뽑아
+**이을지 새로 띄울지** (근거와 실측 수치: `aw help resume`)
+
+- **잇습니다**: 같은 저장소·같은 기능 근처의 다음 일(리뷰 반영, 다음 단계, 테스트 추가)이고, `--list` 에서
+  `지금 기본값과 같음`, `캐시 살아 있을 것` 이며 문맥이 크지 않을 때. 앞 워커가 읽은 것을 다시 읽지 않아
+  빠르고(실측: 3분 45초 걸린 일의 다음 일을 57초에), 앞 대화는 캐시로 읽혀 쌉니다.
+- **새로 띄웁니다**: 상관없는 일, 독립 검토·두 번째 의견(앞 판단에 끌려감), 캐시가 식었고 문맥이 큰 대화
+  (식은 뒤 이으면 앞 대화 전체를 다시 씀), 그사이 파일이 많이 바뀐 경우.
+- 그래도 이을 때 그사이 바뀐 파일이 있으면 프롬프트에 적어 줍니다. 워커는 옛 내용을 기억합니다.
+- 같은 세션은 한 번에 한 워커만 씁니다. 그 세션을 쓰는 워커가 돌면 `aw resume` 이 거절합니다.
+  나란히 돌리려면 `--fork` 입니다.
+
+원래 명령·디렉터리·`--profile`, 그리고 **모델·추론 수준**을 물려받고 프롬프트만 바꿉니다. 모델·수준은
+그사이 `aw defaults` 가 바뀌어도 원래 워커의 것이고(캐시는 모델마다 따로), 다르면 한 줄 알립니다. 사용자가
+바꾸라고 하면 `--model`·`--effort`. `-e` 환경변수는 이어지지 않으니 다시 줍니다. devin 은 세션 ID 를 못 뽑아
 그 디렉터리의 가장 최근 대화(`-c`)로 이어 가므로 정확하지 않습니다.
 
 ## 병렬
@@ -4654,6 +5280,7 @@ aw wait rv-codex rv-gemini --timeout 100
 - **도는 claude 워커의 방향을 바꿀 때**는 멈추지 말고 `aw say <이름> -- '메시지'` 로 같은 세션에 넣습니다.
   기본은 지금 도는 도구가 끝난 뒤 반영되고, 바로 끊어야 하면 `--interrupt` 입니다. `aw run` 이 `claude -p
   --output-format stream-json` 을 띄우면 알아서 받을 수 있게 둡니다. 끝난 워커와 다른 에이전트는 `aw resume`.
+- 이어서 맡길 만한 워커는 이름과 함께 사용자에게 알려 둡니다. 다음 일에서 `aw resume` 으로 잇기 쉽습니다.
 - 다 쓴 워커는 `aw rm <이름>` 으로, 끝난 것 전부는 `aw clean` 으로 정리합니다. 프로세스가 사라진 워커(`lost`,
   재부팅 전에 띄운 것 포함)만 치우려면 `aw prune` 입니다.
 

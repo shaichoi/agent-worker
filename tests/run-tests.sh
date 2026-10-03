@@ -575,19 +575,20 @@ printf '사양\n' > "$TMPROOT/rspec.md"
 check "codex: stdin 표식 - 를 걷어냄" \
   "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n새프롬프트')" \
   "$("$AW" errs r-cxf-r1)"
-# 이어하기에서도 기본 모델이 붙음 (안 붙으면 codex 가 config.toml 의 모델로 바꿈), 사용자가 준 모델은 그대로
+# 이어하기는 원래 워커가 쓴 모델로 잇고 기본 옵션의 모델 줄은 안 붙입니다 (27절). r-codex 는 모델 옵션 없이
+# 돌았고 이 시험에는 세션 파일도 없어 모델을 모르니, 지금 기본값(gpt-d)을 붙이지 않고 그대로 잇습니다.
 printf 'codex --sandbox workspace-write\ncodex --model gpt-d\n' > "$AW_DEFAULTS"
 "$AW" resume r-codex -n r-codex-m -- 새프롬프트 >/dev/null 2>&1
 "$AW" wait r-codex-m >/dev/null 2>&1
-check "codex 이어하기: 기본 모델도 resume 앞에" \
-  "$(printf -- 'exec\n--sandbox\nworkspace-write\n--model\ngpt-d\nresume\nTID1\n--json\n새프롬프트')" \
+check "codex 이어하기: 원래 모델을 모르면 지금 기본 모델도 안 붙음 (나머지 기본 옵션은 resume 앞에)" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n새프롬프트')" \
   "$("$AW" errs r-codex-m)"
 "$AW" run -n r-cxm -- codex exec --json -m mine 원래 >/dev/null 2>&1
 "$AW" wait r-cxm >/dev/null 2>&1
 "$AW" resume r-cxm -- 새프롬프트 >/dev/null 2>&1
 "$AW" wait r-cxm-r1 >/dev/null 2>&1
-check "codex 이어하기: 사용자가 준 모델이면 기본 모델은 안 붙음" \
-  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n-m\nmine\n새프롬프트')" \
+check "codex 이어하기: 원래 모델(-m mine)을 그대로, 기본 모델은 안 붙음" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n--model\nmine\n새프롬프트')" \
   "$("$AW" errs r-cxm-r1)"
 "$AW" resume r-codex -n r-codex-nd --no-defaults -- 새프롬프트 >/dev/null 2>&1
 "$AW" wait r-codex-nd >/dev/null 2>&1
@@ -708,7 +709,7 @@ check "옛 기록: 쪼개진 앞 프롬프트 조각을 걷어냄 (옵션과 값
   "$(ml errs ml-old-r1)"
 has "옛 기록: 걷어냈다고 알림" "$out" "조각 5줄"
 printf '%s\n' devin -p '첫 줄' '둘째 줄' -c --model M > "$AW_HOME/workers/ml-old/cmd.orig"
-printf '%s\n' devin > "$AW_HOME/workers/ml-old/cmd"
+cp "$AW_HOME/workers/ml-old/cmd.orig" "$AW_HOME/workers/ml-old/cmd"; rm -f "$AW_HOME/workers/ml-old/args"
 ml resume ml-old -n ml-old-d -- 새것 >/dev/null 2>&1; ml wait ml-old-d >/dev/null 2>&1
 check "옛 기록 devin: -p 뒤 조각만 걷고 뒤 옵션은 남김" "$(printf 'argc=6\n<-p>\n<새것>\n<-r>\n<SID1>\n<--model>\n<M>')" "$(ml errs ml-old-d)"
 
@@ -2148,6 +2149,181 @@ out=$(env HOME="$TMPROOT/nowhich-home" PATH="$NW/fake:$NW/bin" AW_DEFAULTS="$NO_
 has "aw setup: devin 이 있는데 which 가 없으면 알림" "$out" "which 실행 파일이 없어 devin 의 exec 가 셸을 못 찾습니다"
 has "aw help agents: devin 의 which 주의" "$("$AW" help agents)" "sudo pacman -S which"
 "$AW" wait nw1 nw2 nw3 >/dev/null 2>&1; "$AW" rm nw1 nw2 nw3 >/dev/null 2>&1
+
+head_ "27. 이어하기: 원래 모델·수준 그대로, 갈래, 같은 세션 막기, 후보 (aw resume --fork / --list)"
+RP="$TMPROOT/rp"; mkdir -p "$RP/bin" "$RP/slowbin" "$RP/codex/sessions/2026/10/03" "$RP/other"
+printf '#!/bin/sh\nprintf "{\\"session_id\\":\\"PS1\\",\\"result\\":\\"ok\\"}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RP/bin/claude"
+printf '#!/bin/sh\nprintf "{\\"thread_id\\":\\"PT1\\"}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RP/bin/codex"
+printf '#!/bin/sh\nprintf "{\\"type\\":\\"metadata\\",\\"data\\":{\\"sessionId\\":\\"PK1\\"}}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RP/bin/kiro-cli"
+printf '#!/bin/sh\nprintf "{\\"conversation_id\\":\\"PA1\\"}\\n"\nprintf "%%s\\n" "$@" >&2\n' > "$RP/bin/agy"
+printf '#!/bin/sh\necho 텍스트만\nprintf "%%s\\n" "$@" >&2\n' > "$RP/bin/devin"
+printf '#!/bin/sh\nsleep 30\n' > "$RP/bin/slow"
+printf '#!/bin/sh\nsleep 30\nprintf "{\\"session_id\\":\\"PS1\\"}\\n"\n' > "$RP/slowbin/claude"
+chmod +x "$RP/bin"/* "$RP/slowbin"/*
+# codex 세션 파일: 마지막 turn_context 가 모델 gpt-old, 수준 medium
+printf '%s\n' '{"type":"turn_context","payload":{"model":"gpt-old","effort":"medium","collaboration_mode":{"settings":{"model":"gpt-old","reasoning_effort":"medium"}}}}' \
+  '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500000,"output_tokens":9000},"last_token_usage":{"input_tokens":90000,"cached_input_tokens":86000,"output_tokens":1000,"reasoning_output_tokens":300,"total_tokens":91000},"model_context_window":260000}}}' \
+  > "$RP/codex/sessions/2026/10/03/rollout-2026-10-03T00-00-00-PT1.jsonl"
+awp() { env PATH="$RP/bin:$PATH" AW_DEFAULTS="$RP/defaults" CODEX_HOME="$RP/codex" AW_BRIEF="$RP/no-brief" "$AW" "$@"; }
+awps() { env PATH="$RP/slowbin:$RP/bin:$PATH" AW_DEFAULTS="$RP/defaults" CODEX_HOME="$RP/codex" AW_BRIEF="$RP/no-brief" "$AW" "$@"; }
+
+# 기본값이 바뀌어도 원래 워커가 쓴 모델·수준으로 잇고, 다르면 알림
+printf 'claude --model ca\nclaude --effort high\n' > "$RP/defaults"
+awp run -n p-c -- claude -p --output-format json 원래 >/dev/null 2>&1; awp wait p-c >/dev/null 2>&1
+printf 'claude --model cb\nclaude --effort low\nclaude --permission-mode bypassPermissions\n' > "$RP/defaults"
+out=$(awp resume p-c -- 다음 2>&1); awp wait p-c-r1 >/dev/null 2>&1
+check "기본값이 바뀌어도 원래 모델·수준으로 (모델·수준 줄은 안 붙고 다른 기본 옵션은 붙음)" \
+  "$(printf -- '--resume\nPS1\n-p\n--output-format\njson\n--model\nca\n--effort\nhigh\n다음\n--permission-mode\nbypassPermissions')" \
+  "$(awp errs p-c-r1)"
+has "지금 기본값과 다르면 원래 것을 쓴다고 알림" "$out" "원래 워커 그대로 ca · high"
+has "알림에 지금 기본값" "$out" "지금 기본값은 cb · low"
+awp resume p-c-r1 -- 또 >/dev/null 2>&1; awp wait p-c-r2 >/dev/null 2>&1
+check "이은 워커를 또 이어도 --model 이 하나" 1 "$(awp errs p-c-r2 | grep -c -- '^--model$')"
+has "이은 워커를 또 이어도 원래 모델·수준" "$(awp errs p-c-r2 | tr '\n' ' ')" "--model ca --effort high 또"
+check "meta 에 이어한 출처와 세션" "$(printf 'resumed_from=p-c-r1\nsession=PS1')" "$(grep -E '^(resumed_from|session)=' "$AW_HOME/workers/p-c-r2/meta")"
+has "aw status 에 이어한 출처" "$(awp status p-c-r2)" "p-c-r1 의 세션을 이음"
+printf 'claude --model ca\nclaude --effort high\n' > "$RP/defaults"
+out=$(awp resume p-c -n p-c-same -- 같음 2>&1); awp wait p-c-same >/dev/null 2>&1
+hasnt "지금 기본값과 같으면 알리지 않음" "$out" "원래 워커 그대로"
+
+# --model·--effort 로 일부러 바꿈
+out=$(awp resume p-c -n p-c-o --model cz --effort max -- 바꿔 2>&1); awp wait p-c-o >/dev/null 2>&1
+has "--model·--effort 로 바꿔 이음" "$(awp errs p-c-o | tr '\n' ' ')" "--model cz --effort max 바꿔"
+has "모델을 바꾸면 캐시 없이 다시 읽는다고 알림" "$out" "캐시 없이"
+awp run -n p-d -- devin -p 원래 --model swe-2-max >/dev/null 2>&1; awp wait p-d >/dev/null 2>&1
+if awp resume p-d --effort high -- x >/dev/null 2>&1; then ng "devin 에 --effort 를 받음"; else ok "devin 은 --effort 거절 (수준은 모델 이름에)"; fi
+awp resume p-d -- 이어 >/dev/null 2>&1; awp wait p-d-r1 >/dev/null 2>&1
+check "devin 도 원래 모델로" "$(printf -- '-p\n이어\n-c\n--model\nswe-2-max')" "$(awp errs p-d-r1)"
+
+# 원래 워커에 모델 옵션이 없었으면 지금 기본 모델도 안 붙음 (CLI 기본·프로필 그대로)
+printf 'claude --permission-mode bypassPermissions\n' > "$RP/defaults"
+awp run -n p-n -- claude -p --output-format json 원래 >/dev/null 2>&1; awp wait p-n >/dev/null 2>&1
+printf 'claude --permission-mode bypassPermissions\nclaude --model cn\n' > "$RP/defaults"
+awp resume p-n -- 다음 >/dev/null 2>&1; awp wait p-n-r1 >/dev/null 2>&1
+check "원래 모델 옵션이 없었으면 지금 기본 모델도 안 붙음" \
+  "$(printf -- '--resume\nPS1\n-p\n--output-format\njson\n다음\n--permission-mode\nbypassPermissions')" "$(awp errs p-n-r1)"
+
+# codex: 인자에 없는 모델·수준은 세션 파일(turn_context)에서. -c 는 model_reasoning_effort 만 걷음
+printf 'codex --sandbox workspace-write\ncodex --model gpt-now\n' > "$RP/defaults"
+awp run -n p-x --no-defaults -- codex exec --json -c model_reasoning_effort=high -c other=1 원래 >/dev/null 2>&1; awp wait p-x >/dev/null 2>&1
+out=$(awp resume p-x -- 다음 2>&1); awp wait p-x-r1 >/dev/null 2>&1
+check "codex: 모델은 세션 파일에서, 수준은 인자의 것, 다른 -c 는 남김 (기본 모델은 안 붙음)" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nPT1\n--json\n-c\nother=1\n--model\ngpt-old\n-c\nmodel_reasoning_effort=high\n다음')" \
+  "$(awp errs p-x-r1)"
+has "codex: 지금 기본 모델과 다르면 알림" "$out" "지금 기본값은 gpt-now"
+printf 'codex --sandbox workspace-write\n' > "$RP/defaults"
+awp run -n p-x2 -- codex exec --json 원래 >/dev/null 2>&1; awp wait p-x2 >/dev/null 2>&1
+awp resume p-x2 -- 다음 >/dev/null 2>&1; awp wait p-x2-r1 >/dev/null 2>&1
+check "codex: 인자에 없으면 모델·수준 모두 세션 파일에서" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nPT1\n--json\n--model\ngpt-old\n-c\nmodel_reasoning_effort=medium\n다음')" \
+  "$(awp errs p-x2-r1)"
+
+# 갈래 (--fork): claude 는 --fork-session, codex 는 exec fork. 원래 세션은 그대로
+printf 'claude --model ca\n' > "$RP/defaults"
+out=$(awp resume p-c --fork -- 갈래 2>&1); awp wait p-c-f1 >/dev/null 2>&1
+check "claude 갈래: --fork-session, 이름 -f1" \
+  "$(printf -- '--resume\nPS1\n--fork-session\n-p\n--output-format\njson\n--model\nca\n--effort\nhigh\n갈래')" \
+  "$(awp errs p-c-f1)"
+has "갈래라고 알림" "$out" "갈래: p-c → p-c-f1"
+check "갈래는 meta 에 fork_of 만 (세션은 끝난 뒤 출력에서)" "fork_of=p-c" "$(grep -E '^(fork_of|resumed_from|session)=' "$AW_HOME/workers/p-c-f1/meta" | head -1)"
+has "aw status 에 갈래" "$(awp status p-c-f1)" "p-c 의 세션에서 갈라짐"
+awp resume p-c-f1 -- 갈래를이음 >/dev/null 2>&1; awp wait p-c-f1-r1 >/dev/null 2>&1
+hasnt "갈래 워커를 이으면 다시 갈라지지 않음" "$(awp errs p-c-f1-r1)" "--fork-session"
+check "갈래를 이은 이름은 갈래 이름 뒤에 -r1" 0 "$([ -d "$AW_HOME/workers/p-c-f1-r1" ]; printf '%s' "$?")"
+awp resume p-c-f1-r1 --fork -- 또갈래 >/dev/null 2>&1; awp wait p-c-f2 >/dev/null 2>&1
+check "갈래를 또 만들면 바탕 이름의 다음 -f" 0 "$([ -d "$AW_HOME/workers/p-c-f2" ]; printf '%s' "$?")"
+printf 'codex --sandbox workspace-write\n' > "$RP/defaults"
+awp resume p-x2 --fork -- 갈래 >/dev/null 2>&1; awp wait p-x2-f1 >/dev/null 2>&1
+check "codex 갈래: exec fork, 기본 옵션은 fork 앞" \
+  "$(printf -- 'exec\n--sandbox\nworkspace-write\nfork\nPT1\n--json\n--model\ngpt-old\n-c\nmodel_reasoning_effort=medium\n갈래')" \
+  "$(awp errs p-x2-f1)"
+awp resume p-x2-f1 -- 이어 >/dev/null 2>&1; awp wait p-x2-f1-r1 >/dev/null 2>&1
+has "codex 갈래 워커를 이으면 exec resume" "$(awp errs p-x2-f1-r1 | tr '\n' ' ')" "workspace-write resume PT1 --json"
+awp run -n p-k -- kiro-cli chat --output-format stream-json 원래 >/dev/null 2>&1; awp wait p-k >/dev/null 2>&1
+out=$(awp resume p-k --fork -- x 2>&1); rc=$?
+check "kiro-cli 갈래는 거절" 1 "$rc"
+has "갈래는 claude·codex 만이라고 알림" "$out" "claude·codex 만"
+if awp resume p-d --fork -- x >/dev/null 2>&1; then ng "devin 갈래를 받음"; else ok "devin 갈래는 거절"; fi
+
+# 같은 세션을 쓰는 워커가 돌면 거절 (인자에 --resume 이 든 것, aw resume 이 meta 에 세션을 적은 것 둘 다)
+awp run -n p-busy -- slow --resume PS1 >/dev/null 2>&1
+out=$(awp resume p-c -n p-c-b -- x 2>&1); rc=$?
+check "같은 세션을 쓰는 워커가 돌면 거절" 1 "$rc"
+has "거절하며 그 워커를 알림" "$out" "p-busy 가 같은 세션(PS1)"
+has "갈래를 안내" "$out" "--fork"
+awp resume p-c --fork -n p-c-fb -- x >/dev/null 2>&1
+check "같은 세션이 돌아도 갈래는 됨" 0 "$?"
+awp stop p-busy >/dev/null 2>&1
+awps resume p-c -n p-c-slow -- 오래 >/dev/null 2>&1
+out=$(awp resume p-c -n p-c-b2 -- x 2>&1); rc=$?
+check "aw resume 으로 띄워 도는 워커가 있으면 거절 (meta 의 세션)" 1 "$rc"
+has "그 워커를 알림" "$out" "p-c-slow 가 같은 세션"
+awp stop p-c-slow >/dev/null 2>&1
+awp resume p-c -n p-c-after -- 끝난뒤 >/dev/null 2>&1
+check "끝난 뒤에는 이음" 0 "$?"
+awp wait p-c-fb p-c-after >/dev/null 2>&1
+
+# 후보 보기 (aw resume --list). 다른 AW_HOME 에서 출력을 꾸며 넣어 봅니다.
+awl() { env AW_HOME="$RP/home2" PATH="$RP/bin:$PATH" AW_DEFAULTS="$RP/ldefaults" CODEX_HOME="$RP/codex" AW_BRIEF="$RP/no-brief" "$AW" "$@"; }
+LW="$RP/home2/workers"
+lmk() { # <이름> <끝난 지 초> <out 내용>  (meta 의 세션은 지워서 out 에서 다시 찾게 함)
+  printf '%s\n' "$3" > "$LW/$1/out"
+  grep -v '^session=' "$LW/$1/meta" > "$LW/$1/meta.t"; mv "$LW/$1/meta.t" "$LW/$1/meta"
+  printf '%s\n' $(( $(date +%s) - $2 )) > "$LW/$1/finished"
+}
+printf 'claude --model ca\nkiro-cli --model km\n' > "$RP/ldefaults"
+awl run -n l-c1 -- claude -p --output-format stream-json --verbose '첫 작업 첫 줄
+둘째 줄' >/dev/null 2>&1
+awl run -n l-c2 -- claude -p --output-format json 옛것 >/dev/null 2>&1
+awl run -n l-c3 -- claude -p --output-format json --model cb 다른세션 >/dev/null 2>&1
+awl run -n l-x -- codex exec --json 코덱스작업 >/dev/null 2>&1
+awl run -n l-k -- kiro-cli chat --output-format stream-json 키로작업 >/dev/null 2>&1
+awl run -n l-o -d "$RP/other" -- claude -p --output-format json 다른곳 >/dev/null 2>&1
+awl wait l-c1 l-c2 l-c3 l-x l-k l-o --timeout 20 >/dev/null 2>&1
+U1H='"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000}'
+lmk l-c1 570 "$(printf '%s\n' '{"type":"system","subtype":"init","session_id":"LS1","model":"claude-x"}' \
+  '{"type":"result","session_id":"LS1","usage":{"input_tokens":20,"cache_read_input_tokens":90000,"cache_creation_input_tokens":4000,"output_tokens":900,'"$U1H"',"iterations":[{"input_tokens":10,"output_tokens":400,"cache_read_input_tokens":30000,"cache_creation_input_tokens":2000,'"$U1H"'},{"input_tokens":10,"output_tokens":500,"cache_read_input_tokens":32000,"cache_creation_input_tokens":2000,'"$U1H"'}]},"modelUsage":{"claude-x":{"inputTokens":20,"cacheReadInputTokens":90000}}}')"
+lmk l-c2 1200 '{"type":"result","session_id":"LS1","usage":{"input_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":0,"output_tokens":5}}'
+lmk l-c3 600 '{"type":"result","session_id":"LS3","usage":{"input_tokens":5,"cache_read_input_tokens":20000,"cache_creation_input_tokens":3000,"output_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":3000,"ephemeral_1h_input_tokens":0}}}'
+lmk l-x 100 '{"type":"thread.started","thread_id":"PT1"}'
+lmk l-k 300 '{"type":"sessionUpdate","sessionId":"LK1","contextUsage":{"usagePercentage":12.4}}'
+lmk l-o 50 '{"type":"result","session_id":"LO1","usage":{"input_tokens":1,"cache_read_input_tokens":1,"cache_creation_input_tokens":0,"output_tokens":1}}'
+awl run -n l-busy -- slow --resume LS3 >/dev/null 2>&1
+out=$(awl resume --list 2>&1)
+has "후보: claude 1시간 캐시면 살아 있을 것과 남은 시간" "$out" "캐시 살아 있을 것 (약 50분 남음)"
+has "후보: 마지막 요청의 문맥 (input+캐시 읽기·쓰기+출력)" "$out" "문맥 35K"
+has "후보: 원래 모델·수준" "$out" "l-c1   claude · ca · 수준 CLI 기본"
+has "후보: 지금 기본값과 같음" "$out" "지금 기본값과 같음"
+hasnt "후보: 같은 세션은 마지막 워커만 (l-c2 는 숨음)" "$out" "l-c2"
+has "후보: 5분짜리 캐시면 10분 뒤 식었을 것" "$(printf '%s' "$out" | grep -A1 '^l-c3')" "캐시 식었을 것"
+has "후보: 기본값과 다르면 지금 기본값을 보임" "$(printf '%s' "$out" | grep -A1 '^l-c3')" "지금 기본값과 다름 (ca · CLI 기본)"
+has "후보: 같은 세션을 쓰는 도는 워커" "$(printf '%s' "$out" | grep -A3 '^l-c3')" "도는 중: l-busy"
+has "후보: codex 는 30분 안이면 살아 있을 것, 문맥과 창의 %" "$(printf '%s' "$out" | grep -A1 '^l-x')" "문맥 91K (창의 35%)"
+has "후보: codex 모델·수준은 세션 파일에서" "$out" "l-x   codex · gpt-old · medium"
+has "후보: kiro-cli 는 문맥 % 만, 캐시 모름" "$(printf '%s' "$out" | grep -A1 '^l-k')" "캐시 모름 (kiro-cli 는 캐시 수치를 안 냄) · 문맥 창의 12%"
+has "후보: 작업 첫 줄" "$(printf '%s' "$out" | grep -A2 '^l-c1')" "첫 작업 첫 줄"
+hasnt "후보: 작업은 첫 줄만" "$out" "둘째 줄"
+has "후보: 최근에 끝난 순 (l-o 가 맨 위)" "$(printf '%s' "$out" | grep -E '^l-' | head -1)" "l-o"
+out=$(awl resume --list -d "$RP/other" 2>&1)
+has "후보 -d: 그 경로 아래만" "$out" "l-o"
+hasnt "후보 -d: 다른 곳은 뺌" "$out" "l-c1"
+out=$(awl resume --list --agent codex 2>&1)
+has "후보 --agent: 그 에이전트만" "$out" "l-x"
+hasnt "후보 --agent: 다른 에이전트는 뺌" "$out" "l-c1"
+js=$(awl resume --list --json 2>&1)
+has "후보 --json: 모델·지금 기본값·같은지" "$js" '"name":"l-c1","agent":"claude","state":"done","exit":"0","model":"ca","effort":"","defaults_model":"ca","defaults_effort":"","settings_match":"same"'
+has "후보 --json: 문맥" "$js" '"context_tokens":34510,"context_pct":null'
+has "후보 --json: codex 창의 %" "$js" '"context_tokens":91000,"context_pct":35'
+has "후보 --json: 도는 워커" "$js" '"in_use_by":"l-busy"'
+if command -v python3 >/dev/null 2>&1; then
+  printf '%s' "$js" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d) == 5, len(d)' 2>/dev/null \
+    && ok "후보 --json 은 올바른 JSON (후보 5개)" || ng "후보 --json 이 JSON 이 아니거나 개수가 다름"
+fi
+check "후보가 없으면 그렇게 알림" "이어할 워커가 없습니다 (세션 ID 가 남은 끝난 워커가 없음, gemini)." "$(awl resume --list --agent gemini 2>&1)"
+awl stop l-busy >/dev/null 2>&1
+has "aw help resume: 언제 이을지와 근거" "$("$AW" help resume)" "언제 이으면 좋은가"
+has "aw resume --help: --fork·--list" "$("$AW" resume --help)" "--list"
+awp clean --all >/dev/null 2>&1; awl clean --all >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
