@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.22.1
+AW_VERSION=0.22.2
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -309,7 +309,8 @@ T
   meta      이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표, 토큰 추정치, 세션 ID,
             aw 가 코드를 바꿨으면 원래 코드와 사유 (agent_exit, fail_reason: kiro-cli 의 거절·권한 거부)
   cmd       실행한 인자 (한 줄에 하나). aw say 모드면 프롬프트가 든 명령이고, 실제 실행은 launch.sh
-  cmd.orig  기본 옵션을 붙이기 전, 사용자가 준 인자 (aw resume 이 씀)
+  cmd.orig  기본 옵션을 붙이기 전, 사용자가 준 인자 (한 줄에 하나)
+  args.orig 같은 인자를 따옴표로 감싼 그대로 (aw resume 이 씀. 여러 줄 프롬프트도 온전)
   out / err 표준 출력 / 표준 오류
   exit      종료 코드 (이 파일이 생기면 끝난 것)
   pid       실행 중인 명령의 pid
@@ -432,6 +433,9 @@ T
 shquote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
+
+# 인자들을 따옴표로 감싸 한 덩어리로 냅니다 (eval "set -- …" 로 되돌림). 줄바꿈이 든 인자도 온전합니다.
+qwords() { for qw_a in "$@"; do printf ' %s' "$(shquote "$qw_a")"; done; }
 
 # 환경변수는 'export ...' 줄을 통째로 쌓습니다. 예전엔 공백으로 이어 붙인 뒤
 # 셸의 단어 분리로 되꺼냈는데, 값에 공백이 있으면 줄이 쪼개져 조용히 깨졌습니다.
@@ -617,11 +621,42 @@ session_of() { # <워커디렉터리>
   return 0
 }
 
-# 프롬프트와, 이미 붙어 있는 이어하기 표시를 걷어내며 나머지를 한 줄에 하나씩 냅니다.
+# 옵션처럼 생긴 인자인지 (-x, --이름, --이름=값). 프롬프트 줄 "- 항목", "---" 은 옵션이 아닙니다.
+is_opt() { # <인자>
+  io_n=${1%%=*}
+  case "$io_n" in
+    -[A-Za-z0-9]) return 0 ;;
+    --[A-Za-z0-9]*) case "$io_n" in *[!A-Za-z0-9-]*) return 1 ;; esac; return 0 ;;
+  esac
+  return 1
+}
+
+# 0.22.1 까지의 기록(cmd.orig 뿐, 한 줄에 인자 하나)을 읽을 때 씁니다. 그때는 여러 줄 프롬프트가 줄마다
+# 다른 인자로 쪼개져 남았고, 이어하기가 그 조각을 다음 명령에 넘겨 claude 가 첫 조각만 프롬프트로 받았습니다
+# (실측: 여러 줄 지시가 첫 줄만 전달). 그래서 옵션도 옵션의 값도 아닌 줄은 프롬프트 조각으로 보고 걷어냅니다.
+# 여기 적은 것은 값을 받지 않는 옵션입니다. 모르는 옵션은 바로 다음 줄을 값으로 봅니다.
+old_flag_bool() { # <에이전트> <옵션>
+  case "$2" in -c | --continue) return 0 ;; esac
+  case "$1" in
+    claude) case "$2" in
+      -p | --print | --verbose | --include-partial-messages | --replay-user-messages | --fork-session \
+      | --dangerously-skip-permissions | --allow-dangerously-skip-permissions | --strict-mcp-config \
+      | --no-session-persistence | --ide | --bare | --safe-mode | -d | --debug) return 0 ;; esac ;;
+    codex) case "$2" in
+      --json | --skip-git-repo-check | --full-auto | --dangerously-bypass-approvals-and-sandbox | --oss | --last \
+      | --all | --ephemeral | --approve-for-me | --strict-config | --ignore-user-config | --ignore-rules \
+      | --worktree | --dangerously-bypass-hook-trust) return 0 ;; esac ;;
+    kiro-cli) case "$2" in --trust-all-tools | -a | --no-interactive | --v1 | --v2 | --v3) return 0 ;; esac ;;
+    agy) case "$2" in --dangerously-skip-permissions) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# 프롬프트와, 이미 붙어 있는 이어하기 표시를 걷어내며 나머지를 따옴표로 감싸 냅니다 (qwords).
 # 이어하기를 또 이어할 때 --resume 이 겹치지 않게 하는 것이 두 번째 몫입니다.
-resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <인자...>
-  rmode=$1; rhas=$2; shift 2
-  rskip=0; rn=$#; ri=0
+resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <옛 기록(1/0)> <인자...>
+  rmode=$1; rhas=$2; rold=$3; shift 3
+  rskip=0; rn=$#; ri=0; rval=0; rtail=0; rdrop=0; rlast=0
   for ra in "$@"; do
     ri=$((ri + 1))
     if [ "$rskip" -eq 1 ]; then
@@ -637,7 +672,7 @@ resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <인
           -c | --continue) continue ;;
         esac
         # 프롬프트는 맨 끝 인자입니다.
-        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then continue; fi
+        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then rlast=1; continue; fi
         ;;
       agy)
         case "$ra" in
@@ -652,7 +687,7 @@ resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <인
         # '-' 는 stdin 으로 프롬프트를 받겠다는 표식입니다. 새 프롬프트는
         # 인자로 주므로 같이 두면 codex 가 둘 다 프롬프트로 보고 실패합니다.
         [ "$ra" = - ] && continue
-        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then continue; fi
+        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then rlast=1; continue; fi
         ;;
       devin)
         # -p 와 그 뒤 프롬프트, 이어하기 옵션은 앞쪽에서 새로 붙였습니다.
@@ -673,15 +708,31 @@ resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <인
           -r | --resume | --resume-picker) continue ;;
         esac
         # 프롬프트는 맨 끝 인자입니다.
-        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then continue; fi
+        if [ "$rhas" -eq 1 ] && [ "$ri" -eq "$rn" ]; then rlast=1; continue; fi
         ;;
     esac
-    printf '%s\n' "$ra"
+    if [ "$rold" -eq 1 ]; then
+      # 프롬프트가 맨 끝인 에이전트는 처음 나온 조각부터 끝까지가 프롬프트입니다.
+      if [ "$rtail" -eq 1 ]; then rdrop=$((rdrop + 1)); continue; fi
+      if [ "$rval" -eq 1 ]; then
+        rval=0
+        is_opt "$ra" || { qwords "$ra"; continue; }
+      fi
+      if is_opt "$ra"; then
+        case "$ra" in *=*) ;; *) old_flag_bool "$rmode" "$ra" || rval=1 ;; esac
+      else
+        rdrop=$((rdrop + 1))
+        case "$rmode" in claude | codex | kiro-cli) rtail=1 ;; esac
+        continue
+      fi
+    fi
+    qwords "$ra"
   done
+  [ "$rdrop" -gt 0 ] && warn "  (aw 0.22.1 까지의 기록이라 쪼개져 남은 앞 프롬프트 조각 $((rdrop + rlast))줄을 걷어냈습니다)"
   return 0
 }
 
-# 이어하기 명령을 만들어 한 줄에 하나씩 냅니다.
+# 이어하기 명령을 만들어 따옴표로 감싸 냅니다 (cmd_resume 이 eval "set -- …" 로 되돌림).
 #
 # 여기가 에이전트별 지식이 모이는 유일한 곳입니다. 새 에이전트를 붙이려면
 # 이 case 에 한 갈래만 더하면 됩니다.
@@ -691,8 +742,13 @@ resume_rest() { # <에이전트> <프롬프트가 인자에 있었나(1/0)> <인
 resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
   rd=$1; rsid=$2; rp=$3
   set --
-  rsrc="$rd/cmd.orig"; [ -f "$rsrc" ] || rsrc="$rd/cmd"
-  while IFS= read -r ra; do set -- "$@" "$ra"; done < "$rsrc"
+  if [ -f "$rd/args.orig" ]; then
+    eval "set -- $(cat "$rd/args.orig")"; rold=0
+  else
+    rsrc="$rd/cmd.orig"; [ -f "$rsrc" ] || rsrc="$rd/cmd"
+    while IFS= read -r ra; do set -- "$@" "$ra"; done < "$rsrc"
+    rold=1
+  fi
   [ $# -gt 0 ] || return 1
   rprog=$1; ragent=${rprog##*/}; shift
   [ "$(meta_get "$rd" stdin)" = /dev/null ] && rhas=1 || rhas=0
@@ -700,15 +756,15 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
   case "$ragent" in
     claude)
       [ -n "$rsid" ] || return 3
-      printf '%s\n--resume\n%s\n' "$rprog" "$rsid"
-      resume_rest claude "$rhas" "$@"
-      printf '%s\n' "$rp"
+      qwords "$rprog" --resume "$rsid"
+      resume_rest claude "$rhas" "$rold" "$@"
+      qwords "$rp"
       ;;
     agy)
       [ -n "$rsid" ] || return 3
-      printf '%s\n--conversation\n%s\n' "$rprog" "$rsid"
-      resume_rest agy "$rhas" "$@"
-      printf -- '-p=%s\n' "$rp"
+      qwords "$rprog" --conversation "$rsid"
+      resume_rest agy "$rhas" "$rold" "$@"
+      qwords "-p=$rp"
       ;;
     codex)
       [ -n "$rsid" ] || return 3
@@ -728,27 +784,27 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트>
       shift "$rn0"
       # 이미 이어하기 명령이면 'resume <id>' 를 걷어내고 새로 붙입니다.
       [ "${1:-}" = resume ] && { shift; [ $# -gt 0 ] && case "$1" in -*) ;; *) shift ;; esac; }
-      printf '%s\nexec\n' "$rprog"
-      [ -n "$rprof" ] && printf -- '--profile\n%s\n' "$rprof"
-      printf 'resume\n%s\n' "$rsid"
-      resume_rest codex "$rhas" "$@"
-      printf '%s\n' "$rp"
+      qwords "$rprog" exec
+      [ -n "$rprof" ] && qwords --profile "$rprof"
+      qwords resume "$rsid"
+      resume_rest codex "$rhas" "$rold" "$@"
+      qwords "$rp"
       ;;
     devin)
       # devin 은 프롬프트가 -p 바로 뒤에 와야 해서 앞으로 뺍니다.
       # 세션 ID 를 비대화형으로 얻을 길이 없어 보통 -c 로 갑니다.
-      printf '%s\n-p\n%s\n' "$rprog" "$rp"
-      if [ -n "$rsid" ]; then printf -- '-r\n%s\n' "$rsid"; else printf -- '-c\n'; fi
-      resume_rest devin "$rhas" "$@"
+      qwords "$rprog" -p "$rp"
+      if [ -n "$rsid" ]; then qwords -r "$rsid"; else qwords -c; fi
+      resume_rest devin "$rhas" "$rold" "$@"
       ;;
     kiro-cli)
       # v3 엔진은 v2 로 시작한 세션도 이어받습니다 (실측). 엔진이 바뀌어도 됩니다.
       [ -n "$rsid" ] || return 3
       [ "${1:-}" = chat ] || return 4
       shift
-      printf '%s\nchat\n--resume-id\n%s\n' "$rprog" "$rsid"
-      resume_rest kiro-cli "$rhas" "$@"
-      printf '%s\n' "$rp"
+      qwords "$rprog" chat --resume-id "$rsid"
+      resume_rest kiro-cli "$rhas" "$rold" "$@"
+      qwords "$rp"
       ;;
     *) return 2 ;;
   esac
@@ -1556,8 +1612,11 @@ cmd_run() {
 
   # 사용자가 준 그대로의 인자를 남겨 둡니다. 아래에서 기본 옵션을 뒤에 붙이면
   # "프롬프트는 맨 끝" 같은 규칙이 깨지므로, aw resume 은 이 파일을 봅니다.
+  # cmd.orig 는 사람이 읽는 한 줄에 하나, args.orig 는 따옴표로 감싼 그대로입니다. aw resume 은 args.orig 를
+  # 읽습니다. 0.22.1 까지는 cmd.orig 만 있어 여러 줄 프롬프트가 줄마다 다른 인자로 쪼개졌습니다.
   : > "$wd/cmd.orig"
   for a in "$@"; do printf '%s\n' "$a" >> "$wd/cmd.orig"; done
+  qwords "$@" > "$wd/args.orig"
 
   stdin_orig=$stdin_file
   n_user=$#
@@ -1605,6 +1664,7 @@ cmd_run() {
     ( eval "set -- $fb_words"; for a in "$@"; do printf '%s\n' "$a"; done ) >> "$wd/cmd.fallback"
     : > "$wd/cmd.orig.fallback"
     ( eval "set -- $run_fallback"; for a in "$@"; do printf '%s\n' "$a"; done ) >> "$wd/cmd.orig.fallback"
+    printf '%s' "$run_fallback" > "$wd/args.orig.fallback"
   fi
 
   # exec 는 종료 코드를 남길 수 없으므로 한 겹 더 감쌉니다.
@@ -1623,6 +1683,7 @@ cmd_run() {
         "$PICK_FALLBACK_SECS" "$(shquote "$PICK_MODEL_REJECTED")" "$(shquote "$wd/out")" "$(shquote "$wd/err")"
       printf '  mv %s %s; mv %s %s\n' "$(shquote "$wd/out")" "$(shquote "$wd/out.model")" "$(shquote "$wd/err")" "$(shquote "$wd/err.model")"
       printf '  mv %s %s; mv %s %s\n' "$(shquote "$wd/cmd.fallback")" "$(shquote "$wd/cmd")" "$(shquote "$wd/cmd.orig.fallback")" "$(shquote "$wd/cmd.orig")"
+      printf '  mv %s %s\n' "$(shquote "$wd/args.orig.fallback")" "$(shquote "$wd/args.orig")"
       printf '  printf "pick_fallback=%%s\\n" "$code" >> %s\n' "$(shquote "$wd/meta")"
       printf '  sh %s\n' "$(shquote "$wd/fallback.sh")"
       printf '  code=$?\n'
@@ -2173,10 +2234,9 @@ cmd_resume() {
   [ -n "$sprof" ] && opts="$opts --profile $(shquote "$sprof")"
   # codex 는 기본 옵션을 resume 앞에 붙입니다 (run_argv). 프롬프트 뒤에 붙이면 codex 가 거절합니다.
 
-  set --
-  while IFS= read -r a; do set -- "$@" "$a"; done <<ARGV
-$argv
-ARGV
+  # 줄 단위로 읽지 않습니다. 0.22.1 까지는 그래서 여러 줄 프롬프트가 줄마다 다른 인자가 됐고,
+  # claude 는 첫 줄만 프롬프트로 받았습니다.
+  eval "set -- $argv"
   if [ -z "$sid" ]; then
     warn "세션 ID 가 없어 devin 의 -c (그 디렉터리의 가장 최근 대화) 로 이어갑니다."
     warn "  같은 디렉터리에 devin 워커가 여럿이면 엉뚱한 대화를 집을 수 있습니다."

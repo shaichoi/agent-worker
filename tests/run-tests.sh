@@ -648,6 +648,70 @@ check "kiro-cli: -f 로 돌린 워커는 인자를 안 잃음" \
 "$AW" wait r-kiro-nochat >/dev/null 2>&1
 if "$AW" resume r-kiro-nochat -- 이어서 >/dev/null 2>&1; then ng "chat 아닌 kiro-cli 를 이어함"; else ok "chat 으로 시작하지 않은 kiro-cli 는 거절"; fi
 
+# 여러 줄 프롬프트: 줄마다 다른 인자로 쪼개지면 안 됩니다. 0.22.1 까지는 쪼개져 claude 가 첫 줄만 받았습니다.
+# 가짜 에이전트가 인자 수와 각 인자를 <...> 로 감싸 남깁니다 (인자 안의 줄바꿈은 그대로 보임).
+MLSTUB="$TMPROOT/mlstub"; mkdir -p "$MLSTUB"
+for a in claude codex kiro-cli agy devin; do
+  case "$a" in
+    claude) sj='{\"session_id\":\"SID1\"}' ;; codex) sj='{\"thread_id\":\"TID1\"}' ;;
+    kiro-cli) sj='{\"sessionId\":\"KSID1\"}' ;; agy) sj='{\"conversation_id\":\"CID1\"}' ;; devin) sj='텍스트만' ;;
+  esac
+  printf '#!/bin/sh\nprintf "%%s\\n" "%s"\nprintf "argc=%%s\\n" "$#" >&2\nprintf "<%%s>\\n" "$@" >&2\n' "$sj" > "$MLSTUB/$a"
+  chmod +x "$MLSTUB/$a"
+done
+ml() { PATH="$MLSTUB:$PATH" "$AW" "$@"; }
+ML1=$(printf '원래 첫 줄\n원래 둘째 줄')
+ML2=$(printf '새 첫 줄\n- 항목 하나\n--verbose 는 글자\n\n---\n새 끝 줄')
+ML3=$(printf '세번째 첫 줄\n세번째 끝')
+ml run -n ml-c -- claude -p --output-format json "$ML1" >/dev/null 2>&1; ml wait ml-c >/dev/null 2>&1
+ml resume ml-c -- "$ML2" >/dev/null 2>&1; ml wait ml-c-r1 >/dev/null 2>&1
+check "claude: 여러 줄 새 프롬프트가 인자 하나로" \
+  "$(printf 'argc=8\n<--resume>\n<SID1>\n<-p>\n<--output-format>\n<json>\n<%s>\n<--permission-mode>\n<bypassPermissions>' "$ML2")" \
+  "$(ml errs ml-c-r1)"
+ml resume ml-c-r1 -- "$ML3" >/dev/null 2>&1; ml wait ml-c-r2 >/dev/null 2>&1
+check "claude: 여러 줄로 이은 워커를 또 이어도 앞 프롬프트 조각이 안 남음" \
+  "$(printf 'argc=8\n<--resume>\n<SID1>\n<-p>\n<--output-format>\n<json>\n<%s>\n<--permission-mode>\n<bypassPermissions>' "$ML3")" \
+  "$(ml errs ml-c-r2)"
+check "args.orig 는 따옴표로 감싼 그대로 (되읽으면 인자 7개)" 7 "$(eval "set -- $(cat "$AW_HOME/workers/ml-c-r1/args.orig")"; printf '%s' "$#")"
+ml run -n ml-x -- codex exec --json "$ML1" >/dev/null 2>&1; ml wait ml-x >/dev/null 2>&1
+ml resume ml-x -- "$ML2" >/dev/null 2>&1; ml wait ml-x-r1 >/dev/null 2>&1
+check "codex: 여러 줄 새 프롬프트가 인자 하나로" \
+  "$(printf 'argc=7\n<exec>\n<--sandbox>\n<workspace-write>\n<resume>\n<TID1>\n<--json>\n<%s>' "$ML2")" \
+  "$(ml errs ml-x-r1)"
+ml run -n ml-k -- kiro-cli chat --output-format stream-json "$ML1" >/dev/null 2>&1; ml wait ml-k >/dev/null 2>&1
+ml resume ml-k -- "$ML2" >/dev/null 2>&1; ml wait ml-k-r1 >/dev/null 2>&1
+check "kiro-cli: 여러 줄 새 프롬프트가 인자 하나로" \
+  "$(printf 'argc=6\n<chat>\n<--resume-id>\n<KSID1>\n<--output-format>\n<stream-json>\n<%s>' "$ML2")" \
+  "$(ml errs ml-k-r1)"
+ml run -n ml-a -- agy --output-format json "-p=$ML1" >/dev/null 2>&1; ml wait ml-a >/dev/null 2>&1
+ml resume ml-a -- "$ML2" >/dev/null 2>&1; ml wait ml-a-r1 >/dev/null 2>&1
+check "agy: 여러 줄 새 프롬프트가 -p= 하나로" \
+  "$(printf 'argc=5\n<--conversation>\n<CID1>\n<--output-format>\n<json>\n<-p=%s>' "$ML2")" \
+  "$(ml errs ml-a-r1)"
+ml run -n ml-d -- devin -p "$ML1" --model M >/dev/null 2>&1; ml wait ml-d >/dev/null 2>&1
+ml resume ml-d -- "$ML2" >/dev/null 2>&1; ml wait ml-d-r1 >/dev/null 2>&1
+check "devin: 여러 줄 새 프롬프트가 -p 뒤 인자 하나로" \
+  "$(printf 'argc=5\n<-p>\n<%s>\n<-c>\n<--model>\n<M>' "$ML2")" \
+  "$(ml errs ml-d-r1)"
+ml run -n ml-s -- claude -p --output-format stream-json --verbose 원래 >/dev/null 2>&1; ml wait ml-s --timeout 20 >/dev/null 2>&1
+ml resume ml-s -- "$ML2" >/dev/null 2>&1; ml wait ml-s-r1 --timeout 20 >/dev/null 2>&1
+check "say 모드로 이으면 여러 줄 프롬프트가 inbox 첫 줄에 온전히" \
+  '{"type":"user","message":{"role":"user","content":"새 첫 줄\n- 항목 하나\n--verbose 는 글자\n\n---\n새 끝 줄"}}' \
+  "$(sed -n 1p "$AW_HOME/workers/ml-s-r1/inbox")"
+# 0.22.1 까지의 기록 (args.orig 없이 cmd.orig 만, 앞 프롬프트가 줄마다 쪼개져 있음): 조각을 걷어냄
+ml run -n ml-old -- claude -p --output-format json 원래 >/dev/null 2>&1; ml wait ml-old >/dev/null 2>&1
+rm -f "$AW_HOME/workers/ml-old/args.orig"
+printf '%s\n' claude --resume SID1 -p --add-dir /tmp --output-format json --verbose '이어서 할 일: 첫 줄' '- 항목' '' '--verbose 는 글자' '끝 줄' > "$AW_HOME/workers/ml-old/cmd.orig"
+out=$(ml resume ml-old -- "$ML2" 2>&1); ml wait ml-old-r1 >/dev/null 2>&1
+check "옛 기록: 쪼개진 앞 프롬프트 조각을 걷어냄 (옵션과 값은 남김)" \
+  "$(printf 'argc=11\n<--resume>\n<SID1>\n<-p>\n<--add-dir>\n</tmp>\n<--output-format>\n<json>\n<--verbose>\n<%s>\n<--permission-mode>\n<bypassPermissions>' "$ML2")" \
+  "$(ml errs ml-old-r1)"
+has "옛 기록: 걷어냈다고 알림" "$out" "조각 5줄"
+printf '%s\n' devin -p '첫 줄' '둘째 줄' -c --model M > "$AW_HOME/workers/ml-old/cmd.orig"
+printf '%s\n' devin > "$AW_HOME/workers/ml-old/cmd"
+ml resume ml-old -n ml-old-d -- 새것 >/dev/null 2>&1; ml wait ml-old-d >/dev/null 2>&1
+check "옛 기록 devin: -p 뒤 조각만 걷고 뒤 옵션은 남김" "$(printf 'argc=6\n<-p>\n<새것>\n<-r>\n<SID1>\n<--model>\n<M>')" "$(ml errs ml-old-d)"
+
 # 오류 경로
 printf '#!/bin/sh\necho 텍스트만\n' > "$RSTUB/plain"; chmod +x "$RSTUB/plain"
 "$AW" run -n r-plain -- plain >/dev/null 2>&1
