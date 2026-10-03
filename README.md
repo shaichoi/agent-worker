@@ -409,7 +409,21 @@ aw run -n d1 -- devin -p "테스트를 추가해줘"
 `swe-2-high`, `swe-2-max` 가 있고, `swe-2` 만 주면 high 로 돕니다(실측: devin 세션 기록). 기본값을 바꾸려면
 `aw defaults set devin --model swe-2-high` 처럼 합니다.
 
-세 가지를 조심하세요.
+네 가지를 조심하세요.
+
+**`which` 실행 파일이 있어야 합니다.** devin 의 exec 는 쓸 셸을 외부 `which` 로 찾습니다. `which` 가 셸 내장으로만
+있으면(Arch 에 `which` 패키지가 없을 때 등) bash 가 있어도 명령을 하나도 못 돌리고 이렇게 답합니다.
+
+```
+The configured default shell 'bash' is not available on this machine. Set `shell_flavor` explicitly, or change the configured default shell.
+```
+
+zsh·fish·powershell 도 "not available" 이고, devin 은 **코드 0** 으로 끝나며 `devin doctor` 는 통과합니다. aw 를 거치지
+않아도, 터미널이 있어도, PATH 를 줄여도 같았습니다. exec 순간을 추적해 보니 PATH 의 모든 디렉터리에서 `which`
+실행이 "파일 없음" 이었고, PATH 에 `which` 를 두자 바로 됐습니다(devin 3000.10.31~3000.11.3, 같은 버전을 쓰는 `which`
+있는 WSL 에서는 정상). Arch 는 필수 메타패키지 `base` 에 `which` 가 없고 `base-devel` 을 깔 때 의존성으로 들어와서, zsh(내장 `which`)만
+쓰면 없는 줄 모르고 지나가기 쉽습니다. 해결은 `sudo pacman -S which`(Debian/Ubuntu 는 `debianutils` 에 있음)입니다. 설치할 수 없으면
+`command -v` 로 경로를 내는 몇 줄짜리 `which` 스크립트를 PATH 에 둬도 됩니다. `aw run` 과 `aw setup` 이 없으면 알려 줍니다.
 
 **프롬프트는 `-p` 바로 뒤에 와야 합니다.** 사이에 다른 옵션이 끼면 이렇게 실패합니다.
 

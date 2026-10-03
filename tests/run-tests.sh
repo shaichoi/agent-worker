@@ -2068,5 +2068,22 @@ has "이어하기도 새 프롬프트를 첫 메시지로" "$(head -1 "$AW_HOME/
 has "이어하기는 --resume 세션으로" "$(cat "$SY/args")" "SY1"
 aws rm sy1 sy1r sy2 sy3 sy4 sy5 sy6 sy7 sy8 sy9 sy10 sy11 sy12 sy13 sy14 sy15 >/dev/null 2>&1
 
+head_ "26. devin 은 which 실행 파일이 필요 (exec 가 쓸 셸을 외부 which 로 찾음)"
+# 어느 컴퓨터에서든 which 가 없게, /usr/bin 과 /bin 에서 which 만 뺀 PATH 를 만듭니다.
+NW="$TMPROOT/nowhich"; mkdir -p "$NW/bin" "$NW/fake" "$NW/with"
+for f in /usr/bin/* /bin/*; do b=${f##*/}; [ "$b" = which ] && continue; [ -e "$NW/bin/$b" ] || ln -s "$f" "$NW/bin/$b" 2>/dev/null; done
+printf '#!/bin/sh\necho devin-ran\n' > "$NW/fake/devin"; chmod +x "$NW/fake/devin"
+printf '#!/bin/sh\ncommand -v "$1"\n' > "$NW/with/which"; chmod +x "$NW/with/which"
+out=$(env PATH="$NW/fake:$NW/bin" "$AW" run -n nw1 --no-brief -- devin -p 작업 2>&1)
+has "which 가 없으면 devin 을 띄울 때 알림" "$out" "which 실행 파일이 없어 devin 의 exec 가 셸을 못 찾습니다"
+out=$(env PATH="$NW/with:$NW/fake:$NW/bin" "$AW" run -n nw2 --no-brief -- devin -p 작업 2>&1)
+hasnt "which 가 있으면 알리지 않음" "$out" "which 실행 파일이 없어"
+out=$(env PATH="$NW/fake:$NW/bin" "$AW" run -n nw3 -- true 2>&1)
+hasnt "devin 이 아니면 알리지 않음" "$out" "which 실행 파일이 없어"
+out=$(env HOME="$TMPROOT/nowhich-home" PATH="$NW/fake:$NW/bin" AW_DEFAULTS="$NO_DEFAULTS" "$AW" setup < /dev/null 2>&1)
+has "aw setup: devin 이 있는데 which 가 없으면 알림" "$out" "which 실행 파일이 없어 devin 의 exec 가 셸을 못 찾습니다"
+has "aw help agents: devin 의 which 주의" "$("$AW" help agents)" "sudo pacman -S which"
+"$AW" wait nw1 nw2 nw3 >/dev/null 2>&1; "$AW" rm nw1 nw2 nw3 >/dev/null 2>&1
+
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

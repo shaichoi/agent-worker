@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.22.0
+AW_VERSION=0.22.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -139,6 +139,15 @@ devin
         (aw defaults). -w 로 만드는 worktree 는 실행할 때 새로 생기는
         경로라 미리 신뢰 등록을 할 수 없어, 사실상 이 옵션이 필요합니다.
         진단: devin doctor
+        PATH 에 which 실행 파일이 없으면(셸 내장 which 만 있으면) exec 가 명령을 하나도
+        못 돌리고 "The configured default shell 'bash' is not available on this machine"
+        (zsh·fish·powershell 도 "not available") 을 냅니다. devin 은 코드 0 으로 끝나고
+        답에만 못 했다고 적습니다. devin 이 쓸 셸을 외부 which 로 찾아서입니다 (실측:
+        exec 순간 PATH 의 모든 곳에서 which 실행이 ENOENT, which 를 두자 바로 됨).
+        devin doctor 는 통과합니다. Arch 는 base 에 which 가 없고 base-devel 을 깔아야
+        같이 들어와서, zsh(내장 which)만 쓰면 모르고 지나갑니다.
+        해결: sudo pacman -S which (Debian/Ubuntu 는 debianutils 에 있음). 설치할 수 없으면 PATH 에 which 를 대신할 스크립트를 둡니다
+        (command -v 로 경로를 내는 몇 줄). aw run 과 aw setup 이 없으면 알려 줍니다.
         텍스트만 내놓아 세션 ID 를 뽑을 수 없습니다. aw resume 은 -c (그
         디렉터리의 최근 대화) 로 이어가며, 워커가 여럿이면 엉뚱한 걸 집을
         수 있어 경고를 냅니다.
@@ -462,6 +471,17 @@ elapsed_str() { # <초>
 }
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
+
+# PATH 에 which 실행 파일이 있는지 (셸 내장 which 는 셈에 안 넣음). devin 의 exec 는 쓸 셸을 외부 which 로
+# 찾아서, 없으면 bash 가 있어도 "The configured default shell 'bash' is not available on this machine" 으로
+# 명령을 하나도 못 돌립니다 (실측: devin 3000.10.31~3000.11.3, Arch 에 which 패키지가 없을 때).
+has_which_exe() {
+  hw_ifs=$IFS; IFS=:
+  for hw_d in $PATH; do
+    if [ -n "$hw_d" ] && [ -f "$hw_d/which" ] && [ -x "$hw_d/which" ]; then IFS=$hw_ifs; return 0; fi
+  done
+  IFS=$hw_ifs; return 1
+}
 
 # 이 부팅의 ID (Linux boot_id, macOS kern.bootsessionuuid). 모르면 빈값.
 # pid 는 재부팅 뒤 다른 프로세스가 다시 쓰므로 살아 있다는 것만으로는 그 워커인지 모릅니다.
@@ -1690,6 +1710,7 @@ KIRO
   say "  명령: $(meta_get "$wd" cmdline)"
   [ -n "$profile_from" ] && say "  (claude 프로필: $profile — $profile_from 에서. 이번만 다르게: --profile 이름, 기본 계정: --profile default)"
   [ "$say_mode" -eq 1 ] && say "  (도는 중에 메시지 넣기: aw say $name -- '…'   끄려면 --no-say)"
+  [ "${1##*/}" = devin ] && ! has_which_exe && warn "  (주의: PATH 에 which 실행 파일이 없어 devin 의 exec 가 셸을 못 찾습니다 (명령을 하나도 못 돌림). 설치: sudo pacman -S which (Debian/Ubuntu 는 debianutils). aw help agents)"
   [ -n "$added" ] && [ "$no_defaults" -ne 1 ] && say "  (기본 옵션이 붙었습니다: $added — 끄려면 --no-defaults)"
   [ -n "$mdropped" ] && say "  (기본 옵션 '$mdropped' 는 뺐습니다: 모델이 ${1##*/} 의 모델 목록에 없음. ${1##*/} 기본 모델로 돕니다 — aw models ${1##*/})"
   [ -n "$pdropped" ] && say "  (기본 옵션 '$pdropped' 는 뺐습니다: 프로필 $(profile_model "$@") 에 모델이 정해져 있음)"
@@ -3741,6 +3762,8 @@ cmd_setup() {
   for st_a in $(skill_agents) kiro-cli; do
     if command -v "$st_a" >/dev/null 2>&1; then
       say "  $(padw 10 "$st_a")있음  $(tilde "$(command -v "$st_a")")"
+      [ "$st_a" = devin ] && ! has_which_exe \
+        && say "            주의: which 실행 파일이 없어 devin 의 exec 가 셸을 못 찾습니다. 설치: sudo pacman -S which (aw help agents)"
     else
       say "  $(padw 10 "$st_a")없음  설치: $(agent_hint "$st_a")"
     fi
