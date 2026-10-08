@@ -35,6 +35,8 @@ export CODEX_HOME="$TMPROOT/no-codex-home"
 # claude 프로필(aw run --profile, aw gateway)도 이 컴퓨터의 ~/.claude-profiles 를 건드리지 않게 합니다.
 export CLAUDE_PROFILE_ROOT="$TMPROOT/claude-profiles"
 export AW_GATEWAY_KEYS="$TMPROOT/gateway-keys"
+# 계정 설정(aw profile pool·use)도 이 컴퓨터의 것을 읽지 않게 합니다.
+export AW_PROFILES="$TMPROOT/profiles-conf"
 
 head_ "1. 문법 검사"
 for s in sh bash zsh; do
@@ -154,9 +156,11 @@ AW_WORKER='' "$AW" run -n env-worker -- sh -c 'echo "$AW_WORKER"' >/dev/null 2>&
 "$AW" wait env-worker >/dev/null 2>&1
 check "워커 안에서 AW_WORKER 가 워커 이름" env-worker "$("$AW" result env-worker)"
 # --profile 도 같은 자리에 쌓이므로 경로에 공백이 있으면 함께 깨졌습니다.
-CLAUDE_PROFILE_ROOT='/tmp/공백 있는 경로' "$AW" run -n prof-space2 --profile work -- sh -c 'echo "$CLAUDE_CONFIG_DIR"' >/dev/null 2>&1
+mkdir -p "$TMPROOT/공백 있는 경로/work" "$TMPROOT/spbin"
+printf '#!/bin/sh\necho "$CLAUDE_CONFIG_DIR"\n' > "$TMPROOT/spbin/claude"; chmod +x "$TMPROOT/spbin/claude"
+PATH="$TMPROOT/spbin:$PATH" CLAUDE_PROFILE_ROOT="$TMPROOT/공백 있는 경로" "$AW" run -n prof-space2 --profile work -- claude -p x >/dev/null 2>&1
 "$AW" wait prof-space2 >/dev/null 2>&1
-check "--profile 경로에 공백이 있어도 온전함" '/tmp/공백 있는 경로/work' "$("$AW" result prof-space2)"
+check "--profile 경로에 공백이 있어도 온전함" "$TMPROOT/공백 있는 경로/work" "$("$AW" result prof-space2)"
 
 head_ "6. JSON 출력과 필드 추출"
 json='{"is_error":false,"result":"여러 줄\n\"인용\" 포함","session_id":"abc-123"}'
@@ -1230,7 +1234,7 @@ d="$HOME/.codex/sessions/2026/09/24"; mkdir -p "$d"
 sleep 7
 FAKE
 chmod +x "$IH/fakebin/codex"
-env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-codex --no-defaults -- codex exec --json "생각" >/dev/null 2>&1
+env -u CODEX_HOME HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-codex --no-defaults -- codex exec --json "생각" >/dev/null 2>&1
 sleep 4
 out=$(env -u CODEX_HOME HOME="$IH" "$AW" peek th-codex)
 has "codex: 세션 파일의 추론 단계 수" "$out" "추론 3단계"
@@ -1252,7 +1256,7 @@ d="\$HOME/.codex/sessions/2026/09/29"; mkdir -p "\$d"
 sleep 7
 FAKE
 chmod +x "$IH/fakebin/codex"
-env HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-codex-mb --no-defaults -- codex exec --json "생각" >/dev/null 2>&1
+env -u CODEX_HOME HOME="$IH" PATH="$IH/fakebin:$PATH" "$AW" run -n th-codex-mb --no-defaults -- codex exec --json "생각" >/dev/null 2>&1
 sleep 4
 out=$(env -u CODEX_HOME HOME="$IH" "$AW" peek th-codex-mb 2>&1)
 has "codex: 앞 4096 바이트가 한글 가운데서 잘려도 세션 파일을 찾음" "$out" "추론 1단계"
@@ -1958,6 +1962,7 @@ r=$(awg result gw-l)
 hasnt "claude --profile(게이트웨이): 기본 모델이 안 붙음" "$r" "opus-x"
 has "claude --profile(게이트웨이): 수준 줄은 붙음" "$r" "xhigh"
 has "claude 게이트웨이 워커에도 키가 넘어감" "$r" "KEY=k-123456789abcdef"
+mkdir -p "$GW/cp/work"
 awg run -n gw-w --profile work -- claude -p 작업 >/dev/null 2>&1; awg wait gw-w >/dev/null 2>&1
 has "모델을 정하지 않는 claude 프로필이면 기본 모델이 붙음" "$(awg result gw-w)" "opus-x"
 # 이어하기: codex 의 --profile 은 exec 의 옵션이라 resume 앞에 둠 (뒤에 두면 codex 가 거절)
@@ -1995,7 +2000,7 @@ awf() { env -u AW_CLAUDE_PROFILE -u CLAUDE_CONFIG_DIR PATH="$PF/bin:/usr/bin:/bi
 cfg() { awf "$AW" wait "$1" >/dev/null 2>&1; awf "$AW" result "$1" | sed -n 's/^CFG=//p'; }
 out=$(awf env AW_CLAUDE_PROFILE=work "$AW" run -n pf1 -- claude -p x 2>&1)
 check "AW_CLAUDE_PROFILE: claude 워커가 그 프로필로" "$PF/root/work" "$(cfg pf1)"
-has "AW_CLAUDE_PROFILE: 어디서 온 프로필인지 알림" "$out" "claude 프로필: work — AW_CLAUDE_PROFILE 에서"
+has "AW_CLAUDE_PROFILE: 어디서 온 프로필인지 알림" "$out" "claude 계정: work — AW_CLAUDE_PROFILE 에서"
 check "AW_CLAUDE_PROFILE: meta 에 프로필" "work" "$(sed -n 's/^profile=//p' "$AW_HOME/workers/pf1/meta")"
 awf env AW_CLAUDE_PROFILE=work "$AW" run -n pf2 --profile acct -- claude -p x >/dev/null 2>&1
 check "--profile 이 AW_CLAUDE_PROFILE 보다 먼저" "$PF/root/acct" "$(cfg pf2)"
@@ -2011,7 +2016,9 @@ awf env AW_CLAUDE_PROFILE=work "$AW" resume pf6 -n pf6r -- y >/dev/null 2>&1
 check "기본 계정으로 띄운 워커는 AW_CLAUDE_PROFILE 이 있어도 기본 계정으로 이음" "" "$(cfg pf6r)"
 awf "$AW" resume pf1 -n pf1r -- y >/dev/null 2>&1
 check "프로필로 띄운 워커는 그 프로필로 이음" "$PF/root/work" "$(cfg pf1r)"
-has "프로필 폴더가 없으면 알림" "$(awf env AW_CLAUDE_PROFILE=nosuch "$AW" run -n pf7 -- claude -p x 2>&1)" "프로필 폴더가 없습니다"
+out=$(awf env AW_CLAUDE_PROFILE=nosuch "$AW" run -n pf7 -- claude -p x 2>&1); rc=$?
+check "프로필 폴더가 없으면 띄우지 않음" 1 "$rc"
+has "프로필 폴더가 없으면 만드는 법을 알림" "$out" "aw profile add claude nosuch"
 if awf "$AW" run -n pf8 --profile '../x' -- claude -p x >/dev/null 2>&1; then ng "잘못된 프로필 이름을 받아들임"; else ok "잘못된 프로필 이름은 거절"; fi
 awf "$AW" rm pf1 pf2 pf3 pf4 pf5 pf6 pf6r pf1r pf7 >/dev/null 2>&1
 
@@ -2311,7 +2318,7 @@ out=$(awl resume --list --agent codex 2>&1)
 has "후보 --agent: 그 에이전트만" "$out" "l-x"
 hasnt "후보 --agent: 다른 에이전트는 뺌" "$out" "l-c1"
 js=$(awl resume --list --json 2>&1)
-has "후보 --json: 모델·지금 기본값·같은지" "$js" '"name":"l-c1","agent":"claude","state":"done","exit":"0","model":"ca","effort":"","defaults_model":"ca","defaults_effort":"","settings_match":"same"'
+has "후보 --json: 모델·지금 기본값·같은지" "$js" '"name":"l-c1","agent":"claude","profile":"default","state":"done","exit":"0","model":"ca","effort":"","defaults_model":"ca","defaults_effort":"","settings_match":"same"'
 has "후보 --json: 문맥" "$js" '"context_tokens":34510,"context_pct":null'
 has "후보 --json: codex 창의 %" "$js" '"context_tokens":91000,"context_pct":35'
 has "후보 --json: 도는 워커" "$js" '"in_use_by":"l-busy"'
@@ -2324,6 +2331,211 @@ awl stop l-busy >/dev/null 2>&1
 has "aw help resume: 언제 이을지와 근거" "$("$AW" help resume)" "언제 이으면 좋은가"
 has "aw resume --help: --fork·--list" "$("$AW" resume --help)" "--list"
 awp clean --all >/dev/null 2>&1; awl clean --all >/dev/null 2>&1
+
+head_ "28. 여러 계정 (aw profile, codex 의 --profile, auto, 한도)"
+# 가짜 HOME 에 기본 계정 폴더(~/.claude, ~/.codex)를 두고 가짜 claude·codex 로 시험합니다.
+PH="$TMPROOT/ph"; mkdir -p "$PH/bin" "$PH/.claude/skills" "$PH/.codex/skills"
+printf '{}\n' > "$PH/.claude/settings.json"; printf '{}\n' > "$PH/.claude/.credentials.json"
+printf 'model = "gpt-x"\nmodel_reasoning_effort = "low"\n' > "$PH/.codex/config.toml"
+printf '# aw gateway: og\nmodel = "m"\n' > "$PH/.codex/og.config.toml"
+JWT=$(printf '%s' '{"email":"w@x.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}' | base64 | tr -d '\n=' | tr '+/' '-_')
+cat > "$PH/bin/claude" <<'FAKE'
+#!/bin/sh
+cfg=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+if [ "$1 $2" = "auth status" ]; then
+  if [ -s "$cfg/.credentials.json" ]; then printf '{"loggedIn":true,"email":"%s@x.com","orgName":"Org","subscriptionType":"max"}\n' "$(basename "$cfg")"; exit 0; fi
+  printf '{"loggedIn":false}\n'; exit 1
+fi
+[ "$1 $2" = "auth login" ] && { printf '{}\n' > "$cfg/.credentials.json"; exit 0; }
+n=$(date +%s)
+printf '{"type":"rate_limit_event","rate_limit_info":{"status":"%s","resetsAt":%s,"rateLimitType":"five_hour","unifiedWindows":{"five_hour":{"utilization":%s,"resetsAt":%s},"seven_day":{"utilization":0.1,"resetsAt":%s}}}}\n' \
+  "${STUB_STATUS:-allowed}" $((n + 3600)) "${STUB_UTIL:-0.5}" $((n + 3600)) $((n + 86400))
+printf '{"type":"result","session_id":"%s","is_error":false}\n' "${STUB_SID:-CS1}"
+printf 'CFG=%s\n' "${CLAUDE_CONFIG_DIR:-}"
+[ "${STUB_FAIL:-0}" = 1 ] && exit 1
+exit 0
+FAKE
+cat > "$PH/bin/codex" <<'FAKE'
+#!/bin/sh
+if [ "$1 $2" = "login status" ]; then [ -s "${CODEX_HOME:-$HOME/.codex}/auth.json" ] && { echo 'Logged in using ChatGPT'; exit 0; }; echo 'Not logged in'; exit 1; fi
+printf '{"thread_id":"%s"}\n' "${STUB_TID:-TT1}"
+printf 'CH=%s\n' "${CODEX_HOME:-}"
+printf '%s\n' "$@" >&2
+[ "${STUB_FAIL:-0}" = 1 ] && { echo "ERROR: You've hit your usage limit. Try again later." >&2; exit 1; }
+exit 0
+FAKE
+chmod +x "$PH/bin"/*
+awq() { env -u CLAUDE_PROFILE_ROOT -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u AW_CLAUDE_PROFILE -u AW_CODEX_PROFILE \
+  HOME="$PH" AW_HOME="$PH/awhome" AW_PROFILES="$PH/profiles" PATH="$PH/bin:/usr/bin:/bin" AW_DEFAULTS="$NO_DEFAULTS" AW_BRIEF="$PH/no-brief" "$@"; }
+r28() { awq "$AW" wait "$1" >/dev/null 2>&1; awq "$AW" result "$1"; }
+QW="$PH/awhome/workers"
+
+# 계정 만들기: 폴더와 공유 링크 (계정마다 따로인 것은 링크하지 않음)
+out=$(awq "$AW" profile add codex work </dev/null 2>&1)
+has "codex 계정 만들기" "$out" "만듦: ~/.codex-profiles/work"
+check "config.toml 은 기본 폴더로 링크" "$PH/.codex/config.toml" "$(readlink "$PH/.codex-profiles/work/config.toml")"
+check "세션도 같이 씀 (없으면 만들어 링크)" "$PH/.codex/sessions" "$(readlink "$PH/.codex-profiles/work/sessions")"
+check "설정 묶음(<이름>.config.toml)도 링크" "$PH/.codex/og.config.toml" "$(readlink "$PH/.codex-profiles/work/og.config.toml")"
+check "auth.json 은 따로 (링크 안 함)" "" "$(ls -A "$PH/.codex-profiles/work" | grep -x auth.json)"
+has "터미널이 아니면 로그인 명령을 안내" "$out" "로그인: aw profile login codex work"
+has "다시 만들면 빠진 링크만 채움" "$(awq "$AW" profile add codex work --no-login 2>&1)" "이미 있음"
+if awq "$AW" profile add codex default --no-login >/dev/null 2>&1; then ng "default 를 계정 이름으로 받음"; else ok "default·auto 는 계정 이름으로 못 씀"; fi
+if awq "$AW" profile add codex '../x' --no-login >/dev/null 2>&1; then ng "잘못된 이름을 받음"; else ok "잘못된 계정 이름은 거절"; fi
+if awq "$AW" profile add gemini x --no-login >/dev/null 2>&1; then ng "claude·codex 가 아닌 것을 받음"; else ok "계정은 claude·codex 만"; fi
+awq "$AW" profile add claude sub --no-login >/dev/null 2>&1
+check "claude 계정: settings.json 링크 (claude-profiles 와 같은 목록)" "$PH/.claude/settings.json" "$(readlink "$PH/.claude-profiles/sub/settings.json")"
+check "claude 계정: 대화 기록(projects)을 같이 씀" "$PH/.claude/projects" "$(readlink "$PH/.claude-profiles/sub/projects")"
+out=$(awq "$AW" profile login codex work </dev/null 2>&1); rc=$?
+check "로그인은 터미널이 아니면 안내만 (코드 1)" 1 "$rc"
+has "로그인 안내" "$out" "aw profile login codex work"
+# 로그인한 것처럼: 가짜 id_token (토큰 값은 aw 가 꺼내지 않고 이메일·요금제만 읽음)
+printf '{"auth_mode":"chatgpt","tokens":{"id_token":"h.%s.s","refresh_token":"SECRET-RT"}}\n' "$JWT" > "$PH/.codex-profiles/work/auth.json"
+
+# 목록
+out=$(awq "$AW" profile 2>&1)
+has "목록: codex 계정의 이메일·요금제 (id_token)" "$out" "w@x.com · ChatGPT pro"
+has "목록: claude 기본 계정 (auth status)" "$out" ".claude@x.com · Org · max"
+has "목록: 로그인 안 된 계정은 로그인 안내" "$out" "로그인: aw profile login claude sub"
+hasnt "목록: 토큰은 안 보임" "$out" "SECRET-RT"
+has "목록: * 는 지금 쓰는 계정" "$(printf '%s\n' "$out" | grep -A3 '^codex 계정')" "* default"
+has "목록: AW_CODEX_PROFILE 이면 그 계정에 *" "$(awq env AW_CODEX_PROFILE=work "$AW" profile codex -q 2>&1)" "* work"
+js=$(awq "$AW" profile --json 2>&1)
+has "--json: codex work 로그인됨" "$js" '"agent":"codex","name":"work","dir":"'"$PH"'/.codex-profiles/work","current":false,"in_pool":null,"logged_in":true,"email":"w@x.com","plan":"ChatGPT pro"'
+if command -v python3 >/dev/null 2>&1; then
+  printf '%s' "$js" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert len(d) == 4, d' 2>/dev/null \
+    && ok "--json 은 올바른 JSON (계정 4개)" || ng "--json 이 JSON 이 아니거나 개수가 다름: $js"
+fi
+
+# 워커를 그 계정으로 (codex 는 CODEX_HOME)
+awq "$AW" run -n q1 --profile work -- codex exec --json 일 >/dev/null 2>&1
+check "codex --profile: CODEX_HOME 이 그 계정 폴더" "CH=$PH/.codex-profiles/work" "$(r28 q1 | grep '^CH=')"
+check "meta 에 계정과 codex_home" "$(printf 'profile=work\ncodex_home=%s' "$PH/.codex-profiles/work")" "$(grep -E '^(profile|codex_home)=' "$QW/q1/meta")"
+awq env AW_CODEX_PROFILE=work "$AW" run -n q2 -- codex exec --json 일 >/dev/null 2>&1
+check "AW_CODEX_PROFILE 로 늘 그 계정" "CH=$PH/.codex-profiles/work" "$(r28 q2 | grep '^CH=')"
+out=$(awq env CODEX_HOME="$PH/.codex-profiles/work" "$AW" run -n q3 -- codex exec --json 일 2>&1)
+check "셸의 CODEX_HOME 이 계정 폴더면 그 계정으로 기록" work "$(sed -n 's/^profile=//p' "$QW/q3/meta")"
+has "어디서 온 계정인지 알림" "$out" "codex 계정: work — CODEX_HOME 에서"
+awq env AW_CODEX_PROFILE=work "$AW" run -n q4 --profile default -- codex exec --json 일 >/dev/null 2>&1
+check "--profile default 는 기본 계정 (CODEX_HOME 을 지움)" "CH=" "$(r28 q4 | grep '^CH=')"
+out=$(awq "$AW" run -n q5 --profile nosuch -- codex exec --json 일 2>&1); rc=$?
+check "없는 계정은 거절" 1 "$rc"
+has "없는 계정이면 만드는 법을 알림" "$out" "aw profile add codex nosuch"
+out=$(awq "$AW" run -n q6 --profile work -- sh -c true 2>&1)
+has "claude·codex 가 아니면 --profile 을 안 붙인다고 알림" "$out" "claude·codex 의 계정"
+awq "$AW" run -n q7 --profile sub -- claude -p --output-format json 일 >/dev/null 2>&1
+check "claude --profile: CLAUDE_CONFIG_DIR" "CFG=$PH/.claude-profiles/sub" "$(r28 q7 | grep '^CFG=')"
+
+# 이어하기: 원래 계정으로, --profile 로 다른 계정에서 같은 대화
+mkdir -p "$PH/.codex/sessions/2026/10/08"
+printf '%s\n' '{"type":"turn_context","payload":{"model":"gpt-x","effort":"low"}}' > "$PH/.codex/sessions/2026/10/08/rollout-2026-10-08T00-00-00-TT1.jsonl"
+awq env AW_CODEX_PROFILE=other "$AW" resume q1 -n q1r -- 다음 >/dev/null 2>&1
+check "이어하기는 원래 계정으로 (지금 셸의 AW_CODEX_PROFILE 을 안 따름)" "CH=$PH/.codex-profiles/work" "$(r28 q1r | grep '^CH=')"
+has "계정 폴더의 세션 파일에서 원래 모델·수준을 읽음" "$(awq "$AW" errs q1r | tr '\n' ' ')" "--model gpt-x -c model_reasoning_effort=low 다음"
+out=$(awq "$AW" resume q1 -n q1d --profile default -- 다음 2>&1)
+check "--profile 로 다른 계정에서 같은 대화 (세션을 같이 써서 보임)" "CH=" "$(r28 q1d | grep '^CH=')"
+has "계정이 바뀌었다고 알림 (캐시 따로)" "$out" "계정: work → default"
+has "같은 세션으로" "$(awq "$AW" errs q1d | tr '\n' ' ')" "resume TT1"
+mkdir -p "$PH/.codex-profiles/lone"; printf '{}\n' > "$PH/.codex-profiles/lone/auth.json"
+out=$(awq "$AW" resume q1 -n q1l --profile lone -- 다음 2>&1); rc=$?
+check "세션을 같이 쓰지 않는 계정이면 거절" 1 "$rc"
+has "까닭과 고치는 법" "$out" "aw profile add codex lone"
+rm -rf "$PH/.codex-profiles/lone"
+awq "$AW" run -n q8 --profile sub -- claude -p --output-format json 일 >/dev/null 2>&1; awq "$AW" wait q8 >/dev/null 2>&1
+out=$(awq "$AW" resume q8 -n q8d --profile default -- 다음 2>&1); rc=$?
+check "claude: 대화 기록이 안 보이는 계정이면 거절" 1 "$rc"
+mkdir -p "$PH/.claude/projects/-x"; printf '{}\n' > "$PH/.claude/projects/-x/CS1.jsonl"
+out=$(awq "$AW" resume q8 -n q8d --profile default -- 다음 2>&1)
+check "claude: 다른 계정에서 같은 대화 (projects 를 같이 씀)" "CFG=" "$(r28 q8d | grep '^CFG=')"
+
+# 사용량과 auto
+F=$(( $(date +%s) + 86400 )); P=$(( $(date +%s) - 60 ))
+awq env STUB_TID=UA "$AW" run -n u1 --profile default -- codex exec --json 일 >/dev/null 2>&1
+awq env STUB_TID=UB "$AW" run -n u2 --profile work -- codex exec --json 일 >/dev/null 2>&1
+awq "$AW" wait u1 u2 >/dev/null 2>&1
+printf '{"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":90.0,"window_minutes":10080,"resets_at":%s},"secondary":null}}}\n' "$F" \
+  > "$PH/.codex/sessions/2026/10/08/rollout-2026-10-08T00-00-01-UA.jsonl"
+printf '{"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":20.0,"window_minutes":10080,"resets_at":%s},"secondary":{"used_percent":70.0,"window_minutes":300,"resets_at":%s}}}}\n' "$F" "$P" \
+  > "$PH/.codex/sessions/2026/10/08/rollout-2026-10-08T00-00-02-UB.jsonl"
+out=$(awq "$AW" profile codex -q 2>&1)
+has "사용량: codex 주간 사용률" "$(printf '%s\n' "$out" | grep ' default ')" "7일 90%"
+has "사용량: 초기화 시각이 지난 창은 0%" "$(printf '%s\n' "$out" | grep ' work ')" "5시간 0%(초기화됨)"
+has "사용량: 창이 둘이면 둘 다" "$(printf '%s\n' "$out" | grep ' work ')" "7일 20%"
+out=$(awq "$AW" run -n u3 --profile auto -- codex exec --json 일 2>&1)
+has "auto: 사용량이 가장 적은 계정" "$out" "계정 자동 고름: work"
+check "auto: meta 에 고른 계정" "$(printf 'profile=work\nprofile_auto=1')" "$(grep -E '^profile(_auto)?=' "$QW/u3/meta")"
+has "후보 목록에 계정 (u2 는 work 계정의 세션 UB)" "$(awq "$AW" resume --list --agent codex 2>&1 | grep '^u2 ')" "· 계정 work"
+printf '{}\n' > "$PH/.claude-profiles/sub/.credentials.json"
+awq env STUB_UTIL=0.8 "$AW" run -n c1 -- claude -p --output-format json 일 >/dev/null 2>&1
+awq env STUB_UTIL=0.3 STUB_SID=CS2 "$AW" run -n c2 --profile sub -- claude -p --output-format json 일 >/dev/null 2>&1
+awq "$AW" wait c1 c2 >/dev/null 2>&1
+out=$(awq "$AW" profile claude -q 2>&1)
+has "사용량: claude 5시간·7일 (rate_limit_event)" "$(printf '%s\n' "$out" | grep ' default ')" "5시간 80% · 7일 10%"
+has "사용량: 다른 계정" "$(printf '%s\n' "$out" | grep ' sub ')" "5시간 30%"
+has "auto: claude 도" "$(awq "$AW" run -n c4 --profile auto -- claude -p --output-format json 일 2>&1)" "계정 자동 고름: sub"
+
+# 한도에 걸리면 알리고 다른 계정으로 잇는 법을 안내
+awq env STUB_FAIL=1 STUB_STATUS=rejected STUB_SID=CS3 "$AW" run -n c3 -- claude -p --output-format json 일 >/dev/null 2>&1
+out=$(awq "$AW" wait c3 2>&1)
+has "한도에 걸리면 wait 이 알림" "$out" "한도: claude 계정 default 이 한도에 걸린 것 같습니다"
+has "다른 계정으로 잇는 법" "$out" "aw resume c3 --profile auto"
+has "aw status 에도" "$(awq "$AW" status c3 2>&1)" "한도에 걸린 것 같습니다"
+has "거절된 계정은 사용량에 한도로" "$(awq "$AW" profile claude -q 2>&1 | grep ' default ')" "한도에 걸림"
+awq env STUB_FAIL=1 STUB_TID=UC "$AW" run -n x3 --profile work -- codex exec --json 일 >/dev/null 2>&1
+has "codex: 출력의 한도 문구로 알림" "$(awq "$AW" wait x3 2>&1)" "한도: codex 계정 work"
+awq "$AW" run -n x4 -- sh -c 'echo 그냥 실패 >&2; exit 3' >/dev/null 2>&1
+hasnt "한도와 상관없는 실패는 알리지 않음" "$(awq "$AW" wait x4 2>&1)" "한도:"
+
+# auto 후보(풀)와 --profile 없이 쓸 계정 (aw profile pool, use)
+awq "$AW" profile pool claude default >/dev/null 2>&1
+check "pool: 설정 파일에 저장" "claude pool default" "$(grep -v '^#' "$PH/profiles")"
+out=$(awq "$AW" run -n p1 --profile auto -- claude -p --output-format json 일 2>&1)
+has "auto: 풀 안에서만 고름 (사용량이 더 많아도)" "$out" "계정 자동 고름: default"
+has "auto: 후보가 모두 한도에 걸려 있었으면 경고" "$out" "후보 계정이 모두 한도에 걸려 있었습니다"
+awq "$AW" profile pool claude sub >/dev/null 2>&1
+check "pool 을 다시 정하면 그 줄을 바꿈" "claude pool sub" "$(grep -v '^#' "$PH/profiles")"
+has "pool 보기" "$(awq "$AW" profile pool claude 2>&1)" "claude auto 후보: sub"
+has "pool 을 정하면 use 를 안내" "$(awq "$AW" profile pool claude sub 2>&1)" "aw profile use claude auto"
+has "use auto" "$(awq "$AW" profile use claude auto 2>&1)" "--profile 없이 띄우는 claude 워커: auto"
+out=$(awq "$AW" run -n p2 -- claude -p --output-format json 일 2>&1)
+has "use auto: --profile 없이도 풀에서 고름" "$out" "계정 자동 고름: sub"
+check "use auto: meta 에 고른 계정" "$(printf 'profile=sub\nprofile_auto=1')" "$(grep -E '^profile(_auto)?=' "$QW/p2/meta")"
+has "목록 머리: --profile 없이 띄우면" "$(awq "$AW" profile claude -q 2>&1)" "--profile 없이 띄우면: auto   (aw profile use)"
+has "목록 머리: auto 후보" "$(awq "$AW" profile claude -q 2>&1)" "auto 후보: sub   (aw profile pool claude)"
+awq "$AW" profile use claude default >/dev/null 2>&1
+awq env CLAUDE_CONFIG_DIR="$PH/.claude-profiles/sub" "$AW" run -n p3 -- claude -p --output-format json 일 >/dev/null 2>&1
+check "use 는 셸의 CLAUDE_CONFIG_DIR(claude-use)보다 먼저" "CFG=" "$(r28 p3 | grep '^CFG=')"
+awq env AW_CLAUDE_PROFILE=sub "$AW" run -n p4 -- claude -p --output-format json 일 >/dev/null 2>&1
+check "AW_CLAUDE_PROFILE 은 use 보다 먼저" "CFG=$PH/.claude-profiles/sub" "$(r28 p4 | grep '^CFG=')"
+has "AW_CLAUDE_PROFILE 이 있으면 use 를 정할 때 알림" "$(awq env AW_CLAUDE_PROFILE=sub "$AW" profile use claude default 2>&1)" "AW_CLAUDE_PROFILE=sub 가 이것보다 먼저"
+has "use 보기와 출처" "$(awq "$AW" profile use claude 2>&1)" "default   (aw profile use)"
+if awq "$AW" profile pool claude nosuch >/dev/null 2>&1; then ng "없는 계정을 풀에 넣음"; else ok "없는 계정은 풀에 못 넣음"; fi
+if awq "$AW" profile pool claude auto >/dev/null 2>&1; then ng "auto 를 풀에 넣음"; else ok "auto 는 풀에 못 넣음"; fi
+if awq "$AW" profile use claude nosuch >/dev/null 2>&1; then ng "없는 계정을 use 로 둠"; else ok "없는 계정은 use 로 못 둠"; fi
+rm -f "$PH/.claude-profiles/sub/.credentials.json"
+awq "$AW" profile use claude auto >/dev/null 2>&1
+out=$(awq "$AW" run -n p5 -- claude -p --output-format json 일 2>&1); rc=$?
+check "풀에 로그인된 계정이 없으면 거절" 1 "$rc"
+has "거절하며 풀을 알림" "$out" "풀: sub"
+printf '{}\n' > "$PH/.claude-profiles/sub/.credentials.json"
+awq "$AW" profile pool claude --clear >/dev/null 2>&1; awq "$AW" profile use claude --clear >/dev/null 2>&1
+check "--clear 로 둘 다 지움" "" "$(grep -v '^#' "$PH/profiles")"
+awq "$AW" profile pool codex work >/dev/null 2>&1
+has "--json: 풀에 든 계정" "$(awq "$AW" profile codex -q --json 2>&1)" '"name":"work","dir":"'"$PH"'/.codex-profiles/work","current":false,"in_pool":true'
+has "--json: 풀에 안 든 계정" "$(awq "$AW" profile codex -q --json 2>&1)" '"name":"default","dir":"'"$PH"'/.codex","current":true,"in_pool":false'
+awq "$AW" profile pool codex default work >/dev/null 2>&1; awq "$AW" profile use codex work >/dev/null 2>&1
+
+# 지우기
+out=$(awq "$AW" profile rm codex work </dev/null 2>&1); rc=$?
+check "터미널이 아니면 --yes 없이 안 지움" 1 "$rc"
+has "--yes 를 안내" "$out" "--yes"
+out=$(awq "$AW" profile rm codex work --yes 2>&1)
+check "지우면 풀과 use 에서도 뺌" "codex pool default" "$(grep -v '^#' "$PH/profiles")"
+has "뺐다고 알림" "$out" "auto 후보에서도 뺌: default"
+check "지우면 계정 폴더가 사라짐" 1 "$([ -d "$PH/.codex-profiles/work" ]; printf '%s' "$?")"
+check "같이 쓰던 원본은 그대로 (config.toml, 세션)" 0 "$([ -f "$PH/.codex/config.toml" ] && [ -f "$PH/.codex/sessions/2026/10/08/rollout-2026-10-08T00-00-00-TT1.jsonl" ]; printf '%s' "$?")"
+if awq "$AW" profile rm codex default --yes >/dev/null 2>&1; then ng "기본 계정을 지움"; else ok "기본 계정은 안 지움"; fi
+has "aw help profile" "$(awq "$AW" help profile)" "한도에 걸리면 다른 계정으로 같은 대화를"
+awq "$AW" clean --all >/dev/null 2>&1
 
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

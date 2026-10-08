@@ -37,7 +37,7 @@ aw rm job
 전부 똑같습니다. 그래서 `aw`는 명령을 **그대로** 받고 그 세 가지만 거들어 줍니다.
 
 - 프롬프트 → `--stdin-file` 로 표준 입력에 물림 (기본 표준 입력은 `/dev/null`이라 멈추지 않음)
-- 인증 → `--env KEY=VAL` 통과. Claude Code 면 `--profile` 로 `CLAUDE_CONFIG_DIR` 지정
+- 인증 → `--env KEY=VAL` 통과. claude·codex 는 `--profile` 로 [계정](#여러-계정-aw-profile)을 고름
 - 결과 → 그냥 stdout 파일. JSON이면 `--field` 로 값 하나 꺼내기
 
 ## 요구사항
@@ -113,6 +113,7 @@ cd agent-worker
 | `aw brief [--init]` | [워커 지시문](#워커-지시문-brief) 확인 / 권장값으로 켜기 |
 | `aw pick [on\|off\|key]` / `aw pick -- '작업'` | (실험용) Jev 가 [작업에 맞는 에이전트·모델을 골라](#에이전트-고르기-aw-pick-실험용) 워커를 띄움 |
 | `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
+| `aw profile [add\|login\|rm\|pool\|use] [claude\|codex] [이름]` | [여러 계정](#여러-계정-aw-profile): 목록(로그인한 계정, 최근 사용량), 만들기, 로그인, 지우기, auto 후보(풀), `--profile` 없이 쓸 계정 |
 | `aw gateway [add\|key\|models\|rm] [이름]` | OpenGateway 등 [게이트웨이의 모델](#게이트웨이-aw-gateway)을 codex·claude 프로필로. 키 넣기/빼기 |
 | `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
 | `aw uninstall [--yes] [--dry-run]` | 워커 기록·설정·스킬·실행 파일을 모두 [제거](#제거) (터미널이면 한 번 물음) |
@@ -144,7 +145,7 @@ if aw wait build test; then echo "둘 다 성공"; else echo "실패한 워커 �
 | `-f, --stdin-file <파일>` | 표준 입력으로 물릴 파일 |
 | `-e, --env KEY=VAL` | 환경변수 (여러 번 가능) |
 | `--tag <문자열>` | 분류용 꼬리표 |
-| `--profile <이름>` | `CLAUDE_CONFIG_DIR`을 그 프로필로 (Claude Code 편의). `default` 는 기본 계정. 늘 쓰려면 `AW_CLAUDE_PROFILE` |
+| `--profile <이름>` | claude·codex 의 [계정](#여러-계정-aw-profile) (`CLAUDE_CONFIG_DIR`·`CODEX_HOME` 을 그 계정 폴더로). `default` 는 기본 계정, `auto` 는 최근 사용량이 가장 적은 계정. 늘 쓰려면 `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` |
 | `--max-input-tokens N` | 컨텍스트 경고 기준을 직접 지정 (`0`이면 끄기) |
 | `--no-defaults` | 에이전트별 기본 옵션을 붙이지 않음 |
 | `--no-brief` | 워커 지시문을 붙이지 않음 |
@@ -379,7 +380,8 @@ aw wait c1 && aw result c1 --field result      # 성공 여부: --field is_error
 진행이 보이고, 끝난 뒤 `--field` 는 `json` 과 똑같이 됩니다. `--output-format json` 도 됩니다. 끝날 때까지
 출력이 비지만 `aw peek` 은 claude 의 대화 기록에서 진행을 읽습니다.
 
-계정이 여러 개면 [claude-profiles](https://github.com/shaichoi/claude-profiles)와 함께 씁니다.
+계정이 여러 개면 [여러 계정](#여러-계정-aw-profile)을 보세요. [claude-profiles](https://github.com/shaichoi/claude-profiles)와
+같은 폴더 구조라 그쪽에서 만든 계정도 그대로 씁니다.
 
 ```sh
 aw run -n c2 --profile work-sub -- claude -p "작업"     # 이번만 ~/.claude-profiles/work-sub 로
@@ -393,7 +395,7 @@ aw run -n c3 --profile default -- claude -p "작업"      # 이번만 기본 계
   `aw resume`(세션)이 그 프로필을 봅니다.
 - `--profile default` 는 셸이 `claude-use` 상태여도 `CLAUDE_CONFIG_DIR` 을 지워 기본 계정으로 돌립니다(`claude-with default` 와 같음).
 - `aw resume` 은 지금 셸의 설정과 상관없이 원래 워커의 프로필로 잇습니다. 프로필 없이 띄운 워커는 기본 계정으로 잇습니다.
-- 프로필 폴더가 없으면 claude 가 로그인 안 된 새 설정으로 돌아서, 띄울 때 알려 줍니다.
+- 프로필 폴더가 없으면 띄우지 않고 만드는 법(`aw profile add claude <이름>`)을 알려 줍니다.
 
 ### devin
 
@@ -477,6 +479,9 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 ```
 
 출력은 JSONL(줄마다 JSON 이벤트)입니다. `aw result x1 --field text` 가 마지막 메시지(최종 답)를 꺼냅니다.
+
+계정이 여러 개면 `aw run --profile <이름> -- codex …` 로 고릅니다(`CODEX_HOME` 을 그 계정 폴더로,
+[여러 계정](#여러-계정-aw-profile)). codex 자신의 `--profile`(`--` 뒤, 설정 묶음 `<이름>.config.toml`)과는 다른 것입니다.
 
 ### kiro-cli — Kiro CLI
 
@@ -961,6 +966,113 @@ aw run -n ds --profile opengateway -- claude -p --output-format stream-json --ve
 - 다른 게이트웨이: `aw gateway add <이름> --url https://… --key-env 변수 --model 모델`. 지우기는 `aw gateway rm <이름>`
   이고, `aw uninstall` 도 aw 가 만든 프로필을 지웁니다. aw 가 만들지 않은 같은 이름의 파일은 건드리지 않습니다.
 
+## 여러 계정 (aw profile)
+
+claude 나 codex 계정이 여럿이면 워커마다 계정을 고를 수 있습니다. 한 계정이 한도에 걸리면 다른 계정에서 같은
+대화를 이어 가고, 여유가 가장 많은 계정을 aw 가 고르게 할 수도 있습니다.
+
+계정마다 설정 폴더를 따로 둡니다. 자격 증명이 그 폴더에 들어가서 폴더를 나누면 계정이 나뉩니다.
+
+| 에이전트 | 계정 폴더 | 기본 계정 (`default`) |
+| --- | --- | --- |
+| claude | `CLAUDE_CONFIG_DIR` = `~/.claude-profiles/<이름>` ([claude-profiles](https://github.com/shaichoi/claude-profiles)와 같음) | `~/.claude` (변수를 지움) |
+| codex | `CODEX_HOME` = `~/.codex-profiles/<이름>` | `~/.codex` |
+
+codex 는 계정이 `auth.json` 하나뿐이고 여러 계정 기능이 없어서, claude-profiles 와 같은 방식으로 폴더를 나눕니다.
+계정과 상관없는 것은 기본 폴더로 링크해 같이 씁니다. 대화 기록·세션을 같이 쓰므로 계정을 바꿔도 같은 대화를
+이을 수 있습니다(실측: 다른 `CODEX_HOME` 에서도 `sessions` 에 있는 세션을 찾음).
+
+| 에이전트 | 같이 씀 (링크) | 계정마다 따로 |
+| --- | --- | --- |
+| claude | `settings.json projects plugins hooks commands agents skills CLAUDE.md` (`CLAUDE_PROFILE_SHARED`) | `.credentials.json`, `.claude.json`, 기록, 캐시 |
+| codex | `config.toml AGENTS.md skills plugins hooks.json rules prompts sessions`, `<이름>.config.toml` (`AW_CODEX_SHARED`) | `auth.json`, 기록·상태 DB, 모델 목록 |
+
+```sh
+aw profile add codex work                 # 폴더와 링크를 만들고, 터미널이면 바로 로그인 (codex login)
+aw profile add claude work-sub            # claude 는 claude auth login
+aw profile login codex work --device-auth # 브라우저가 없는 곳(SSH)에서 로그인
+aw profile                                # 목록: 로그인한 계정과 최근 사용량
+aw run --profile work -- codex exec --json "작업"
+aw run --profile auto -- claude -p --output-format stream-json --verbose "작업"   # 여유가 가장 많은 계정
+export AW_CODEX_PROFILE=work              # 셸 설정에 두면 codex 워커는 늘 그 계정으로
+aw profile rm codex work                  # 계정 폴더를 지움 (로그인 정보도. 같이 쓰던 원본은 그대로)
+```
+
+```
+$ aw profile
+claude 계정   (aw run --profile <이름> -- claude …   늘 쓸 계정: AW_CLAUDE_PROFILE)
+  * default            me@company.com · Acme · team           5시간 21% · 7일 6%  (12m 전 워커)
+    work-sub           sub@company.com · Acme · team          사용량 모름
+    게이트웨이 프로필 (계정 아님, aw gateway): opengateway
+
+codex 계정   (aw run --profile <이름> -- codex …   늘 쓸 계정: AW_CODEX_PROFILE)
+  * default            me@example.com · ChatGPT pro           7일 35%  (2h4m 전 워커)
+    work               work@example.com · ChatGPT plus        로그인: aw profile login codex work
+```
+
+- **로그인한 계정**: claude 는 `claude auth status` 로 묻고(계정마다 1초쯤, `-q` 면 자격 증명 파일만 봄), codex 는
+  `auth.json` 의 id_token 에서 이메일·요금제를 읽습니다(`codex login status` 는 이메일을 안 알려 줌). 토큰은 꺼내지 않습니다.
+- **최근 사용량**: 그 계정으로 돈 가장 최근 aw 워커의 출력에서 읽습니다. claude 는 stream-json 의 `rate_limit_event`
+  (5시간·7일 창의 사용률과 초기화 시각), codex 는 세션 파일의 `rate_limits`(주간 등)입니다. 초기화 시각이 지난 창은
+  0% 로 봅니다. aw 밖에서 쓴 양은 모릅니다.
+- **`--profile auto`**: 로그인된 계정 중 최근 사용량(창들 중 가장 높은 사용률)이 가장 적은 계정을 고릅니다. 사용량을
+  모르는 계정은 0 으로 봐서 먼저 씁니다. 고른 계정과 후보들의 사용량을 띄울 때 알려 주고 meta 에 `profile_auto=1` 을 남깁니다.
+- **고르는 순서**: `--profile` → `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` → `aw profile use` 로 정해 둔 계정 → 셸의
+  `CLAUDE_CONFIG_DIR`·`CODEX_HOME` 이 계정 폴더면 그 계정(claude-use 로 바꾼 셸 등) → `default`. 없는 계정이면 띄우지 않고
+  만드는 법을 알려 줍니다.
+
+### auto 후보(풀)와 워커에 쓰지 않을 계정
+
+오케스트레이션을 맡은 계정처럼 워커에 쓰지 않을 계정이 있으면, auto 가 고를 후보(풀)에서 빼고 `--profile` 없이 띄울
+때도 auto 로 고르게 둡니다. 설정은 `~/.config/agent-worker/profiles`(`AW_PROFILES`)에 저장되고 컴퓨터마다 따로입니다.
+
+```sh
+aw profile pool claude work-a work-b   # --profile auto 는 이 계정들 중에서만 (같으면 적은 순서대로)
+aw profile use claude auto             # --profile 없이 띄워도 auto (늘 풀에서 고름)
+aw profile pool claude --clear         # 풀을 지움 (로그인된 계정 모두가 후보)
+aw profile use claude --clear          # use 를 지움
+```
+
+```
+$ aw profile claude
+claude 계정   (aw run --profile <이름> -- claude …)
+  --profile 없이 띄우면: auto   (aw profile use)
+  auto 후보: work-a work-b   (aw profile pool claude)
+    default            me@company.com · Acme · team           5시간 13% · 7일 87%  (3m 전 워커)
+    work-a             a@company.com · Acme · team            5시간 0% · 7일 0%  (6m 전 워커)
+    work-b             b@company.com · Acme · team            사용량 모름
+```
+
+`use` 는 셸의 `CLAUDE_CONFIG_DIR`(claude-use)보다 먼저라, 오케스트레이터가 그 계정으로 바꾼 셸에서 돌아도 워커는 풀의
+계정으로 갑니다. `AW_*_PROFILE` 과 직접 준 `--profile` 은 그보다 먼저입니다. `aw profile rm` 으로 계정을 지우면 풀과
+`use` 에서도 뺍니다.
+- **peek·이어하기·후보 목록·모델 고정**이 워커의 계정 폴더에서 대화 기록·세션 파일을 찾습니다(meta 의 `profile`, `codex_home`).
+
+### 한도에 걸리면 다른 계정으로
+
+`aw wait`·`aw status` 가 한도에 걸린 것 같으면 알립니다. claude 의 `rate_limit_event` 가 `rejected` 이거나, codex 사용률이
+100% 이거나, 출력 끝에 한도 문구가 있을 때입니다.
+
+```
+c3: failed (종료 코드 1)
+  한도: claude 계정 default 이 한도에 걸린 것 같습니다 (사용 한도에 걸림).
+        다른 계정으로 같은 대화를 이으려면: aw resume c3 --profile auto -- '이어서 해줘'   (계정: aw profile)
+```
+
+`aw resume <워커> --profile <다른 계정>` 은 같은 세션을 그 계정에서 잇습니다. 계정마다 캐시가 따로라 앞 대화를
+다시 읽습니다. 그 계정에서 세션이 안 보이면(대화 기록·세션을 같이 쓰지 않는 폴더) 거절하고, `aw profile add` 로 빠진
+링크를 채우라고 알려 줍니다. `--profile` 없이 이으면 원래 계정입니다(지금 셸의 `AW_*_PROFILE` 을 따르지 않음).
+
+### 알아 둘 점
+
+- **로그인은 컴퓨터마다 따로** 합니다. 토큰 파일을 복사하면 갱신할 때 서로 어긋납니다(claude-profiles 와 같은 권고).
+- codex 자신의 `--profile <이름>`(`--` 뒤)은 설정 묶음(`<이름>.config.toml`, `aw gateway` 가 쓰는 것)이고, aw 의
+  `--profile`(`--` 앞)은 계정입니다. 같이 쓸 수 있습니다: `aw run --profile work -- codex exec --json --profile opengateway "작업"`.
+  `aw gateway add` 는 만든 codex 설정 묶음을 계정 폴더에도 링크합니다.
+- 세 컴퓨터 모두 codex 자격 증명이 파일(`auth.json`)이었고, mac 의 claude 도 파일(`.credentials.json`)이었습니다.
+  claude 가 키체인에만 자격 증명을 둔 mac 이면 폴더를 나눴을 때 계정이 나뉘는지 확인하지 못했고, `aw profile -q` 는
+  `모름` 으로 보입니다.
+
 ## 기본 옵션 (권한 우회, 모델)
 
 무인 워커는 승인 프롬프트를 만나면 멈추거나 조용히 거부됩니다. 그래서 에이전트별로
@@ -1086,9 +1198,10 @@ mytool 128000
 
 | 파일 | 내용 |
 | --- | --- |
-| `meta` | 이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표, 세션 ID, 이어한 출처(`resumed_from`, 갈래면 `fork_of`). aw 가 코드를 바꿨으면 원래 코드와 사유(`agent_exit`, `fail_reason`) |
+| `meta` | 이름, 디렉터리, 시작 시각, 부팅 ID, 계정(`profile`, 자동으로 골랐으면 `profile_auto`), codex 의 `codex_home`, worktree, 꼬리표, 세션 ID, 이어한 출처(`resumed_from`, 갈래면 `fork_of`). aw 가 코드를 바꿨으면 원래 코드와 사유(`agent_exit`, `fail_reason`) |
 | `cmd` | 실행한 인자 (한 줄에 하나). `aw say` 모드면 프롬프트가 든 명령이고, 실제 실행은 `launch.sh` |
 | `args` | `cmd` 와 같은 인자를 따옴표로 감싼 그대로 (`aw resume` 이 원래 모델·수준을 여기서 읽음) |
+| `limits` | 끝난 워커의 한도 사용량 (출력에서 한 번 읽어 둔 것, `aw profile` 과 `--profile auto` 가 씀) |
 | `cmd.orig` / `args.orig` | 기본 옵션·지시문을 붙이기 전, 사용자가 준 인자. `cmd.orig` 는 한 줄에 하나(사람이 읽는 용), `args.orig` 는 따옴표로 감싼 그대로라 여러 줄 프롬프트도 온전합니다(`aw resume` 이 읽음) |
 | `out` / `err` | 표준 출력 / 표준 오류 |
 | `exit` | 종료 코드 (생기면 끝난 것) |
@@ -1118,7 +1231,11 @@ aw 가 1 로 남김, [위](#kiro-cli--kiro-cli) 참고), `stopped`(`aw stop`),
 | `AW_PREFIX` | `~/.local/bin` | `install.sh` / `aw uninstall` 의 설치 위치 |
 | `AW_WORKER` | (워커 안에서만) | `aw` 가 워커에 넣어 주는 그 워커 이름. 중첩 확인용 |
 | `AW_QUIET` | `300` | `aw peek` 이 조용함을 알리는 기준(초) |
-| `AW_CLAUDE_PROFILE` | (없음) | `--profile` 을 주지 않은 claude 워커가 쓸 프로필 (`~/.claude-profiles/<이름>`, `default` 는 기본 계정) |
+| `AW_CLAUDE_PROFILE` | (없음) | `--profile` 을 주지 않은 claude 워커가 쓸 계정 (`~/.claude-profiles/<이름>`, `default` 는 기본 계정, `auto`) |
+| `AW_CODEX_PROFILE` | (없음) | `--profile` 을 주지 않은 codex 워커가 쓸 계정 (`~/.codex-profiles/<이름>`, `default`, `auto`) |
+| `AW_PROFILES` | `~/.config/agent-worker/profiles` | `aw profile pool`·`aw profile use` 가 쓰는 계정 설정 (auto 후보, --profile 없을 때 쓸 계정) |
+| `CLAUDE_PROFILE_ROOT` / `CODEX_PROFILE_ROOT` | `~/.claude-profiles` / `~/.codex-profiles` | 계정 폴더들이 있는 곳 |
+| `CLAUDE_PROFILE_SHARED` / `AW_CODEX_SHARED` | ([여러 계정](#여러-계정-aw-profile)의 표) | 계정 폴더에서 기본 폴더로 링크해 같이 쓸 것 (공백으로 구분) |
 | `AW_BRIEF` | `~/.config/agent-worker/brief` | 워커 지시문 파일 |
 | `AW_NO_BRIEF` | (없음) | `1` 이면 지시문을 붙이지 않음 |
 | `AW_NO_SAY` | (없음) | `1` 이면 claude 를 도는 중에 메시지를 받게 띄우지 않음 (`--no-say`) |

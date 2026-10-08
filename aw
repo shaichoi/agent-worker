@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.23.0
+AW_VERSION=0.24.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -20,6 +20,7 @@ AW_BRIEF="${AW_BRIEF:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/brief}"
 AW_PICK="${AW_PICK:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/pick}"
 AW_PICK_KEYFILE="${AW_PICK_KEYFILE:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/typesafe-key}"
 AW_GATEWAY_KEYS="${AW_GATEWAY_KEYS:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/gateway-keys}"
+AW_PROFILES="${AW_PROFILES:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/profiles}"
 TAB=$(printf '\t')
 
 die()  { printf '%s\n' "$*" >&2; exit 1; }
@@ -52,6 +53,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw pick [on|off|key] / -- '작업'     (실험용) Jev 가 작업에 맞는 에이전트·모델을 골라 워커를 띄움
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
   aw gateway [add|key|models|rm] [이름] OpenGateway 등 게이트웨이 모델을 codex·claude 프로필로
+  aw profile [add|login|rm|pool|use] [claude|codex] [이름]   여러 계정: 목록·사용량, 만들기, auto 후보
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
   aw uninstall [--yes] [--dry-run]     기록·설정·스킬·실행 파일을 모두 지움 (터미널이면 한 번 물음)
   aw version | aw help [주제]
@@ -65,7 +67,8 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
 run 옵션
   -n 이름     -d 디렉터리     -w 브랜치(worktree 격리)
   -f 파일     표준 입력으로 물림 (기본 /dev/null 이라 멈추지 않음)
-  -e K=V      환경변수        --profile 이름   CLAUDE_CONFIG_DIR 지정 (늘: AW_CLAUDE_PROFILE)
+  -e K=V      환경변수        --profile 이름   claude·codex 의 계정 (auto: 여유 가장 많은 계정.
+                              늘: AW_CLAUDE_PROFILE, AW_CODEX_PROFILE. aw help profile)
   --tag 문자열                --max-input-tokens N
   --no-defaults / --no-brief / --no-say  권한 옵션 / 지시문 / 도는 중 메시지 받기를 이번만 끔
 
@@ -84,6 +87,7 @@ wait 종료 코드: 0 전부 성공 / 1 하나 이상 실패 / 2 시간 초과 /
   aw help models    설치된 CLI 의 모델 목록, 기본 옵션의 모델이 목록에 없을 때
   aw help gateway   게이트웨이(OpenGateway 등) 모델로 워커 띄우기: 만들기, 키, 띄우는 법
   aw help resume    대화 이어하기: 언제 이을지 (캐시·문맥 실측), 갈래(--fork), 이어할 후보
+  aw help profile   여러 계정 (claude·codex): 만들기, 로그인, 고르기, 한도에 걸리면 다른 계정으로 잇기
 USAGE
 }
 
@@ -116,6 +120,7 @@ claude — Claude Code
   계정 분리: aw run --profile work-sub -- claude -p "작업"   (~/.claude-profiles/work-sub)
             늘 그 계정으로: 셸 설정에 export AW_CLAUDE_PROFILE=work-sub. 한 번만 기본 계정: --profile default
             claude-use 로 바꾼 셸에서 띄워도 그 프로필을 기록해 peek·resume 이 따라갑니다.
+            계정 만들기·목록·자동 고르기: aw help profile
 
 agy — Antigravity CLI (Gemini)
   aw run -n a1 -- agy --output-format stream-json -p='작업'
@@ -161,8 +166,11 @@ codex — OpenAI Codex CLI
   aw run -n x1 -- codex exec --json "작업"
   aw run -n x2 -f spec.md -- codex exec --json -    # stdin 을 - 로 받습니다
   이어하기: codex exec resume <thread_id>. 이 서브명령은 프롬프트 뒤 옵션과 --sandbox 를
-            안 받아서, aw resume 은 기본 옵션을 resume 앞(exec 의 옵션 자리)에 붙입니다.
-            붙이지 않으면 모델이 config.toml 의 것으로 바뀝니다 (샌드박스는 세션에서 물려받음).
+            안 받아서, aw resume 은 기본 옵션을 resume 앞(exec 의 옵션 자리)에 붙이고, 원래 워커의
+            모델·수준은 resume 뒤에 --model·-c model_reasoning_effort= 로 붙입니다 (aw help resume).
+  계정 분리: aw run --profile work -- codex exec --json "작업"   (CODEX_HOME=~/.codex-profiles/work)
+            늘 그 계정으로: export AW_CODEX_PROFILE=work. 만들기: aw profile add codex work (aw help profile)
+            codex 자신의 --profile <이름>(-- 뒤, 설정 묶음 <이름>.config.toml)과는 다른 것입니다.
   주의: git 저장소 밖에서는 --skip-git-repo-check 가 필요합니다 (프롬프트 앞에).
         codex 의 workspace-write 샌드박스 안에서는 aw 를 못 돌립니다. 워커
         기록을 ~/.local/share 에 쓰고, 띄운 에이전트가 네트워크를 써야 해서입니다.
@@ -311,10 +319,11 @@ T
     files) printf '워커 기록: %s/<이름>/\n\n' "$AW_WORKERS"; cat <<'T'
 
   meta      이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표, 토큰 추정치, 세션 ID,
-            이어한 출처 (resumed_from, 갈래면 fork_of),
+            이어한 출처 (resumed_from, 갈래면 fork_of), codex 의 CODEX_HOME (codex_home), 자동 고른 계정 (profile_auto),
             aw 가 코드를 바꿨으면 원래 코드와 사유 (agent_exit, fail_reason: kiro-cli 의 거절·권한 거부)
   cmd       실행한 인자 (한 줄에 하나). aw say 모드면 프롬프트가 든 명령이고, 실제 실행은 launch.sh
   args      cmd 와 같은 인자를 따옴표로 감싼 그대로 (aw resume 이 원래 모델·수준을 여기서 읽음)
+  limits    끝난 워커의 한도 사용량 (출력에서 한 번 읽어 둔 것, aw profile 이 씀)
   cmd.orig  기본 옵션을 붙이기 전, 사용자가 준 인자 (한 줄에 하나)
   args.orig 같은 인자를 따옴표로 감싼 그대로 (aw resume 이 씀. 여러 줄 프롬프트도 온전)
   out / err 표준 출력 / 표준 오류
@@ -328,7 +337,9 @@ T
 
 모델 목록 캐시: $AW_HOME/models/<에이전트>   (aw models, codex 는 ~/.codex 의 파일을 바로 읽음)
 기계로 읽으려면: aw list --json
-환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_NO_SAY, AW_QUIET, AW_CLAUDE_PROFILE,
+환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_NO_SAY, AW_QUIET,
+          AW_CLAUDE_PROFILE, AW_CODEX_PROFILE, AW_PROFILES, CLAUDE_PROFILE_ROOT, CODEX_PROFILE_ROOT,
+          CLAUDE_PROFILE_SHARED, AW_CODEX_SHARED,
           AW_PICK, AW_PICK_KEYFILE, AW_PICK_MIN_CONFIDENCE, AW_PICK_FALLBACK, AW_PICK_WITHOUT,
           TYPESAFE_API_KEY (aw help pick)
 워커 안에서는 AW_WORKER 에 그 워커 이름이 들어 있습니다 (중첩 확인용).
@@ -484,9 +495,71 @@ aw resume --list 의 칸
   비슷한 작업인지는 aw 가 판단하지 않습니다. 작업 첫 줄과 aw result 를 보고 고릅니다.
 T
       ;;
+    profile) cat <<'T'
+여러 계정 (claude·codex)
+
+계정마다 설정 폴더를 따로 둡니다. 자격 증명이 그 폴더에 들어가서 폴더를 나누면 계정이 나뉩니다.
+  claude  CLAUDE_CONFIG_DIR = ~/.claude-profiles/<이름>   claude-profiles(claude-use, claude-new)와 같은 구조
+  codex   CODEX_HOME        = ~/.codex-profiles/<이름>    codex 는 계정이 auth.json 하나뿐이라 폴더로 나눔
+  default 는 기본 계정 (~/.claude, ~/.codex). 바꾸려면 CLAUDE_PROFILE_ROOT, CODEX_PROFILE_ROOT.
+계정과 상관없는 것은 기본 폴더로 링크해 같이 씁니다. 그래서 계정을 바꿔도 같은 대화를 이을 수 있습니다.
+  claude  settings.json projects plugins hooks commands agents skills CLAUDE.md   (CLAUDE_PROFILE_SHARED)
+  codex   config.toml AGENTS.md skills plugins hooks.json rules prompts sessions, <이름>.config.toml
+          (AW_CODEX_SHARED). 계정마다 따로: auth.json, 기록·상태 DB, 모델 목록
+  실측: 다른 CODEX_HOME 에서도 sessions 에 있는 세션을 찾음 (없는 ID 는 no rollout found).
+
+만들기와 로그인
+  aw profile add codex work           폴더와 링크를 만들고, 터미널이면 바로 로그인 (codex login)
+  aw profile add claude work-sub      claude 는 claude auth login. claude-new 로 만든 것도 그대로 씀
+  aw profile login codex work --device-auth   브라우저가 없는 곳(SSH)에서
+  aw profile rm codex work [--yes]    폴더를 지움 (그 계정의 로그인 정보도. 같이 쓰던 원본은 그대로)
+  로그인은 컴퓨터마다 따로 합니다. 토큰 파일을 복사하면 갱신할 때 서로 어긋납니다.
+
+목록
+  aw profile [claude|codex] [-q] [--json]
+  계정마다 로그인한 이메일·요금제와 최근 사용량을 보입니다. * 는 --profile 없이 띄울 때 쓰는 계정.
+  claude 는 claude auth status 로 묻고(계정마다 1초쯤, -q 면 자격 증명 파일만 봄), codex 는 auth.json 의
+  id_token 에서 이메일·요금제를 읽습니다 (토큰은 꺼내지 않음).
+  사용량은 그 계정으로 돈 가장 최근 aw 워커의 출력에서 읽습니다 (실측으로 있는 것):
+    claude  stream-json 의 rate_limit_event: 5시간·7일 창의 사용률과 초기화 시각
+    codex   세션 파일 token_count 의 rate_limits: 주간(7일) 등 창의 사용률과 초기화 시각
+  초기화 시각이 지난 창은 0% 로 봅니다. aw 밖에서 쓴 양은 모릅니다.
+
+워커를 그 계정으로
+  aw run --profile work -- codex exec --json "작업"
+  aw run --profile auto -- claude -p ...   후보 중 최근 사용량이 가장 적은 계정 (모르는 계정은 0 으로 봐서 먼저)
+  --profile 없을 때 고르는 순서:
+    1. 셸의 AW_CLAUDE_PROFILE·AW_CODEX_PROFILE
+    2. aw profile use 로 정해 둔 계정 ($AW_PROFILES, 이 컴퓨터에 저장)
+    3. 셸의 CLAUDE_CONFIG_DIR·CODEX_HOME 이 계정 폴더면 (claude-use 등) 그 계정
+    4. default
+
+auto 후보(풀)와 워커에 쓰지 않을 계정
+  aw profile pool claude work-a work-b     --profile auto 가 이 계정들 중에서만 고름 (같으면 적은 순서대로)
+  aw profile use claude auto               --profile 없이 띄워도 auto (늘 풀에서 고름)
+  aw profile pool claude --clear           풀을 지움 (로그인된 계정 모두가 후보)
+  aw profile use claude --clear            use 를 지움
+  오케스트레이션을 맡은 계정처럼 워커에 쓰지 않을 계정은 풀에서 빼고 use 를 auto 로 둡니다. 그러면 셸이 그 계정
+  (claude-use 등)이어도 워커는 풀의 계정으로 갑니다. 직접 --profile <그 계정> 을 주면 그대로 씁니다.
+  peek·이어하기·후보 목록·모델 고정이 워커의 계정 폴더에서 찾습니다 (meta 의 profile, codex_home).
+
+한도에 걸리면 다른 계정으로 같은 대화를
+  aw wait·aw status 가 한도에 걸린 것 같으면 알립니다 (claude 의 rate_limit_event rejected, codex 사용률 100%,
+  출력의 한도 문구). 그러면:
+    aw resume <워커> --profile auto -- '이어서 해줘'      또는 --profile <다른 계정>
+  같은 세션을 다른 계정에서 잇습니다. 계정마다 캐시가 따로라 앞 대화를 다시 읽습니다.
+  이어하기는 원래 계정으로 하는 것이 기본입니다 (지금 셸의 AW_*_PROFILE 을 따르지 않음).
+
+codex 자신의 --profile <이름> (-- 뒤에 주는 것)은 설정 묶음(<이름>.config.toml, aw gateway 가 쓰는 것)이고
+aw 의 --profile (-- 앞)은 계정입니다. 둘을 같이 쓸 수 있습니다:
+  aw run --profile work -- codex exec --json --profile opengateway "작업"
+mac 의 claude 가 자격 증명을 키체인에만 두면 폴더를 나눴을 때 계정이 나뉘는지 확인하지 못했습니다
+(이 컴퓨터들의 mac 은 파일 .credentials.json 이었음).
+T
+      ;;
     '') usage ;;
     *) warn "그런 도움말 주제가 없습니다: $1"
-       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief, pick, models, gateway, resume"
+       warn "쓸 수 있는 주제: agents, defaults, files, limits, peek, brief, pick, models, gateway, resume, profile"
        return 1 ;;
   esac
 }
@@ -1026,9 +1099,10 @@ orig_settings() { # <워커디렉터리> <에이전트>
 
 # 지금 같은 에이전트를 새로 띄우면 기본 옵션이 붙일 모델과 수준 → "모델<TAB>수준". codex 는 기본 옵션에
 # 없으면 설정 파일의 것입니다. 모델 목록은 새로 받지 않습니다 (모르면 그대로 붙는다고 봄).
-now_settings() { # <에이전트> <codex 프로필> <claude 프로필>
+now_settings() { # <에이전트> <codex 프로필> <claude 프로필> [codex 계정 폴더(CODEX_HOME)]
   (
     ns_ag=$1; ns_cp=$2
+    [ -n "${4:-}" ] && { CODEX_HOME=$4; export CODEX_HOME; }
     no_brief=1; no_defaults=0; added=''; mdropped=''; pdropped=''; profile=$3; stdin_file=/dev/null
     wd=''; dir=$PWD; aw_pin=0; mk_norefresh=1
     if [ "$ns_ag" = codex ]; then
@@ -1127,7 +1201,7 @@ cache_state() { # <워커디렉터리> <에이전트> <끝난 뒤 초>
       if [ "$cs_age" -lt "$cs_ttl" ]; then printf 'warm\t%s' $((cs_ttl - cs_age)); else printf 'cold\t'; fi ;;
     codex)
       cs_cp=$(eval "set -- $(worker_args "$cs_d")"; shift; codex_profile_arg "$@")
-      if [ -n "$cs_cp" ] && gw_codex_ours "$(gw_codex_file "$cs_cp")"; then printf 'unknown\t게이트웨이'; return 0; fi
+      if [ -n "$cs_cp" ] && gw_codex_ours "$(codex_home_of "$cs_d")/$cs_cp.config.toml"; then printf 'unknown\t게이트웨이'; return 0; fi
       if [ "$cs_age" -lt 1800 ]; then printf 'warm\t%s' $((1800 - cs_age))
       elif [ "$cs_age" -ge 14400 ]; then printf 'cold\t'
       else printf 'unknown\t30분~4시간은 재 보지 못함'
@@ -1207,6 +1281,281 @@ prompt_head() { # <워커디렉터리>
     *) [ $# -gt 1 ] && eval "ph_p=\${$#}" ;;
   esac
   printf '%s\n' "$ph_p" | awk 'NF { print; exit }'
+}
+
+# ---------------------------------------------------------------- 계정 (프로필)
+
+# 계정마다 설정 폴더를 따로 둡니다. 자격 증명이 그 폴더에 들어가서 폴더를 나누면 계정이 나뉩니다.
+#   claude  CLAUDE_CONFIG_DIR = ~/.claude-profiles/<이름>   (claude-profiles 와 같은 구조라 섞어 써도 됨)
+#   codex   CODEX_HOME        = ~/.codex-profiles/<이름>    (codex 는 auth.json 하나뿐이라 여러 계정 기능이 없음)
+#   default 는 기본 계정 (~/.claude, ~/.codex). claude 는 변수를 지워야 합니다 (같은 경로라도 변수가 있으면
+#   계정 정보가 비어 보임, claude-profiles 의 알려진 함정).
+# 계정과 상관없는 것(설정, 스킬, 대화 기록·세션)은 기본 폴더로 링크해 같이 씁니다. 세션을 같이 써서 계정을
+# 바꿔도 같은 대화를 이을 수 있습니다 (실측: 다른 CODEX_HOME 에서도 sessions 에 있는 세션을 찾음).
+# 계정 설정 파일 ($AW_PROFILES). 한 줄에 '에이전트 키 값...' 이고 aw profile pool·use 가 씁니다.
+#   claude pool swchoi1-60hertz work2   --profile auto 의 후보 (없으면 로그인된 계정 모두)
+#   claude use auto                     --profile 없이 띄울 때 쓸 계정 (AW_CLAUDE_PROFILE 이 먼저)
+# 오케스트레이션을 맡은 계정처럼 워커에 쓰지 않을 계정은 풀에서 빼고 use 를 auto 로 둡니다.
+prof_conf_get() { # <에이전트> <키>  → 값 (공백으로 구분)
+  [ -f "$AW_PROFILES" ] || return 0
+  sed 's/#.*//' "$AW_PROFILES" | awk -v a="$1" -v k="$2" '$1 == a && $2 == k { $1 = ""; $2 = ""; sub(/^ +/, ""); print; exit }'
+}
+prof_conf_set() { # <에이전트> <키> [값...]  (값이 없으면 그 줄을 지움)
+  pcs_a=$1; pcs_k=$2; shift 2
+  mkdir -p "$(dirname "$AW_PROFILES")" || return 1
+  pcs_t="$AW_PROFILES.tmp.$$"
+  {
+    if [ -f "$AW_PROFILES" ]; then
+      awk -v a="$pcs_a" -v k="$pcs_k" '!($1 == a && $2 == k)' "$AW_PROFILES"
+    else
+      printf '%s\n' "# aw 계정 설정 (aw profile pool, aw profile use 가 씁니다). 한 줄에 '에이전트 키 값...'." \
+        "#   pool  --profile auto 의 후보 계정들   use  --profile 없이 띄울 때 쓸 계정 (auto 면 풀에서 고름)"
+    fi
+    if [ $# -gt 0 ]; then printf '%s %s %s\n' "$pcs_a" "$pcs_k" "$*"; fi
+  } > "$pcs_t" && mv "$pcs_t" "$AW_PROFILES"
+}
+
+prof_root() { # <에이전트>
+  case "$1" in
+    claude) printf '%s' "${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}" ;;
+    codex)  printf '%s' "${CODEX_PROFILE_ROOT:-$HOME/.codex-profiles}" ;;
+  esac
+}
+prof_base() { # <에이전트>  → 기본 계정의 폴더
+  case "$1" in claude) printf '%s' "$HOME/.claude" ;; codex) printf '%s' "$HOME/.codex" ;; esac
+}
+prof_dir() { # <에이전트> <이름>
+  if [ "$2" = default ]; then prof_base "$1"; else printf '%s/%s' "$(prof_root "$1")" "$2"; fi
+}
+prof_var() { case "$1" in claude) printf CLAUDE_CONFIG_DIR ;; codex) printf CODEX_HOME ;; esac; }
+prof_shared() { # <에이전트>  → 기본 폴더로 링크해 같이 쓸 것 (claude 는 claude-profiles 와 같은 목록, 같은 변수)
+  case "$1" in
+    claude) printf '%s' "${CLAUDE_PROFILE_SHARED:-settings.json projects plugins hooks commands agents skills CLAUDE.md}" ;;
+    codex)  printf '%s' "${AW_CODEX_SHARED:-config.toml AGENTS.md skills plugins hooks.json rules prompts sessions}" ;;
+  esac
+}
+# aw gateway 가 만든 claude 프로필이면 0. 계정이 아니라 게이트웨이 설정이라 계정 목록에서 뺍니다.
+prof_gateway() { # <에이전트> <이름>
+  [ "$1" = claude ] && [ "$2" != default ] && gw_claude_ours "$(prof_dir claude "$2")"
+}
+prof_names() { # <에이전트>  → 계정 이름들 (default 먼저, 게이트웨이 프로필은 뺌)
+  printf 'default\n'
+  pn_r=$(prof_root "$1")
+  [ -d "$pn_r" ] || return 0
+  for pn_d in "$pn_r"/*; do
+    [ -d "$pn_d" ] || continue
+    pn_n=${pn_d##*/}
+    valid_name "$pn_n" || continue
+    case "$pn_n" in default | auto) continue ;; esac
+    prof_gateway "$1" "$pn_n" && continue
+    printf '%s\n' "$pn_n"
+  done
+  return 0
+}
+# 자격 증명 파일이 있는지 (빠른 확인) → 0 있음 / 1 없음 / 2 모름 (mac 의 claude 는 키체인에 둠)
+prof_cred() { # <에이전트> <이름>
+  pc_d=$(prof_dir "$1" "$2")
+  case "$1" in
+    codex) [ -s "$pc_d/auth.json" ] && return 0; return 1 ;;
+    claude)
+      [ -s "$pc_d/.credentials.json" ] && return 0
+      [ "$(uname -s 2>/dev/null)" = Darwin ] && return 2
+      return 1 ;;
+  esac
+  return 2
+}
+# 로그인한 계정 → "이메일<TAB>조직·요금제" (로그인 안 됐으면 1). 토큰은 꺼내지 않습니다.
+#   claude  claude auth status 의 JSON (default 는 CLAUDE_CONFIG_DIR 을 지우고 물음, 계정마다 1초쯤)
+#   codex   auth.json 의 id_token 에 든 email, chatgpt_plan_type (codex login status 는 이메일을 안 알려 줌)
+prof_account() { # <에이전트> <이름>
+  pa_d=$(prof_dir "$1" "$2")
+  case "$1" in
+    claude)
+      command -v claude >/dev/null 2>&1 || return 1
+      if [ "$2" = default ]; then pa_j=$(env -u CLAUDE_CONFIG_DIR claude auth status </dev/null 2>/dev/null)
+      else pa_j=$(CLAUDE_CONFIG_DIR=$pa_d claude auth status </dev/null 2>/dev/null); fi
+      [ "$(printf '%s' "$pa_j" | json_str loggedIn)" = true ] || return 1
+      pa_o=$(printf '%s' "$pa_j" | json_str orgName); pa_s=$(printf '%s' "$pa_j" | json_str subscriptionType)
+      [ "$pa_o" = null ] && pa_o=''; [ "$pa_s" = null ] && pa_s=''
+      printf '%s\t%s' "$(printf '%s' "$pa_j" | json_str email | sed 's/^null$//')" "$pa_o${pa_o:+${pa_s:+ · }}$pa_s" ;;
+    codex)
+      [ -s "$pa_d/auth.json" ] || return 1
+      pa_t=$(json_str id_token < "$pa_d/auth.json")
+      if [ -z "$pa_t" ]; then
+        grep -q '"OPENAI_API_KEY"[[:space:]]*:[[:space:]]*"' "$pa_d/auth.json" || return 1
+        printf '\tAPI 키'; return 0
+      fi
+      pa_c=$(printf '%s' "$pa_t" | cut -d. -f2 | tr '_-' '/+')
+      case $(( ${#pa_c} % 4 )) in 2) pa_c="$pa_c==" ;; 3) pa_c="$pa_c=" ;; esac
+      pa_p=$(printf '%s' "$pa_c" | base64 -d 2>/dev/null || printf '%s' "$pa_c" | base64 -D 2>/dev/null)
+      printf '%s\tChatGPT %s' "$(printf '%s' "$pa_p" | json_str email)" "$(printf '%s' "$pa_p" | json_str chatgpt_plan_type)" ;;
+  esac
+}
+
+# codex 워커가 쓴 CODEX_HOME (meta). 0.23.x 까지의 기록은 지금 셸의 것으로 봅니다.
+codex_home_of() { # <워커디렉터리>
+  ch_h=$(meta_get "$1" codex_home)
+  printf '%s' "${ch_h:-${CODEX_HOME:-$HOME/.codex}}"
+}
+
+# 워커가 쓴 계정 이름 (모르면 빈 값). 프로필 없이 띄운 claude 는 기본 계정으로 봅니다.
+worker_profile() { # <워커디렉터리> <에이전트>
+  wp_p=$(meta_get "$1" profile)
+  [ -n "$wp_p" ] && { printf '%s' "$wp_p"; return 0; }
+  case "$2" in
+    claude) printf default ;;
+    codex)
+      wp_h=$(meta_get "$1" codex_home); wp_h=${wp_h%/}; wp_r=$(prof_root codex)
+      case "$wp_h" in
+        '' | "$(prof_base codex)") printf default ;;
+        "$wp_r"/*) wp_h=${wp_h#"$wp_r"/}; case "$wp_h" in */*) ;; *) printf '%s' "$wp_h" ;; esac ;;
+      esac ;;
+  esac
+  return 0
+}
+
+# 계정의 한도 사용량. 워커 출력에 남는 것을 읽습니다 (실측).
+#   claude  stream-json 의 rate_limit_event: unifiedWindows 의 five_hour·seven_day 등 { utilization(0~1), resetsAt }
+#           status 가 rejected 면 한도에 걸린 것
+#   codex   세션 파일 token_count 의 rate_limits: primary·secondary { used_percent, window_minutes, resets_at }
+# → 창마다 "이름<TAB>퍼센트<TAB>초기화 시각" 한 줄씩 (거절이면 "status<TAB>rejected" 도)
+limits_of() { # <워커디렉터리> <에이전트>
+  case "$2" in
+    claude)
+      lo_l=$(grep '"type":"rate_limit_event"' "$1/out" 2>/dev/null | tail -1)
+      [ -n "$lo_l" ] || return 0
+      printf '%s\n' "$lo_l" | LC_ALL=C awk '{
+        s = $0; sub(/.*"unifiedWindows":/, "", s)
+        while (match(s, /"[a-z0-9_]+":\{[^{}]*"utilization":[0-9.]+[^{}]*\}/)) {
+          o = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+          n = o; sub(/^"/, "", n); sub(/".*/, "", n)
+          u = o; sub(/.*"utilization":/, "", u); sub(/[^0-9.].*/, "", u)
+          r = ""; if (o ~ /"resetsAt":[0-9]/) { r = o; sub(/.*"resetsAt":/, "", r); sub(/[^0-9].*/, "", r) }
+          printf "%s\t%d\t%s\n", n, u * 100 + 0.5, r
+        }
+        if ($0 ~ /"status":"rejected"/) print "status\trejected"
+      }' ;;
+    codex)
+      lo_f=$(codex_rollout "$1"); [ -n "$lo_f" ] || return 0
+      lo_l=$(grep '"rate_limits":{' "$lo_f" 2>/dev/null | tail -1)
+      [ -n "$lo_l" ] || return 0
+      printf '%s\n' "$lo_l" | LC_ALL=C awk '{
+        s = $0; sub(/.*"rate_limits":/, "", s)
+        while (match(s, /"(primary|secondary)":\{[^{}]*"used_percent":[0-9.]+[^{}]*\}/)) {
+          o = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+          u = o; sub(/.*"used_percent":/, "", u); sub(/[^0-9.].*/, "", u)
+          w = ""; if (o ~ /"window_minutes":[0-9]/) { w = o; sub(/.*"window_minutes":/, "", w); sub(/[^0-9].*/, "", w) }
+          r = ""; if (o ~ /"resets_at":[0-9]/) { r = o; sub(/.*"resets_at":/, "", r); sub(/[^0-9].*/, "", r) }
+          printf "w%s\t%d\t%s\n", w, u + 0.5, r
+        }
+      }' ;;
+  esac
+  return 0
+}
+
+# 끝난 워커는 출력이 안 바뀌니 한 번 읽어 limits 파일에 적어 둡니다 (빈 파일은 정보 없음).
+worker_limits() { # <워커디렉터리> <에이전트>
+  if [ -f "$1/limits" ]; then cat "$1/limits"; return 0; fi
+  wl_l=$(limits_of "$1" "$2")
+  [ -f "$1/exit" ] && printf '%s' "$wl_l${wl_l:+
+}" > "$1/limits" 2>/dev/null
+  [ -n "$wl_l" ] && printf '%s\n' "$wl_l"
+  return 0
+}
+
+# 계정마다 가장 최근 워커의 사용량 → "이름<TAB>점수<TAB>요약<TAB>기준 시각" 줄들.
+# 점수는 창들 중 가장 높은 사용률(%)이고, 초기화 시각이 지난 창은 0, 거절이면 100 입니다.
+usage_scan() { # <에이전트>
+  us_now=$(now)
+  for us_d in $(list_dirs); do
+    [ "$(agent_of "$us_d")" = "$1" ] || continue
+    us_t=$(cat "$us_d/finished" 2>/dev/null)
+    [ -n "$us_t" ] || { [ -f "$us_d/exit" ] && us_t=$(mtime_of "$us_d/exit"); }
+    [ -n "$us_t" ] || us_t=$us_now
+    printf '%s\t%s\n' "$us_t" "$us_d"
+  done | sort -rn | {
+    us_seen=' '
+    while IFS="$TAB" read -r us_t us_d; do
+      us_p=$(worker_profile "$us_d" "$1"); [ -n "$us_p" ] || continue
+      case "$us_seen" in *" $us_p "*) continue ;; esac
+      us_l=$(worker_limits "$us_d" "$1"); [ -n "$us_l" ] || continue
+      us_seen="$us_seen$us_p "
+      printf '%s\n' "$us_l" | LC_ALL=C awk -F '\t' -v now="$us_now" -v at="$us_t" -v name="$us_p" '
+        function lab(n,  w) {
+          if (n == "five_hour") return "5시간"
+          if (n == "seven_day") return "7일"
+          if (n ~ /^seven_day_/) { w = n; sub(/^seven_day_/, "", w); return "7일(" w ")" }
+          if (n ~ /^w[0-9]+$/) {
+            w = substr(n, 2) + 0
+            if (w > 0 && w % 1440 == 0) return (w / 1440) "일"
+            if (w > 0 && w % 60 == 0) return (w / 60) "시간"
+            return w "분"
+          }
+          return n
+        }
+        $1 == "status" { rej = 1; next }
+        {
+          p = $2 + 0; t = ""
+          if ($3 != "" && $3 + 0 <= now) { p = 0; t = "(초기화됨)" }
+          if (p > m) m = p
+          sum = sum (sum == "" ? "" : " · ") lab($1) " " p "%" t
+        }
+        END { if (rej) { m = 100; sum = sum (sum == "" ? "" : " · ") "한도에 걸림" }; printf "%s\t%d\t%s\t%s\n", name, m, sum, at }'
+    done
+    :
+  }
+}
+
+# 최근 사용량이 가장 적은 계정 → "이름<TAB>후보들의 사용량<TAB>고른 계정의 점수" (후보가 없으면 1).
+# 후보는 풀(aw profile pool)이 있으면 그 계정들, 없으면 모든 계정이고, 로그인 안 된 계정은 뺍니다.
+# 사용량을 모르는 계정(aw 로 아직 안 써 본 것)은 0 으로 봐서 먼저 씁니다. 같으면 풀 순서 (풀이 없으면 default 먼저).
+profile_auto() { # <에이전트>
+  pa_scan=$(usage_scan "$1")
+  pa_pool=$(prof_conf_get "$1" pool)
+  pa_best=''; pa_bs=1000; pa_all=''
+  for pa_n in $(if [ -n "$pa_pool" ]; then printf '%s\n' "$pa_pool" | tr ' ' '\n'; else prof_names "$1"; fi); do
+    valid_name "$pa_n" || continue
+    [ "$pa_n" = default ] || [ -d "$(prof_dir "$1" "$pa_n")" ] || continue
+    pa_cr=0; prof_cred "$1" "$pa_n" || pa_cr=$?
+    [ "$pa_cr" -eq 1 ] && continue
+    pa_row=$(printf '%s\n' "$pa_scan" | awk -F '\t' -v n="$pa_n" '$1 == n { print; exit }')
+    if [ -n "$pa_row" ]; then
+      pa_s=$(printf '%s' "$pa_row" | cut -f2); pa_sum=$(printf '%s' "$pa_row" | cut -f3)
+    else
+      pa_s=0; pa_sum='사용량 모름'
+    fi
+    pa_all="$pa_all${pa_all:+, }$pa_n $pa_sum"
+    [ "$pa_s" -lt "$pa_bs" ] && { pa_bs=$pa_s; pa_best=$pa_n; }
+  done
+  [ -n "$pa_best" ] || return 1
+  printf '%s\t%s\t%s' "$pa_best" "$pa_all" "$pa_bs"
+}
+
+# 한도에 걸린 것 같으면 다른 계정으로 잇는 법을 알립니다 (aw wait, aw status).
+limit_note() { # <워커디렉터리> [들여쓰기]
+  ln_r=$(limit_hit "$1"); [ -n "$ln_r" ] || return 0
+  ln_a=$(agent_of "$1"); ln_p=$(worker_profile "$1" "$ln_a")
+  warn "${2:-}  한도: $ln_a 계정 ${ln_p:-?} 이 한도에 걸린 것 같습니다 ($ln_r)."
+  warn "${2:-}        다른 계정으로 같은 대화를 이으려면: aw resume $(basename "$1") --profile auto -- '이어서 해줘'   (계정: aw profile)"
+}
+
+# 한도에 걸려 실패한 것 같으면 사유 (아니면 빈 값). claude 는 rate_limit_event 의 status rejected,
+# codex 는 사용률 100%, 그리고 출력·오류 끝의 한도 문구입니다 (문구는 버전마다 달라 넉넉히 봄).
+limit_hit() { # <워커디렉터리>
+  lh_c=$(cat "$1/exit" 2>/dev/null)
+  [ -n "$lh_c" ] && [ "$lh_c" != 0 ] || return 0
+  lh_a=$(agent_of "$1")
+  case "$lh_a" in claude | codex) ;; *) return 0 ;; esac
+  lh_l=$(worker_limits "$1" "$lh_a")
+  if printf '%s\n' "$lh_l" | grep -q '^status'; then printf '사용 한도에 걸림'; return 0; fi
+  if [ "$lh_a" = codex ] && printf '%s\n' "$lh_l" | LC_ALL=C awk -F '\t' '$2 >= 100 { f = 1 } END { exit !f }'; then
+    printf '사용 한도 100%%'; return 0
+  fi
+  if { tail -c 20000 "$1/out"; tail -c 20000 "$1/err"; } 2>/dev/null \
+    | grep -Eiq 'usage limit|limit reached|hit your (usage )?limit|rate_limit_error|rate limit exceeded|insufficient_quota'; then
+    printf '출력에 한도 문구'; return 0
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------- 에이전트별 기본 옵션
@@ -1968,31 +2317,63 @@ cmd_run() {
     stdin_file=$(CDPATH= cd -- "$(dirname -- "$stdin_file")" && pwd)/$(basename -- "$stdin_file")
   fi
 
-  # 프로필 편의 (claude 전용). --profile 이 먼저, 없으면 AW_CLAUDE_PROFILE (셸 설정에 두면 늘),
-  # 그것도 없으면 셸의 CLAUDE_CONFIG_DIR (claude-use 로 바꾼 셸) 를 그대로 물려받되 이름을 기록합니다.
-  # 이름을 알아야 peek 이 대화 기록을, resume 이 세션을 그 프로필에서 찾습니다.
-  # default 는 CLAUDE_CONFIG_DIR 을 지웁니다 (claude-with default 처럼: 같은 경로라도 변수가 있으면 계정 정보가 비어 보임).
-  profile_from=''
-  pf_root="${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}"
-  if [ -z "$profile" ] && [ "${1##*/}" = claude ]; then
-    if [ -n "${AW_CLAUDE_PROFILE:-}" ]; then
-      profile=$AW_CLAUDE_PROFILE; profile_from=AW_CLAUDE_PROFILE
-    elif [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
-      case "${CLAUDE_CONFIG_DIR%/}" in
-        "$pf_root"/*) profile=${CLAUDE_CONFIG_DIR%/}; profile=${profile#"$pf_root"/}; profile_from=CLAUDE_CONFIG_DIR
-                      case "$profile" in */*) profile=''; profile_from='' ;; esac ;;
-      esac
+  # 계정(프로필, aw help profile): claude 는 CLAUDE_CONFIG_DIR, codex 는 CODEX_HOME 을 그 계정 폴더로 둡니다.
+  # --profile 이 먼저, 없으면 AW_CLAUDE_PROFILE·AW_CODEX_PROFILE (셸 설정에 두면 늘), 그것도 없으면 셸의
+  # CLAUDE_CONFIG_DIR·CODEX_HOME 이 계정 폴더면 (claude-use 로 바꾼 셸 등) 그대로 물려받되 이름을 기록합니다.
+  # 이름을 알아야 peek 이 대화 기록·세션 파일을, resume 이 세션을 그 계정에서 찾습니다.
+  # default 는 기본 계정입니다. claude 는 변수를 지웁니다 (같은 경로라도 변수가 있으면 계정 정보가 비어 보임).
+  # auto 는 최근 사용량이 가장 적은 계정입니다 (profile_auto).
+  profile_from=''; profile_why=''; pf_ag=${1##*/}; pf_var=''
+  case "$pf_ag" in
+    claude) pf_var=CLAUDE_CONFIG_DIR; pf_def=${AW_CLAUDE_PROFILE:-}; pf_cur=${CLAUDE_CONFIG_DIR:-} ;;
+    codex)  pf_var=CODEX_HOME; pf_def=${AW_CODEX_PROFILE:-}; pf_cur=${CODEX_HOME:-} ;;
+    *) [ -n "$profile" ] && warn "  (--profile 은 claude·codex 의 계정입니다. $pf_ag 에는 붙이지 않습니다)"
+       profile='' ;;
+  esac
+  if [ -n "$pf_var" ]; then
+    pf_root=$(prof_root "$pf_ag")
+    if [ -z "$profile" ]; then
+      pf_use=$(prof_conf_get "$pf_ag" use)
+      if [ -n "$pf_def" ]; then
+        profile=$pf_def; profile_from="AW_$(printf '%s' "$pf_ag" | tr 'a-z' 'A-Z')_PROFILE"
+      elif [ -n "$pf_use" ]; then
+        # aw profile use 로 정해 둔 계정. 셸이 claude-use 로 다른 계정(오케스트레이션용 등)이어도 이것을 씁니다.
+        profile=$pf_use; profile_from='aw profile use'
+      elif [ -n "$pf_cur" ]; then
+        case "${pf_cur%/}" in
+          "$pf_root"/*) profile=${pf_cur%/}; profile=${profile#"$pf_root"/}; profile_from=$pf_var
+                        case "$profile" in */*) profile=''; profile_from='' ;; esac ;;
+        esac
+      fi
+    fi
+    if [ "$profile" = auto ]; then
+      pf_pick=$(profile_auto "$pf_ag") || die "$pf_ag 에 auto 로 고를 계정이 없습니다 (로그인된 계정$( [ -n "$(prof_conf_get "$pf_ag" pool)" ] && printf ' 중 풀: %s' "$(prof_conf_get "$pf_ag" pool)")). aw profile $pf_ag"
+      profile=${pf_pick%%"$TAB"*}; profile_why=${pf_pick#*"$TAB"}; pf_score=${profile_why##*"$TAB"}
+      profile_why=${profile_why%"$TAB"*}; profile_from=auto
+      [ "$pf_score" -ge 100 ] && warn "  (주의: 후보 계정이 모두 한도에 걸려 있었습니다. 고른 $profile 도 초기화 전이면 실패합니다. aw profile $pf_ag)"
     fi
   fi
   if [ -n "$profile" ]; then
     valid_name "$profile" || die "프로필 이름은 영문/숫자/. _ - 만 쓸 수 있습니다: $profile"
     case "$profile" in
-      default) envs="${envs}unset CLAUDE_CONFIG_DIR
+      default) envs="${envs}unset $pf_var
 " ;;
-      *) add_env "CLAUDE_CONFIG_DIR=$pf_root/$profile"
-         [ -d "$pf_root/$profile" ] \
-           || warn "  (프로필 폴더가 없습니다: $(tilde "$pf_root/$profile") — claude 는 로그인 안 된 새 설정으로 돕니다. claude-use $profile 로 만드세요)" ;;
+      *) [ -d "$pf_root/$profile" ] \
+           || die "그런 $pf_ag 계정(프로필)이 없습니다: $(tilde "$pf_root/$profile")
+   만들기: aw profile add $pf_ag $profile   목록: aw profile $pf_ag"
+         add_env "$pf_var=$pf_root/$profile" ;;
     esac
+  fi
+  # codex 가 쓸 CODEX_HOME. 기본 옵션의 모델 확인, 게이트웨이 설정·키, 세션 파일 찾기가 모두 이 폴더를 봅니다.
+  # 이 aw 안에서만 바꿉니다 (워커 기록에는 meta 의 codex_home 으로 남김).
+  cx_home=''
+  if [ "$pf_ag" = codex ]; then
+    case "$profile" in
+      '') cx_home=${CODEX_HOME:-$HOME/.codex} ;;
+      default) cx_home=$(prof_base codex) ;;
+      *) cx_home=$pf_root/$profile ;;
+    esac
+    CODEX_HOME=$cx_home; export CODEX_HOME
   fi
 
   mkdir -p "$wd" || die "워커 디렉터리를 만들 수 없습니다: $wd"
@@ -2129,6 +2510,8 @@ KIRO
     printf 'stdin=%s\n' "$stdin_file"
     [ -n "$tag" ]      && printf 'tag=%s\n' "$tag"
     [ -n "$profile" ]  && printf 'profile=%s\n' "$profile"
+    [ "$profile_from" = auto ] && printf 'profile_auto=1\n'
+    [ -n "$cx_home" ]  && printf 'codex_home=%s\n' "$cx_home"
     [ "$briefed" -eq 1 ] && printf 'brief=1\n'
     [ -n "$mdropped" ] && printf 'default_model_dropped=%s\n' "$mdropped"
     [ "$say_mode" -eq 1 ] && printf 'say=1\n'
@@ -2175,7 +2558,11 @@ KIRO
   say "  디렉터리: $dir"
   [ -n "$wt" ] && say "  worktree: $wt  (브랜치 $worktree)"
   say "  명령: $(meta_get "$wd" cmdline)"
-  [ -n "$profile_from" ] && say "  (claude 프로필: $profile — $profile_from 에서. 이번만 다르게: --profile 이름, 기본 계정: --profile default)"
+  if [ "$profile_from" = auto ]; then
+    say "  (계정 자동 고름: $profile — 최근 사용량이 가장 적음. 후보: $profile_why)"
+  elif [ -n "$profile_from" ]; then
+    say "  ($pf_ag 계정: $profile — $profile_from 에서. 이번만 다르게: --profile 이름, 기본 계정: --profile default)"
+  fi
   [ "$say_mode" -eq 1 ] && say "  (도는 중에 메시지 넣기: aw say $name -- '…'   끄려면 --no-say)"
   [ "${1##*/}" = devin ] && ! has_which_exe && warn "  (주의: PATH 에 which 실행 파일이 없어 devin 의 exec 가 셸을 못 찾습니다 (명령을 하나도 못 돌림). 설치: sudo pacman -S which (Debian/Ubuntu 는 debianutils). aw help agents)"
   [ -n "$added" ] && [ "$no_defaults" -ne 1 ] && say "  (기본 옵션이 붙었습니다: $added — 끄려면 --no-defaults)"
@@ -2248,6 +2635,7 @@ cmd_status() {
   [ -n "$(meta_get "$d" picked)" ]   && say "  aw pick  : $(meta_get "$d" picked) 를 고름$( [ -n "$(meta_get "$d" pick_confidence)" ] && printf ' (확신 %s)' "$(meta_get "$d" pick_confidence)" )$( [ -n "$(meta_get "$d" pick_model)" ] && printf ', 모델 %s' "$(meta_get "$d" pick_model)" )$( [ -n "$(meta_get "$d" pick_model_confidence)" ] && printf ' (확신 %s)' "$(meta_get "$d" pick_model_confidence)" )"
   [ -n "$(meta_get "$d" pick_jev_error)" ] && say "             Jev 를 못 써서 대신 띄움: $(meta_get "$d" pick_jev_error)"
   [ -n "$(fail_reason_text "$d")" ] && say "  실패 사유: $(fail_reason_text "$d")"
+  limit_note "$d" "  "
   if [ -f "$d/inbox" ]; then
     st_sc=$(say_counts "$d")
     say "  aw say  : 넣은 메시지 ${st_sc% *}개, 그중 전달 ${st_sc#* }개$( [ -f "$d/exit" ] || printf '   (넣기: aw say %s -- …)' "$(basename "$d")")"
@@ -2356,6 +2744,7 @@ cmd_wait() {
       fr=$(fail_reason_text "$d")
       say "$n: $(state_of "$d") (종료 코드 $code${fr:+ — $fr})"
       [ "$code" = 0 ] || rc=1
+      limit_note "$d"
     fi
   done
   return $rc
@@ -2595,6 +2984,8 @@ resume_usage() {
                   같은 세션을 다른 워커가 쓰는 중일 때나, 한 바탕에서 여러 작업을 나란히 돌릴 때 씁니다
   --model 모델    다른 모델로 잇습니다 (모델이 바뀌면 앞 대화를 캐시 없이 다시 읽음)
   --effort 수준   다른 추론 수준으로 잇습니다 (claude·agy 는 --effort, codex 는 model_reasoning_effort)
+  --profile 이름  다른 계정에서 같은 대화를 잇습니다 (한도에 걸렸을 때 등, auto 는 여유가 가장 많은 계정).
+                  claude·codex 만. 계정마다 캐시는 따로라 앞 대화를 다시 읽습니다 (aw help profile)
   -n 이름, -d 경로, --tag 문자열, -e K=V, --max-input-tokens N, --no-defaults, --no-brief, --no-say   aw run 과 같음
 
 --list  이어할 만한 워커를 세션마다 마지막 것 하나씩, 최근에 끝난 순으로 보여 줍니다. 모델·수준, 끝난 지,
@@ -2616,7 +3007,7 @@ cmd_resume() {
   [ -f "$sd/exit" ] || die "$src 은 아직 실행 중입니다. aw wait $src 부터 하세요."
 
   # -- 앞은 aw 옵션, 뒤는 새 프롬프트입니다.
-  opts=''; name=''; dir=''; fork=0; set_m=''; set_e=''
+  opts=''; name=''; dir=''; fork=0; set_m=''; set_e=''; set_prof=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --) shift; break ;;
@@ -2626,6 +3017,7 @@ cmd_resume() {
       --fork)      fork=1; shift ;;
       --model)     set_m="${2:?--model 에 모델이 필요합니다}"; shift 2 ;;
       --effort)    set_e="${2:?--effort 에 수준이 필요합니다}"; shift 2 ;;
+      --profile)   set_prof="${2:?--profile 에 계정 이름이 필요합니다}"; shift 2 ;;
       --tag | --max-input-tokens | -e | --env)
         opts="$opts $(shquote "$1") $(shquote "${2:?$1 에 값이 필요합니다}")"; shift 2 ;;
       --no-defaults) opts="$opts --no-defaults"; shift ;;
@@ -2697,11 +3089,40 @@ cmd_resume() {
   fi
   # 디렉터리: 원래 워커가 돌던 곳 (devin 의 -c 는 디렉터리 기준이라 특히 중요)
   [ -n "$dir" ] || dir=$(meta_get "$sd" dir)
-  # 프로필도 물려받습니다. 세션이 그 CLAUDE_CONFIG_DIR 안에 있어서,
-  # 기본 프로필로 이어하면 --resume 이 세션을 못 찾습니다.
+  # 계정(프로필)도 물려받습니다. 지금 셸의 AW_CLAUDE_PROFILE·AW_CODEX_PROFILE·claude-use 를 따르면 다른 계정으로
+  # 가서 캐시를 못 쓰고, 세션을 같이 쓰지 않는 폴더면 세션을 못 찾습니다. 프로필 없이 띄운 claude 는 기본 계정,
+  # codex 는 그때의 CODEX_HOME 입니다.
   sprof=$(meta_get "$sd" profile)
-  # 프로필 없이 띄운 claude 워커는 기본 계정으로 잇습니다 (지금 셸의 AW_CLAUDE_PROFILE·claude-use 를 따르면 세션을 못 찾음).
-  [ -z "$sprof" ] && [ "$sagent" = claude ] && sprof=default
+  case "$sagent" in claude | codex) [ -n "$sprof" ] || sprof=$(worker_profile "$sd" "$sagent") ;; esac
+  if [ -z "$sprof" ] && [ "$sagent" = codex ]; then
+    CODEX_HOME=$(codex_home_of "$sd"); export CODEX_HOME; AW_CODEX_PROFILE=''
+  fi
+  # --profile 로 다른 계정에서 같은 대화를 잇습니다 (한도에 걸렸을 때 등). aw profile add 로 만든 계정은 대화
+  # 기록·세션을 같이 써서 그 계정에서도 세션이 보입니다. 계정마다 캐시는 따로라 앞 대화를 다시 읽습니다.
+  prof_note=''
+  if [ -n "$set_prof" ]; then
+    case "$sagent" in claude | codex) ;; *) die "--profile 은 claude·codex 의 계정입니다." ;; esac
+    if [ "$set_prof" = auto ]; then
+      rs_pick=$(profile_auto "$sagent") || die "$sagent 에 auto 로 고를 계정이 없습니다 (로그인된 계정$( [ -n "$(prof_conf_get "$sagent" pool)" ] && printf ' 중 풀: %s' "$(prof_conf_get "$sagent" pool)")). aw profile $sagent"
+      set_prof=${rs_pick%%"$TAB"*}; rs_why=${rs_pick#*"$TAB"}; rs_score=${rs_why##*"$TAB"}; rs_why=${rs_why%"$TAB"*}
+      prof_note="  (계정 자동 고름: $set_prof — 최근 사용량이 가장 적음. 후보: $rs_why)"
+      [ "$rs_score" -ge 100 ] && warn "  (주의: 후보 계정이 모두 한도에 걸려 있었습니다. 초기화 전이면 이 계정도 실패합니다. aw profile $sagent)"
+    fi
+    valid_name "$set_prof" || die "프로필 이름은 영문/숫자/. _ - 만 쓸 수 있습니다: $set_prof"
+    if [ "$set_prof" != "${sprof:-}" ] && [ -n "$sid" ]; then
+      rs_pd=$(prof_dir "$sagent" "$set_prof")
+      [ -d "$rs_pd" ] || die "그런 $sagent 계정이 없습니다: $set_prof   (aw profile $sagent)"
+      case "$sagent" in
+        claude) rs_hit=$(find "$rs_pd/projects/" -mindepth 2 -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1) ;;
+        codex)  rs_hit=$(find "$rs_pd/sessions/" -name "*$sid.jsonl" 2>/dev/null | head -1) ;;
+      esac
+      [ -n "$rs_hit" ] || die "$set_prof 계정에서 이 세션이 보이지 않습니다 ($sid).
+   대화 기록·세션을 같이 쓰지 않는 계정 폴더입니다. aw profile add $sagent $set_prof 로 빠진 공유 링크를 채우세요."
+      prof_note="${prof_note:+$prof_note
+}  계정: ${sprof:-?} → $set_prof   (계정마다 캐시가 따로라 앞 대화를 다시 읽습니다)"
+    fi
+    sprof=$set_prof
+  fi
   [ -n "$sprof" ] && opts="$opts --profile $(shquote "$sprof")"
   # codex 는 기본 옵션을 resume 앞에 붙입니다 (run_argv). 프롬프트 뒤에 붙이면 codex 가 거절합니다.
 
@@ -2715,6 +3136,7 @@ cmd_resume() {
   else
     say "이어하기: $src → $name${sid:+  (세션 $sid)}"
   fi
+  [ -n "$prof_note" ] && say "$prof_note"
   # 모델·수준 알림. 바꿨으면 바뀐 것을, 안 바꿨는데 지금 기본값과 다르면 원래 것을 쓴다는 것을 알립니다.
   if [ -n "$set_m$set_e" ]; then
     rs_note=''; [ "$pm" != "$om" ] && rs_note='   (모델이 바뀌어 앞 대화를 캐시 없이 다시 읽습니다)'
@@ -2723,7 +3145,8 @@ cmd_resume() {
     # --no-defaults 로 잇는다면 기본값과 견줄 까닭이 없습니다.
     case "$opts" in *--no-defaults*) sagent_cmp=0 ;; *) sagent_cmp=1 ;; esac
     scp=''; [ "$sagent" = codex ] && scp=$(eval "set -- $(worker_args "$sd")"; shift; codex_profile_arg "$@")
-    ns=$(now_settings "$sagent" "$scp" "$sprof"); nm=${ns%%"$TAB"*}; ne=${ns#*"$TAB"}
+    scx=''; [ "$sagent" = codex ] && { if [ -n "$sprof" ]; then scx=$(prof_dir codex "$sprof"); else scx=$(codex_home_of "$sd"); fi; }
+    ns=$(now_settings "$sagent" "$scp" "$sprof" "$scx"); nm=${ns%%"$TAB"*}; ne=${ns#*"$TAB"}
     if [ "$sagent_cmp" -eq 1 ] && [ "$(settings_cmp "$pm" "$pe" "$nm" "$ne")" = different ]; then
       say "  모델·수준: 원래 워커 그대로 $(settings_str "$pm" "$pe")   (지금 기본값은 $(settings_str "$nm" "$ne"))"
       say "             기본값으로 바꿔 이으려면 --model ${nm:-…}${ne:+ --effort $ne}. 모델이 바뀌면 캐시를 못 씁니다"
@@ -2788,12 +3211,14 @@ resume_list() { # [-d 경로] [--agent 에이전트] [--json]
     rl_age=$((rl_now - rl_f)); [ "$rl_age" -ge 0 ] || rl_age=0
     rl_os=$(orig_settings "$rl_d" "$rl_a"); rl_m=${rl_os%%"$TAB"*}; rl_e=${rl_os#*"$TAB"}
     rl_cp=''; [ "$rl_a" = codex ] && rl_cp=$(eval "set -- $(worker_args "$rl_d")"; shift; codex_profile_arg "$@")
-    rl_prof=$(meta_get "$rl_d" profile); [ -z "$rl_prof" ] && [ "$rl_a" = claude ] && rl_prof=default
-    # 지금 기본값은 (에이전트, 프로필)마다 한 번만 셉니다.
-    rl_key="$rl_a|$rl_cp|$rl_prof"
+    rl_prof=$(meta_get "$rl_d" profile)
+    case "$rl_a" in claude | codex) [ -n "$rl_prof" ] || rl_prof=$(worker_profile "$rl_d" "$rl_a") ;; esac
+    rl_cx=''; [ "$rl_a" = codex ] && rl_cx=$(codex_home_of "$rl_d")
+    # 지금 기본값은 (에이전트, 프로필, 계정 폴더)마다 한 번만 셉니다.
+    rl_key="$rl_a|$rl_cp|$rl_prof|$rl_cx"
     rl_ns=$(printf '%s' "$rl_nkeys" | awk -F "$rl_us" -v k="$rl_key" '$1 == k { print $2; exit }')
     if [ -z "$rl_ns" ]; then
-      rl_ns=$(now_settings "$rl_a" "$rl_cp" "$rl_prof")
+      rl_ns=$(now_settings "$rl_a" "$rl_cp" "$rl_prof" "$rl_cx")
       rl_ns="${rl_ns%%"$TAB"*}|${rl_ns#*"$TAB"}"
       rl_nkeys="$rl_nkeys$rl_key$rl_us$rl_ns
 "
@@ -2812,8 +3237,8 @@ resume_list() { # [-d 경로] [--agent 에이전트] [--json]
     if [ "$rl_json" -eq 1 ]; then
       [ "$rl_n" -gt 1 ] && printf ','
       rl_left=null; [ "$rl_c" = warm ] && rl_left=$rl_cx
-      printf '\n  {"name":"%s","agent":"%s","state":"%s","exit":"%s","model":"%s","effort":"%s","defaults_model":"%s","defaults_effort":"%s","settings_match":"%s","finished":%s,"age_secs":%s,"cache":"%s","cache_left_secs":%s,"context_tokens":%s,"context_pct":%s,"dir":"%s","session":"%s","tag":"%s","task":"%s","in_use_by":"%s"}' \
-        "$rl_name" "$rl_a" "$rl_st" "$rl_code" "$(json_escape "$rl_mshow")" "$(json_escape "$rl_e")" \
+      printf '\n  {"name":"%s","agent":"%s","profile":"%s","state":"%s","exit":"%s","model":"%s","effort":"%s","defaults_model":"%s","defaults_effort":"%s","settings_match":"%s","finished":%s,"age_secs":%s,"cache":"%s","cache_left_secs":%s,"context_tokens":%s,"context_pct":%s,"dir":"%s","session":"%s","tag":"%s","task":"%s","in_use_by":"%s"}' \
+        "$rl_name" "$rl_a" "$rl_prof" "$rl_st" "$rl_code" "$(json_escape "$rl_mshow")" "$(json_escape "$rl_e")" \
         "$(json_escape "$rl_nm")" "$(json_escape "$rl_ne")" "$rl_cmp" "$rl_f" "$rl_age" "$rl_c" "$rl_left" \
         "${rl_ct:-null}" "${rl_cpct:-null}" "$(json_escape "$rl_wdir")" "$(json_escape "$rl_sid")" \
         "$(json_escape "$rl_tag")" "$(json_escape "$rl_task")" "$rl_use"
@@ -2821,6 +3246,7 @@ resume_list() { # [-d 경로] [--agent 에이전트] [--json]
     fi
     [ "$rl_n" -eq 1 ] && say "이어할 만한 워커 (세션마다 마지막 워커, 최근에 끝난 순. 언제 이을지: aw help resume)"
     rl_h="$rl_a · ${rl_mshow:-모델 CLI 기본} · ${rl_e:-수준 CLI 기본}"
+    case "$rl_prof" in '' | default) ;; *) rl_h="$rl_h · 계정 $rl_prof" ;; esac
     [ "$rl_st" = done ] || rl_h="$rl_h   ($rl_st, 코드 $rl_code)"
     say ""
     say "$rl_name   $rl_h"
@@ -3170,8 +3596,8 @@ claude_transcript() { # <워커디렉터리>
   if [ -n "$ct_c" ] && [ -f "$ct_c" ]; then printf '%s' "$ct_c"; return 0; fi
   ct_prof=$(meta_get "$1" profile)
   case "$ct_prof" in
-    '' | default) ct_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;;
-    *) ct_cfg="${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}/$ct_prof" ;;
+    '') ct_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;;
+    *) ct_cfg=$(prof_dir claude "$ct_prof") ;;
   esac
   # 끝난 워커는 출력에서 세션 ID 를 찾아 meta 에 적어 둡니다 (session_of).
   ct_sid=$(session_of "$1")
@@ -3181,7 +3607,7 @@ claude_transcript() { # <워커디렉터리>
       && ct_sid=$(json_str sessionId < "$ct_cfg/sessions/$ct_pid.json")
   fi
   [ -n "$ct_sid" ] || return 0
-  ct_f=$(find "$ct_cfg/projects" -mindepth 2 -maxdepth 2 -name "$ct_sid.jsonl" 2>/dev/null | head -1)
+  ct_f=$(find "$ct_cfg/projects/" -mindepth 2 -maxdepth 2 -name "$ct_sid.jsonl" 2>/dev/null | head -1)
   [ -n "$ct_f" ] || return 0
   printf 'transcript=%s\n' "$ct_f" >> "$1/meta"
   printf '%s' "$ct_f"
@@ -3195,7 +3621,8 @@ codex_rollout() { # <워커디렉터리>
   if [ -n "$cr_c" ] && [ -f "$cr_c" ]; then printf '%s' "$cr_c"; return 0; fi
   cr_tid=$(head -c 4096 "$1/out" 2>/dev/null | json_str thread_id)
   [ -n "$cr_tid" ] || return 0
-  cr_f=$(find "${CODEX_HOME:-$HOME/.codex}/sessions" -name "*$cr_tid.jsonl" 2>/dev/null | head -1)
+  # 계정 폴더의 sessions 는 기본 폴더로 링크돼 있을 수 있어 끝에 / 를 붙여 따라갑니다.
+  cr_f=$(find "$(codex_home_of "$1")/sessions/" -name "*$cr_tid.jsonl" 2>/dev/null | head -1)
   [ -n "$cr_f" ] || return 0
   printf 'rollout=%s\n' "$cr_f" >> "$1/meta"
   printf '%s' "$cr_f"
@@ -4480,6 +4907,338 @@ cmd_setup() {
   say "끝. 새로 넣은 스킬은 에이전트를 새로 시작하면 보입니다.   스킬 상태: aw skill"
 }
 
+# ---------------------------------------------------------------- aw profile (여러 계정)
+
+prof_usage() {
+  cat <<'U'
+사용법: aw profile [claude|codex] [-q] [--json]          계정 목록: 로그인한 계정, 최근 사용량
+        aw profile add <claude|codex> <이름> [--no-login]  계정 폴더를 만들고 (터미널이면) 로그인
+        aw profile login <claude|codex> <이름> [codex login 옵션]   그 계정으로 로그인 (예: --device-auth)
+        aw profile rm <claude|codex> <이름> [--yes]        계정 폴더를 지움 (그 계정의 로그인 정보도)
+        aw profile pool <claude|codex> [이름... | --clear]  --profile auto 가 고를 후보 (없으면 로그인된 계정 모두)
+        aw profile use <claude|codex> [이름|auto|default | --clear]   --profile 없이 띄울 때 쓸 계정
+
+워커는 aw run --profile <이름> 으로 그 계정에서 띄웁니다. --profile auto 는 후보 중 최근 사용량이 가장 적은
+계정을 고릅니다. 워커에 쓰지 않을 계정(오케스트레이션용 등)이 있으면 풀에서 빼고 use 를 auto 로 둡니다:
+  aw profile pool claude work-a work-b && aw profile use claude auto
+--profile 없을 때 고르는 순서: AW_CLAUDE_PROFILE·AW_CODEX_PROFILE → aw profile use → 셸의 CLAUDE_CONFIG_DIR·CODEX_HOME
+→ default. 자세히: aw help profile
+U
+}
+
+prof_agent_ok() { case "${1:-}" in claude | codex) return 0 ;; esac; return 1; }
+
+# 지금 aw run 이 --profile 없이 쓸 계정 (AW_*_PROFILE, 셸의 CLAUDE_CONFIG_DIR·CODEX_HOME, 아니면 default)
+prof_current() { # <에이전트>
+  case "$1" in
+    claude) pcu_e=${AW_CLAUDE_PROFILE:-}; pcu_v=${CLAUDE_CONFIG_DIR:-} ;;
+    codex)  pcu_e=${AW_CODEX_PROFILE:-};  pcu_v=${CODEX_HOME:-} ;;
+  esac
+  [ -n "$pcu_e" ] && { printf '%s' "$pcu_e"; return 0; }
+  pcu_u=$(prof_conf_get "$1" use)
+  [ -n "$pcu_u" ] && { printf '%s' "$pcu_u"; return 0; }
+  pcu_v=${pcu_v%/}; pcu_r=$(prof_root "$1")
+  case "$pcu_v" in
+    '' | "$(prof_base "$1")") printf default ;;
+    "$pcu_r"/*) printf '%s' "${pcu_v#"$pcu_r"/}" ;;
+    *) printf '(%s)' "$(tilde "$pcu_v")" ;;
+  esac
+}
+
+prof_current_src() { # <에이전트>  → prof_current 가 어디서 왔는지
+  case "$1" in claude) pcs_e=${AW_CLAUDE_PROFILE:-} ;; codex) pcs_e=${AW_CODEX_PROFILE:-} ;; esac
+  if [ -n "$pcs_e" ]; then printf '셸의 AW_%s_PROFILE' "$(printf '%s' "$1" | tr 'a-z' 'A-Z')"
+  elif [ -n "$(prof_conf_get "$1" use)" ]; then printf 'aw profile use'
+  else
+    case "$(prof_current "$1")" in
+      default) printf '기본' ;;
+      *) printf '셸의 %s' "$(prof_var "$1")" ;;
+    esac
+  fi
+}
+
+# 계정 이름이 있는지 (default 는 늘 있음, 게이트웨이 프로필은 계정이 아님)
+prof_exists() { # <에이전트> <이름>
+  [ "$2" = default ] && return 0
+  valid_name "$2" || return 1
+  prof_gateway "$1" "$2" && return 1
+  [ -d "$(prof_dir "$1" "$2")" ]
+}
+
+prof_pool() { # <claude|codex> [이름... | --clear]
+  pp_a=${1:-}
+  prof_agent_ok "$pp_a" || die "사용법: aw profile pool <claude|codex> [이름... | --clear]"
+  shift
+  if [ $# -eq 0 ]; then
+    pp_v=$(prof_conf_get "$pp_a" pool)
+    if [ -n "$pp_v" ]; then say "$pp_a auto 후보: $pp_v"; else say "$pp_a auto 후보: 로그인된 계정 모두 (풀 없음)"; fi
+    return 0
+  fi
+  if [ "$1" = --clear ]; then
+    prof_conf_set "$pp_a" pool || die "쓸 수 없습니다: $AW_PROFILES"
+    say "$pp_a auto 후보: 로그인된 계정 모두 (풀을 지움)"
+    return 0
+  fi
+  pp_l=''
+  for pp_n in "$@"; do
+    case "$pp_n" in auto) die "auto 는 풀에 넣을 수 없습니다 (계정 이름을 주세요)" ;; -*) die "aw profile pool 이 모르는 옵션입니다: $pp_n" ;; esac
+    prof_exists "$pp_a" "$pp_n" || die "그런 $pp_a 계정이 없습니다: $pp_n   (목록: aw profile $pp_a, 만들기: aw profile add $pp_a $pp_n)"
+    case " $pp_l " in *" $pp_n "*) continue ;; esac
+    pp_l="$pp_l${pp_l:+ }$pp_n"
+    pp_cr=0; prof_cred "$pp_a" "$pp_n" || pp_cr=$?
+    [ "$pp_cr" -eq 1 ] && warn "  ($pp_n 은 아직 로그인돼 있지 않아 auto 가 고르지 않습니다: aw profile login $pp_a $pp_n)"
+  done
+  prof_conf_set "$pp_a" pool "$pp_l" || die "쓸 수 없습니다: $AW_PROFILES"
+  say "$pp_a auto 후보: $pp_l   ($(tilde "$AW_PROFILES"))"
+  pp_u=$(prof_current "$pp_a")
+  [ "$pp_u" = auto ] || say "  --profile 없이 띄우는 워커는 지금 $pp_u 입니다. 늘 이 풀에서 고르게 하려면: aw profile use $pp_a auto"
+  return 0
+}
+
+prof_use() { # <claude|codex> [이름|auto|default | --clear]
+  pu_a=${1:-}
+  prof_agent_ok "$pu_a" || die "사용법: aw profile use <claude|codex> [이름|auto|default | --clear]"
+  shift
+  pu_env=''; case "$pu_a" in claude) pu_env=${AW_CLAUDE_PROFILE:-} ;; codex) pu_env=${AW_CODEX_PROFILE:-} ;; esac
+  pu_envn="AW_$(printf '%s' "$pu_a" | tr 'a-z' 'A-Z')_PROFILE"
+  if [ $# -eq 0 ]; then
+    say "--profile 없이 띄우는 $pu_a 워커: $(prof_current "$pu_a")   ($(prof_current_src "$pu_a"))"
+    return 0
+  fi
+  [ $# -eq 1 ] || die "사용법: aw profile use <claude|codex> [이름|auto|default | --clear]"
+  case "$1" in
+    --clear)
+      prof_conf_set "$pu_a" use || die "쓸 수 없습니다: $AW_PROFILES"
+      say "--profile 없이 띄우는 $pu_a 워커: $(prof_current "$pu_a")   ($(prof_current_src "$pu_a"))" ;;
+    auto)
+      prof_conf_set "$pu_a" use auto || die "쓸 수 없습니다: $AW_PROFILES"
+      pu_p=$(prof_conf_get "$pu_a" pool)
+      say "--profile 없이 띄우는 $pu_a 워커: auto — ${pu_p:+풀($pu_p) 중 }최근 사용량이 가장 적은 계정"
+      [ -n "$pu_p" ] || say "  풀이 없어 로그인된 계정 모두가 후보입니다. 워커에 쓰지 않을 계정이 있으면: aw profile pool $pu_a <쓸 계정...>" ;;
+    -*) die "aw profile use 가 모르는 옵션입니다: $1" ;;
+    *)
+      prof_exists "$pu_a" "$1" || die "그런 $pu_a 계정이 없습니다: $1   (목록: aw profile $pu_a)"
+      prof_conf_set "$pu_a" use "$1" || die "쓸 수 없습니다: $AW_PROFILES"
+      say "--profile 없이 띄우는 $pu_a 워커: $1" ;;
+  esac
+  [ -n "$pu_env" ] && warn "  (이 셸의 $pu_envn=$pu_env 가 이것보다 먼저입니다. 셸 설정에서 지우세요)"
+  return 0
+}
+
+prof_list() { # [claude|codex] [-q] [--json]
+  pl_ags='claude codex'; pl_q=0; pl_json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      claude | codex) pl_ags=$1 ;;
+      -q | --quick) pl_q=1 ;;
+      --json) pl_json=1 ;;
+      -h | --help) prof_usage; return 0 ;;
+      *) die "aw profile 이 모르는 것입니다: $1   (aw profile --help)" ;;
+    esac
+    shift
+  done
+  pl_now=$(now); pl_n=0
+  [ "$pl_json" -eq 1 ] && printf '['
+  for pl_a in $(printf '%s' "$pl_ags"); do
+    pl_cur=$(prof_current "$pl_a")
+    pl_scan=$(usage_scan "$pl_a")
+    pl_pool=$(prof_conf_get "$pl_a" pool)
+    if [ "$pl_json" -eq 0 ]; then
+      [ "$pl_a" = codex ] && say ""
+      say "$pl_a 계정   (aw run --profile <이름> -- $pl_a …)"
+      say "  --profile 없이 띄우면: $pl_cur   ($(prof_current_src "$pl_a"))"
+      if [ -n "$pl_pool" ]; then say "  auto 후보: $pl_pool   (aw profile pool $pl_a)"
+      else say "  auto 후보: 로그인된 계정 모두   (정하려면 aw profile pool $pl_a <이름...>)"; fi
+    fi
+    for pl_p in $(prof_names "$pl_a"); do
+      pl_d=$(prof_dir "$pl_a" "$pl_p")
+      pl_li=null; pl_em=''; pl_pl=''
+      if [ "$pl_q" -eq 1 ]; then
+        pl_cr=0; prof_cred "$pl_a" "$pl_p" || pl_cr=$?
+        case $pl_cr in 0) pl_li=true; pl_acct='자격 증명 있음' ;; 1) pl_li=false; pl_acct='로그인 안 됨' ;; *) pl_acct='모름 (키체인)' ;; esac
+      elif pl_ai=$(prof_account "$pl_a" "$pl_p"); then
+        pl_li=true; pl_em=${pl_ai%%"$TAB"*}; pl_pl=${pl_ai#*"$TAB"}
+        pl_acct="${pl_em:-?}${pl_pl:+ · $pl_pl}"
+      else
+        pl_li=false; pl_acct='로그인 안 됨'
+      fi
+      pl_row=$(printf '%s\n' "$pl_scan" | awk -F '\t' -v n="$pl_p" '$1 == n { print; exit }')
+      pl_us=''; pl_sc=null; pl_at=null
+      if [ -n "$pl_row" ]; then
+        pl_sc=$(printf '%s' "$pl_row" | cut -f2); pl_us=$(printf '%s' "$pl_row" | cut -f3); pl_at=$(printf '%s' "$pl_row" | cut -f4)
+      fi
+      pl_n=$((pl_n + 1))
+      if [ "$pl_json" -eq 1 ]; then
+        [ "$pl_n" -gt 1 ] && printf ','
+        pl_c=false; [ "$pl_p" = "$pl_cur" ] && pl_c=true
+        pl_ip=null
+        if [ -n "$pl_pool" ]; then case " $pl_pool " in *" $pl_p "*) pl_ip=true ;; *) pl_ip=false ;; esac; fi
+        printf '\n  {"agent":"%s","name":"%s","dir":"%s","current":%s,"in_pool":%s,"logged_in":%s,"email":"%s","plan":"%s","usage_score":%s,"usage":"%s","usage_at":%s}' \
+          "$pl_a" "$pl_p" "$(json_escape "$pl_d")" "$pl_c" "$pl_ip" "$pl_li" "$(json_escape "$pl_em")" "$(json_escape "$pl_pl")" \
+          "$pl_sc" "$(json_escape "$pl_us")" "$pl_at"
+        continue
+      fi
+      pl_mark=' '; [ "$pl_p" = "$pl_cur" ] && pl_mark='*'
+      pl_ut='사용량 모름'
+      [ -n "$pl_us" ] && pl_ut="$pl_us  ($(elapsed_str $((pl_now - pl_at))) 전 워커)"
+      say "  $pl_mark $(padw 18 "$pl_p") $(padw 40 "$pl_acct") $pl_ut"
+      [ "$pl_li" = false ] && say "      로그인: aw profile login $pl_a $pl_p"
+    done
+    if [ "$pl_json" -eq 0 ]; then
+      case "$pl_cur" in '('*) say "  * 지금 셸의 $(prof_var "$pl_a") $pl_cur 는 프로필 폴더가 아닙니다 (aw run 은 그대로 물려받음)" ;; esac
+      if [ "$pl_a" = claude ]; then
+        pl_gw=''
+        for pl_gd in "$(prof_root claude)"/*; do
+          [ -d "$pl_gd" ] && gw_claude_ours "$pl_gd" && pl_gw="$pl_gw${pl_gw:+, }${pl_gd##*/}"
+        done
+        [ -n "$pl_gw" ] && say "    게이트웨이 프로필 (계정 아님, aw gateway): $pl_gw"
+      fi
+    fi
+  done
+  if [ "$pl_json" -eq 1 ]; then printf '\n]\n'; return 0; fi
+  say ""
+  say "* 는 --profile 없이 띄울 때 쓰는 계정. 사용량은 그 계정으로 돈 가장 최근 aw 워커의 출력에서 읽은 것입니다."
+  say "만들기: aw profile add <claude|codex> <이름>    여유 있는 계정으로: aw run --profile auto -- …"
+  say "워커에 쓰지 않을 계정이 있으면: aw profile pool <에이전트> <쓸 계정...> && aw profile use <에이전트> auto"
+}
+
+# 계정 폴더를 만들고 기본 폴더의 공유할 것을 링크합니다. 이미 있으면 빠진 링크만 채웁니다.
+prof_init() { # <에이전트> <폴더>
+  pi_b=$(prof_base "$1")
+  mkdir -p "$2" || return 1
+  chmod 700 "$2" 2>/dev/null
+  pi_linked=''
+  for pi_i in $(prof_shared "$1"); do
+    # 대화 기록·세션은 아직 없어도 만들어 둡니다. 같이 써야 계정을 바꿔도 같은 대화를 잇습니다.
+    case "$1:$pi_i" in claude:projects | codex:sessions) mkdir -p "$pi_b/$pi_i" 2>/dev/null ;; esac
+    [ -e "$pi_b/$pi_i" ] || continue
+    if [ ! -e "$2/$pi_i" ] && [ ! -L "$2/$pi_i" ]; then ln -s "$pi_b/$pi_i" "$2/$pi_i" || continue; fi
+    pi_linked="$pi_linked${pi_linked:+ }$pi_i"
+  done
+  # codex 의 설정 묶음(<이름>.config.toml, aw gateway 가 만든 것 등)도 같이 씁니다 (codex exec --profile <이름>).
+  if [ "$1" = codex ]; then
+    for pi_f in "$pi_b"/*.config.toml; do
+      [ -f "$pi_f" ] || continue
+      pi_n=${pi_f##*/}
+      [ -e "$2/$pi_n" ] || [ -L "$2/$pi_n" ] || ln -s "$pi_f" "$2/$pi_n"
+      pi_linked="$pi_linked $pi_n"
+    done
+  fi
+  printf '%s' "$pi_linked"
+}
+
+prof_add() { # <claude|codex> <이름> [--no-login | --login]
+  pd_a=${1:-}; pd_n=${2:-}
+  prof_agent_ok "$pd_a" && [ -n "$pd_n" ] || die "사용법: aw profile add <claude|codex> <이름>"
+  shift 2
+  pd_login=auto
+  while [ $# -gt 0 ]; do
+    case "$1" in --no-login) pd_login=0 ;; --login) pd_login=1 ;; *) die "aw profile add 가 모르는 옵션입니다: $1" ;; esac
+    shift
+  done
+  valid_name "$pd_n" || die "프로필 이름은 영문/숫자/. _ - 만 쓸 수 있습니다: $pd_n"
+  case "$pd_n" in default | auto) die "$pd_n 은 정해진 이름이라 쓸 수 없습니다 (default 는 기본 계정 $(tilde "$(prof_base "$pd_a")"))" ;; esac
+  pd_d=$(prof_dir "$pd_a" "$pd_n")
+  prof_gateway "$pd_a" "$pd_n" && die "$pd_n 은 aw gateway 가 만든 게이트웨이 프로필입니다. 다른 이름을 쓰세요."
+  pd_new=1; [ -d "$pd_d" ] && pd_new=0
+  pd_l=$(prof_init "$pd_a" "$pd_d") || die "계정 폴더를 만들 수 없습니다: $pd_d"
+  if [ "$pd_new" -eq 1 ]; then say "만듦: $(tilde "$pd_d")"; else say "이미 있음: $(tilde "$pd_d")  (빠진 공유 링크만 채움)"; fi
+  [ -n "$pd_l" ] && say "  $(tilde "$(prof_base "$pd_a")") 와 같이 씀: $pd_l"
+  if prof_cred "$pd_a" "$pd_n"; then
+    say "  이미 로그인돼 있습니다. 다른 계정으로 바꾸려면: aw profile login $pd_a $pd_n"
+    return 0
+  fi
+  if [ "$pd_login" = 1 ] || { [ "$pd_login" = auto ] && [ -t 0 ] && [ -t 1 ]; }; then
+    prof_login "$pd_a" "$pd_n"
+    return $?
+  fi
+  say "  로그인: aw profile login $pd_a $pd_n   (터미널에서. 브라우저가 없는 곳이면 codex 는 --device-auth)"
+}
+
+prof_login() { # <claude|codex> <이름> [codex login 옵션...]
+  pg_a=${1:-}; pg_n=${2:-}
+  prof_agent_ok "$pg_a" && [ -n "$pg_n" ] || die "사용법: aw profile login <claude|codex> <이름>"
+  shift 2
+  pg_d=$(prof_dir "$pg_a" "$pg_n")
+  [ "$pg_n" = default ] || [ -d "$pg_d" ] || die "그런 계정이 없습니다: $pg_a $pg_n   (만들기: aw profile add $pg_a $pg_n)"
+  command -v "$pg_a" >/dev/null 2>&1 || die "$pg_a 가 PATH 에 없습니다."
+  if [ ! -t 0 ]; then
+    say "로그인은 사람이 터미널에서 해야 합니다 (브라우저 확인). 터미널에서 실행하세요:"
+    say "  aw profile login $pg_a $pg_n${1:+ $*}"
+    return 1
+  fi
+  say "$pg_a 계정 $pg_n 으로 로그인합니다 ($(tilde "$pg_d"))"
+  case "$pg_a" in
+    claude)
+      if [ "$pg_n" = default ]; then env -u CLAUDE_CONFIG_DIR claude auth login "$@"
+      else CLAUDE_CONFIG_DIR=$pg_d claude auth login "$@"; fi ;;
+    codex)
+      [ -n "${SSH_CONNECTION:-}" ] && [ $# -eq 0 ] && say "  (SSH 로 들어왔다면 브라우저 콜백이 안 될 수 있습니다: aw profile login codex $pg_n --device-auth)"
+      CODEX_HOME=$pg_d codex login "$@" ;;
+  esac
+  pg_rc=$?
+  if pg_ai=$(prof_account "$pg_a" "$pg_n"); then
+    say "로그인됨: $pg_a $pg_n — ${pg_ai%%"$TAB"*} ${pg_ai#*"$TAB"}"
+  else
+    warn "로그인을 확인하지 못했습니다: $pg_a $pg_n"
+  fi
+  return "$pg_rc"
+}
+
+prof_rm() { # <claude|codex> <이름> [--yes]
+  pr_a=${1:-}; pr_n=${2:-}
+  prof_agent_ok "$pr_a" && [ -n "$pr_n" ] || die "사용법: aw profile rm <claude|codex> <이름> [--yes]"
+  shift 2
+  pr_yes=0
+  while [ $# -gt 0 ]; do case "$1" in -y | --yes) pr_yes=1 ;; *) die "aw profile rm 이 모르는 옵션입니다: $1" ;; esac; shift; done
+  [ "$pr_n" = default ] && die "기본 계정($(tilde "$(prof_base "$pr_a")"))은 지우지 않습니다."
+  valid_name "$pr_n" || die "프로필 이름이 잘못됐습니다: $pr_n"
+  prof_gateway "$pr_a" "$pr_n" && die "$pr_n 은 게이트웨이 프로필입니다. 지우려면: aw gateway rm $pr_n"
+  pr_d=$(prof_dir "$pr_a" "$pr_n")
+  [ -d "$pr_d" ] || die "그런 계정이 없습니다: $pr_a $pr_n"
+  for pr_w in $(list_dirs); do
+    [ "$(state_of "$pr_w")" = running ] || continue
+    [ "$(agent_of "$pr_w")" = "$pr_a" ] && [ "$(worker_profile "$pr_w" "$pr_a")" = "$pr_n" ] \
+      && die "$(basename "$pr_w") 가 이 계정으로 돌고 있습니다. 끝난 뒤 지우세요."
+  done
+  if [ "$pr_yes" -ne 1 ]; then
+    [ -t 0 ] || die "확인 없이 지우려면 --yes 를 주세요: aw profile rm $pr_a $pr_n --yes"
+    ask "$(tilde "$pr_d") 를 지울까요? 이 계정의 로그인 정보도 지워집니다 (같이 쓰던 설정·대화 기록 원본은 그대로)" n \
+      || { say "그만둠"; return 0; }
+  fi
+  # rm -rf 는 링크를 따라가지 않아 같이 쓰던 원본(~/.claude, ~/.codex 의 것)은 남습니다.
+  rm -rf "$pr_d" || die "지우지 못했습니다: $pr_d"
+  say "지움: $(tilde "$pr_d")"
+  pr_pool=$(prof_conf_get "$pr_a" pool)
+  case " $pr_pool " in
+    *" $pr_n "*)
+      pr_np=$(printf '%s' "$pr_pool" | tr ' ' '\n' | grep -vx "$pr_n" | tr '\n' ' ' | sed 's/ $//')
+      if [ -n "$pr_np" ]; then prof_conf_set "$pr_a" pool "$pr_np"; else prof_conf_set "$pr_a" pool; fi
+      say "  auto 후보에서도 뺌: ${pr_np:-(풀 없음, 로그인된 계정 모두)}" ;;
+  esac
+  if [ "$(prof_conf_get "$pr_a" use)" = "$pr_n" ]; then
+    prof_conf_set "$pr_a" use
+    say "  --profile 없이 쓰던 계정이라 그 설정도 지움 (이제 $(prof_current "$pr_a"))"
+  fi
+  case "$pr_a" in
+    claude) [ "${AW_CLAUDE_PROFILE:-}" = "$pr_n" ] && warn "  셸 설정의 AW_CLAUDE_PROFILE=$pr_n 도 지우세요." ;;
+    codex)  [ "${AW_CODEX_PROFILE:-}" = "$pr_n" ] && warn "  셸 설정의 AW_CODEX_PROFILE=$pr_n 도 지우세요." ;;
+  esac
+  return 0
+}
+
+cmd_profile() {
+  case "${1:-}" in
+    add)   shift; prof_add "$@" ;;
+    login) shift; prof_login "$@" ;;
+    rm | remove) shift; prof_rm "$@" ;;
+    pool)  shift; prof_pool "$@" ;;
+    use)   shift; prof_use "$@" ;;
+    -h | --help | help) prof_usage ;;
+    *) prof_list "$@" ;;
+  esac
+}
+
 # ---------------------------------------------------------------- 게이트웨이 (OpenAI·Anthropic 호환 API)
 
 # 게이트웨이 하나를 codex 와 claude 의 프로필로 만듭니다. aw 는 자기가 만든 파일만 다룹니다.
@@ -4491,6 +5250,17 @@ cmd_setup() {
 GW_MARK='# aw gateway:'
 
 gw_codex_file() { printf '%s/%s.config.toml' "${CODEX_HOME:-$HOME/.codex}" "$1"; }
+# codex 계정 폴더(aw profile)마다 그 설정 파일을 링크합니다 (rm 이면 링크를 걷음). 계정을 바꿔도 같은 게이트웨이를 씀.
+gw_link_profiles() { # <설정 파일> [rm]
+  for gl_d in "$(prof_root codex)"/*; do
+    [ -d "$gl_d" ] || continue
+    gl_f="$gl_d/${1##*/}"
+    if [ "${2:-}" = rm ]; then [ -L "$gl_f" ] && rm -f "$gl_f"
+    elif [ ! -e "$gl_f" ] && [ ! -L "$gl_f" ] && [ "$gl_d" != "${1%/*}" ]; then ln -s "$1" "$gl_f" && say "          계정 ${gl_d##*/} 에도 링크"
+    fi
+  done
+  return 0
+}
 gw_claude_dir() { printf '%s/%s' "${CLAUDE_PROFILE_ROOT:-$HOME/.claude-profiles}" "$1"; }
 gw_codex_ours() { [ -f "$1" ] && head -1 "$1" 2>/dev/null | grep -q "^$GW_MARK"; }
 gw_claude_ours() { [ -f "$1/.aw-gateway" ]; }
@@ -4706,6 +5476,7 @@ gw_add() { # <이름> [--url 주소] [--key-env 변수] [--model 모델]
     gw_codex_text "$ga_n" "$ga_url" "$ga_key" "$ga_model" > "$ga_cf.tmp" && mv "$ga_cf.tmp" "$ga_cf" \
       || die "쓸 수 없습니다: $ga_cf"
     say "  codex : $ga_v $(tilde "$ga_cf")"
+    gw_link_profiles "$ga_cf"
     say "          aw run -n 이름 -- codex exec --json --profile $ga_n \"작업\""
   fi
   ga_cd=$(gw_claude_dir "$ga_n")
@@ -4823,7 +5594,7 @@ gw_rm() { # <이름>
   [ $# -gt 0 ] || die "지울 게이트웨이 이름이 필요합니다.   예) aw gateway rm opengateway"
   gr_any=0
   gr_cf=$(gw_codex_file "$1"); gr_cd=$(gw_claude_dir "$1")
-  if gw_codex_ours "$gr_cf"; then rm -f "$gr_cf" && say "지움: $(tilde "$gr_cf")"; gr_any=1
+  if gw_codex_ours "$gr_cf"; then rm -f "$gr_cf" && say "지움: $(tilde "$gr_cf")"; gr_any=1; gw_link_profiles "$gr_cf" rm
   elif [ -e "$gr_cf" ]; then say "남김: $(tilde "$gr_cf")  (aw 가 만든 파일이 아닙니다)"; fi
   # Claude Code 가 그 프로필 폴더에 남긴 것(.claude.json, 세션 등)도 함께 지웁니다.
   if gw_claude_ours "$gr_cd"; then rm -rf "$gr_cd" && say "지움: $(tilde "$gr_cd")"; gr_any=1
@@ -4902,7 +5673,7 @@ un_skill_roots() {
 
 # 지울 설정 파일 (환경변수로 옮겨 둔 곳도 따라감)
 un_configs() {
-  for uc_f in "$AW_DEFAULTS" "$AW_BRIEF" "$AW_CONFIG" "$AW_PICK" "$AW_PICK.off" "$AW_PICK_KEYFILE" "$AW_GATEWAY_KEYS"/*; do
+  for uc_f in "$AW_DEFAULTS" "$AW_BRIEF" "$AW_CONFIG" "$AW_PICK" "$AW_PICK.off" "$AW_PICK_KEYFILE" "$AW_PROFILES" "$AW_GATEWAY_KEYS"/*; do
     [ -f "$uc_f" ] && printf '%s\n' "$uc_f"
   done
   return 0
@@ -4990,6 +5761,19 @@ $(un_skill_roots)
 EOF_ROOTS
   [ "$un_skills" -eq 1 ] || [ "$un_kept" -eq 1 ] || say "  없음"
 
+  # 계정 폴더(aw profile, claude-profiles)는 로그인 정보라 지우지 않고 알리기만 합니다.
+  un_acc=''
+  for un_ag in claude codex; do
+    for un_p in $(prof_names "$un_ag"); do
+      [ "$un_p" = default ] && continue
+      un_acc="$un_acc${un_acc:+, }$un_ag $un_p"
+    done
+  done
+  if [ -n "$un_acc" ]; then
+    say ""
+    say "== 계정 폴더 (남김: 로그인 정보라 지우지 않습니다. 지우려면 aw profile rm <claude|codex> <이름>)"
+    say "  $un_acc"
+  fi
   say ""
   say "== 실행 파일"
   un_exe=$(un_bins "$un_prefix")
@@ -5191,8 +5975,15 @@ aw rm review
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
   `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
-- **계정(프로필)**: 사용자가 claude 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- claude …` 입니다
-  (`~/.claude-profiles/<이름>`, 기본 계정은 `default`). 사용자가 셸에 `AW_CLAUDE_PROFILE` 을 두었으면 그 프로필이 기본입니다.
+- **계정(프로필)**: 사용자가 claude·codex 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- …` 입니다
+  (계정 목록과 최근 사용량: `aw profile`, 기본 계정은 `default`). 셸에 `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` 이 있으면
+  그 계정이 기본입니다. 여유 있는 계정으로 돌려 달라고 하면 `--profile auto`. 계정 만들기·로그인은 브라우저 확인이
+  필요해 사용자가 터미널에서 합니다 (`aw profile add <claude|codex> <이름>`). 대신 하지 않습니다.
+  사용자가 워커에 쓰지 않을 계정(오케스트레이션용 등)을 말하면 `aw profile pool`·`aw profile use <에이전트> auto` 로
+  정해 두자고 권합니다. 정해져 있으면 `--profile` 을 따로 주지 않습니다 (aw 가 풀에서 고름).
+- **한도에 걸렸다고 `aw wait`·`aw status` 가 알리면** 사용자에게 전하고, 다른 계정으로 이을지 묻습니다(사용자가 미리
+  허락했으면 바로). 잇는 법: `aw resume <이름> --profile auto -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
+  캐시는 계정마다 따로라 앞 대화를 다시 읽습니다.
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
   붙이지 않습니다(프로필이 정함). 키는 사용자가 `aw gateway key <이름>` 으로 넣습니다. 키를 `-e` 로 넘기지
@@ -5326,6 +6117,7 @@ case "$sub" in
   skill)   cmd_skill "$@" ;;
   setup)   cmd_setup "$@" ;;
   gateway) cmd_gateway "$@" ;;
+  profile) cmd_profile "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   version|--version|-v) say "aw $AW_VERSION" ;;
   help|--help|-h) help_topic "${1:-}" ;;
