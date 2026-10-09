@@ -113,7 +113,7 @@ cd agent-worker
 | `aw brief [--init]` | [워커 지시문](#워커-지시문-brief) 확인 / 권장값으로 켜기 |
 | `aw pick [on\|off\|key]` / `aw pick -- '작업'` | (실험용) Jev 가 [작업에 맞는 에이전트·모델을 골라](#에이전트-고르기-aw-pick-실험용) 워커를 띄움 |
 | `aw skill [install\|remove] [에이전트...]` | 에이전트용 [스킬](#에이전트가-aw-를-쓰게-하기-스킬) 상태 / 넣기 / 빼기 |
-| `aw profile [add\|login\|rm\|pool\|use] [claude\|codex] [이름]` | [여러 계정](#여러-계정-aw-profile): 목록(로그인한 계정, 최근 사용량), 만들기, 로그인, 지우기, auto 후보(풀), `--profile` 없이 쓸 계정 |
+| `aw profile [add\|login\|rm\|pool\|use\|set] [claude\|codex] [이름]` | [여러 계정](#여러-계정-aw-profile): 목록(로그인한 계정, 최근 사용량), 만들기, 로그인, 지우기, auto 후보(풀), `--profile` 없이 쓸 계정, 계정별 모델·수준 |
 | `aw gateway [add\|key\|models\|rm] [이름]` | OpenGateway 등 [게이트웨이의 모델](#게이트웨이-aw-gateway)을 codex·claude 프로필로. 키 넣기/빼기 |
 | `aw setup` | 설치 점검 (터미널에서는 빠진 것마다 물어봄) |
 | `aw uninstall [--yes] [--dry-run]` | 워커 기록·설정·스킬·실행 파일을 모두 [제거](#제거) (터미널이면 한 번 물음) |
@@ -1020,6 +1020,24 @@ codex 계정   (aw run --profile <이름> -- codex …   늘 쓸 계정: AW_CODE
 - **고르는 순서**: `--profile` → `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` → `aw profile use` 로 정해 둔 계정 → 셸의
   `CLAUDE_CONFIG_DIR`·`CODEX_HOME` 이 계정 폴더면 그 계정(claude-use 로 바꾼 셸 등) → `default`. 없는 계정이면 띄우지 않고
   만드는 법을 알려 줍니다.
+
+### 계정마다 기본 모델·수준
+
+```sh
+aw profile set claude work-a --model claude-sonnet-5 --effort high
+aw profile set codex work --model gpt-6-astra --effort xhigh   # codex 의 수준은 -c model_reasoning_effort=
+aw profile set claude work-a                                   # 보기
+aw profile set claude work-a --clear                           # 지우기 (일반 기본값을 씀)
+```
+
+[기본 옵션 파일](#기본-옵션-권한-우회-모델)에 `명령@계정` 줄(`claude@work-a --model claude-sonnet-5`)로 들어갑니다. 그 계정으로
+띄우는 워커(`--profile work-a`, auto 로 골라도)에는 이 줄이 먼저 붙고, 같은 옵션을 가진 일반 줄(`claude --model …`)은 빠집니다.
+모델만 정하면 수준은 일반 기본값을 씁니다. `--model` 을 직접 주면 그게 먼저입니다. `aw defaults set claude@work-a …` 로
+직접 고쳐도 같습니다. 이어하기는 계정을 바꿔 이어도 원래 워커의 모델·수준을 그대로 씁니다. `aw profile` 목록에 계정마다
+"기본 모델·수준" 으로 보입니다.
+
+codex 의 `-c 키=값` 줄은 이제 같은 키(`-c model_reasoning_effort=…`)를 직접 준 때만 빠집니다. 전에는 `-c` 가 하나라도
+있으면 빠졌습니다.
 
 ### auto 후보(풀)와 워커에 쓰지 않을 계정
 

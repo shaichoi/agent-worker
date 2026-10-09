@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.24.0"
+  version: "0.25.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -144,6 +144,7 @@ aw rm review
   필요해 사용자가 터미널에서 합니다 (`aw profile add <claude|codex> <이름>`). 대신 하지 않습니다.
   사용자가 워커에 쓰지 않을 계정(오케스트레이션용 등)을 말하면 `aw profile pool`·`aw profile use <에이전트> auto` 로
   정해 두자고 권합니다. 정해져 있으면 `--profile` 을 따로 주지 않습니다 (aw 가 풀에서 고름).
+  계정마다 모델·수준을 정해 두었으면(`aw profile set`, 목록의 "기본 모델·수준") `--model` 도 주지 않습니다.
 - **한도에 걸렸다고 `aw wait`·`aw status` 가 알리면** 사용자에게 전하고, 다른 계정으로 이을지 묻습니다(사용자가 미리
   허락했으면 바로). 잇는 법: `aw resume <이름> --profile auto -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
   캐시는 계정마다 따로라 앞 대화를 다시 읽습니다.

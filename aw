@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.24.0
+AW_VERSION=0.25.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -53,7 +53,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw pick [on|off|key] / -- '작업'     (실험용) Jev 가 작업에 맞는 에이전트·모델을 골라 워커를 띄움
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
   aw gateway [add|key|models|rm] [이름] OpenGateway 등 게이트웨이 모델을 codex·claude 프로필로
-  aw profile [add|login|rm|pool|use] [claude|codex] [이름]   여러 계정: 목록·사용량, 만들기, auto 후보
+  aw profile [add|login|rm|pool|use|set] [claude|codex] [이름]   여러 계정: 목록·사용량, auto 후보, 계정별 모델
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
   aw uninstall [--yes] [--dry-run]     기록·설정·스킬·실행 파일을 모두 지움 (터미널이면 한 번 물음)
   aw version | aw help [주제]
@@ -533,6 +533,14 @@ T
     2. aw profile use 로 정해 둔 계정 ($AW_PROFILES, 이 컴퓨터에 저장)
     3. 셸의 CLAUDE_CONFIG_DIR·CODEX_HOME 이 계정 폴더면 (claude-use 등) 그 계정
     4. default
+
+계정마다 기본 모델·수준
+  aw profile set claude work-a --model claude-sonnet-5 --effort high
+  aw profile set codex work --model gpt-6-astra --effort xhigh     (codex 는 -c model_reasoning_effort=)
+  aw profile set claude work-a                보기       aw profile set claude work-a --clear   지우기
+  기본 옵션 파일(aw defaults)에 '명령@계정' 줄로 들어가, 그 계정으로 띄우는 워커(--profile, auto 로 골라도)에
+  일반 기본값 대신 붙습니다. 모델만 정하면 수준은 일반 기본값을 씁니다. --model 을 직접 주면 그게 먼저입니다.
+  이어하기는 원래 워커의 모델·수준을 그대로 씁니다 (계정을 바꿔 이어도).
 
 auto 후보(풀)와 워커에 쓰지 않을 계정
   aw profile pool claude work-a work-b     --profile auto 가 이 계정들 중에서만 고름 (같으면 적은 순서대로)
@@ -1103,7 +1111,7 @@ now_settings() { # <에이전트> <codex 프로필> <claude 프로필> [codex �
   (
     ns_ag=$1; ns_cp=$2
     [ -n "${4:-}" ] && { CODEX_HOME=$4; export CODEX_HOME; }
-    no_brief=1; no_defaults=0; added=''; mdropped=''; pdropped=''; profile=$3; stdin_file=/dev/null
+    no_brief=1; no_defaults=0; added=''; mdropped=''; pdropped=''; profile=$3; pf_key=$3; stdin_file=/dev/null
     wd=''; dir=$PWD; aw_pin=0; mk_norefresh=1
     if [ "$ns_ag" = codex ]; then
       if [ -n "$ns_cp" ]; then set -- codex exec --profile "$ns_cp"; else set -- codex exec; fi
@@ -1582,6 +1590,7 @@ defaults_header() {
 # 직접 넘기면 그 줄 전체를 건너뜁니다. 그러니 한 줄의 옵션은 전부 같이
 # 붙거나 전부 같이 빠집니다. 따로 붙고 빠져야 하는 옵션은 줄을 나누세요.
 # 고치기: aw defaults set <명령> <옵션...>   빼기: aw defaults unset <명령> [옵션]
+# 계정마다 다르게: '명령@계정 옵션...' 줄은 그 계정(aw run --profile)의 워커에 먼저 붙습니다 (aw profile set).
 DEF
 }
 
@@ -1617,16 +1626,23 @@ kiro-cli --agent-engine v3
 DEF
 }
 
-defaults_for() { # <명령 이름>  → 붙일 옵션 묶음, 한 줄에 하나
+# 계정(프로필)마다 줄을 따로 둘 수 있습니다: '명령@계정 옵션...' (예: claude@work --model claude-sonnet-5).
+# 계정을 주면 그 계정의 줄을 먼저 냅니다. 그 줄이 붙인 옵션과 겹치는 일반 줄은 run_argv 가 건너뛰므로
+# (group_given) 계정의 모델·수준이 일반 기본값보다 먼저입니다. aw profile set 이 이 줄을 씁니다.
+defaults_for() { # <명령 이름> [계정]  → 붙일 옵션 묶음, 한 줄에 하나
   [ -f "$AW_DEFAULTS" ] || return 0
   sed 's/#.*//' "$AW_DEFAULTS" \
-    | awk -v c="${1##*/}" '$1 == c { $1 = ""; sub(/^ +/, ""); if ($0 != "") print }'
+    | awk -v c="${1##*/}" -v a="${2:-}" '
+        a != "" && $1 == c "@" a { $1 = ""; sub(/^ +/, ""); if ($0 != "") print; next }
+        $1 == c { $1 = ""; sub(/^ +/, ""); if ($0 != "") g[++n] = $0 }
+        END { for (i = 1; i <= n; i++) print g[i] }'
 }
 
 # 이름은 달라도 같은 설정을 고르는 옵션들입니다. 기본 옵션을 붙일지 볼 때 같은 것으로 칩니다.
 # kiro-cli 는 둘을 같이 주면 오류로 끝납니다 (실측: --v3 와 --agent-engine, -a 와 --trust-all-tools).
-flag_family() { # <명령 이름> <옵션>
-  case "${1##*/}:$2" in
+flag_family() { # <명령 이름(명령@계정 도)> <옵션>
+  ff_c=${1##*/}; ff_c=${ff_c%%@*}
+  case "$ff_c:$2" in
     kiro-cli:--agent-engine | kiro-cli:--v[123]) printf '%s\n' --agent-engine --v1 --v2 --v3 ;;
     kiro-cli:--trust-all-tools | kiro-cli:-a)    printf '%s\n' --trust-all-tools -a ;;
     codex:--model | codex:-m)                     printf '%s\n' --model -m ;;
@@ -1638,15 +1654,36 @@ flag_family() { # <명령 이름> <옵션>
 # 인자는 하나씩 봅니다. 프롬프트에 '--model' 같은 글이 들어 있어도 옵션으로 치지 않습니다.
 group_given() { # <명령 이름> <묶음> <인자...>
   gg_c=$1; gg_rest=$2; shift 2
+  gg_ag=${gg_c##*/}; gg_ag=${gg_ag%%@*}
   while [ -n "$gg_rest" ]; do
     gg_t=${gg_rest%% *}
     case "$gg_rest" in *' '*) gg_rest=${gg_rest#* } ;; *) gg_rest='' ;; esac
     case "$gg_t" in -?*) ;; *) continue ;; esac
+    # codex 의 -c 는 여러 설정에 두루 써서, 같은 키(-c 키=…)가 있을 때만 준 것으로 봅니다.
+    if [ "$gg_ag" = codex ] && { [ "$gg_t" = -c ] || [ "$gg_t" = --config ]; }; then
+      gg_k=${gg_rest%% *}; gg_k=${gg_k%%=*}
+      [ -n "$gg_k" ] && cfg_given "$gg_k" "$@" && return 0
+      continue
+    fi
     for gg_f in $(flag_family "$gg_c" "${gg_t%%=*}"); do
       for gg_a in "$@"; do
         case "$gg_a" in "$gg_f" | "$gg_f"=*) return 0 ;; esac
       done
     done
+  done
+  return 1
+}
+
+# codex 인자에 -c <키>=… (--config <키>=…, --config=<키>=…) 가 있는지
+cfg_given() { # <키> <인자...>
+  cg_k=$1; shift; cg_nx=0
+  for cg_a in "$@"; do
+    if [ "$cg_nx" -eq 1 ]; then
+      cg_nx=0
+      case "$cg_a" in "$cg_k"=*) return 0 ;; esac
+      continue
+    fi
+    case "$cg_a" in -c | --config) cg_nx=1 ;; --config="$cg_k"=*) return 0 ;; esac
   done
   return 1
 }
@@ -1691,6 +1728,7 @@ defaults_usage() {
                                      한 줄이 통째로 바뀌니 수준만 바꿀 때도 모델을 같이 적음
                                          aw defaults set agy --model gemini-3.8-flash --effort medium
   aw defaults unset <명령> [옵션...]  그 옵션이 든 줄을 뺌 (옵션을 빼면 그 명령의 줄 전부)
+  명령 자리에 claude@work 처럼 계정을 붙이면 그 계정의 워커에만 먼저 붙는 줄입니다 (aw profile set 이 씀)
   aw defaults --init [--force]       권장값으로 켜기 (있으면 그대로 두고, --force 면 되돌림)
 U
 }
@@ -2100,7 +2138,7 @@ run_argv() { # <인자...>
   # 에이전트별 기본 옵션을 뒤에 붙입니다.
   # 앞이 아니라 뒤에 붙이는 이유: agy 의 -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
   if [ "$no_defaults" -ne 1 ]; then
-    dgroups=$(defaults_for "$1")
+    dgroups=$(defaults_for "$1" "${pf_key:-}")
     rw_pm=$(profile_model "$@")
     rw_nadd=0
     while IFS= read -r dg; do
@@ -2362,6 +2400,14 @@ cmd_run() {
            || die "그런 $pf_ag 계정(프로필)이 없습니다: $(tilde "$pf_root/$profile")
    만들기: aw profile add $pf_ag $profile   목록: aw profile $pf_ag"
          add_env "$pf_var=$pf_root/$profile" ;;
+    esac
+  fi
+  # 기본 옵션(aw defaults)의 계정별 줄(명령@계정)을 고를 계정. 프로필 없이 기본 계정이면 default 입니다.
+  pf_key=$profile
+  if [ -z "$pf_key" ]; then
+    case "$pf_ag" in
+      claude) [ -n "${CLAUDE_CONFIG_DIR:-}" ] || pf_key=default ;;
+      codex) case "${CODEX_HOME:-}" in '' | "$(prof_base codex)" | "$(prof_base codex)/") pf_key=default ;; esac ;;
     esac
   fi
   # codex 가 쓸 CODEX_HOME. 기본 옵션의 모델 확인, 게이트웨이 설정·키, 세션 파일 찾기가 모두 이 폴더를 봅니다.
@@ -4917,6 +4963,7 @@ prof_usage() {
         aw profile rm <claude|codex> <이름> [--yes]        계정 폴더를 지움 (그 계정의 로그인 정보도)
         aw profile pool <claude|codex> [이름... | --clear]  --profile auto 가 고를 후보 (없으면 로그인된 계정 모두)
         aw profile use <claude|codex> [이름|auto|default | --clear]   --profile 없이 띄울 때 쓸 계정
+        aw profile set <claude|codex> <이름> [--model 모델] [--effort 수준] | --clear   그 계정 워커의 기본 모델·수준
 
 워커는 aw run --profile <이름> 으로 그 계정에서 띄웁니다. --profile auto 는 후보 중 최근 사용량이 가장 적은
 계정을 고릅니다. 워커에 쓰지 않을 계정(오케스트레이션용 등)이 있으면 풀에서 빼고 use 를 auto 로 둡니다:
@@ -5025,6 +5072,65 @@ prof_use() { # <claude|codex> [이름|auto|default | --clear]
   return 0
 }
 
+# 계정마다 기본 모델·수준. 기본 옵션 파일(aw defaults)의 '명령@계정' 줄로 둡니다 (defaults_for).
+# 그 계정으로 띄우는 워커에 일반 기본값 대신 붙고, --model 을 직접 주면 그게 먼저입니다.
+# 이어하기는 원래 워커의 모델·수준을 그대로 씁니다 (aw help resume).
+prof_settings() { # <에이전트> <이름>  → "모델<TAB>수준" (계정 줄에 있는 것만)
+  ps_a=$1; ps_rest=$(defaults_for "$1@$2" | tr '\n' ' ')
+  # settings_in 은 인자를 하나씩 받으므로 공백으로 직접 나눕니다 (파일의 값에는 공백이 없음, eval 은 안 씀).
+  set --
+  while [ -n "$ps_rest" ]; do
+    ps_t=${ps_rest%% *}
+    case "$ps_rest" in *' '*) ps_rest=${ps_rest#* } ;; *) ps_rest='' ;; esac
+    [ -n "$ps_t" ] && set -- "$@" "$ps_t"
+  done
+  settings_in "$ps_a" "$@"
+}
+
+prof_set() { # <claude|codex> <이름> [--model 모델] [--effort 수준] | --clear
+  pz_a=${1:-}; pz_n=${2:-}
+  prof_agent_ok "$pz_a" && [ -n "$pz_n" ] || die "사용법: aw profile set <claude|codex> <이름> [--model 모델] [--effort 수준] | --clear"
+  shift 2
+  prof_exists "$pz_a" "$pz_n" || die "그런 $pz_a 계정이 없습니다: $pz_n   (목록: aw profile $pz_a)"
+  pz_m=''; pz_e=''; pz_clear=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model)  pz_m="${2:?--model 에 모델이 필요합니다}"; shift 2 ;;
+      --effort) pz_e="${2:?--effort 에 수준이 필요합니다}"; shift 2 ;;
+      --clear)  pz_clear=1; shift ;;
+      *) die "aw profile set 이 모르는 옵션입니다: $1" ;;
+    esac
+  done
+  if [ "$pz_clear" -eq 1 ]; then
+    defaults_unset "$pz_a@$pz_n" >/dev/null
+    say "$pz_a 계정 $pz_n: 계정별 모델·수준을 지움 (일반 기본값을 씀: aw defaults get $pz_a)"
+    return 0
+  fi
+  if [ -z "$pz_m$pz_e" ]; then
+    pz_s=$(prof_settings "$pz_a" "$pz_n")
+    pz_sm=${pz_s%%"$TAB"*}; pz_se=${pz_s#*"$TAB"}
+    if [ -n "$pz_sm$pz_se" ]; then say "$pz_a 계정 $pz_n 의 기본: $(settings_str "$pz_sm" "$pz_se")   (aw profile set)"
+    else say "$pz_a 계정 $pz_n: 계정별 모델·수준이 없습니다 (일반 기본값: aw defaults get $pz_a)"; fi
+    return 0
+  fi
+  case "$pz_m$pz_e" in *[[:space:]#]*) die "공백·# 이 든 값은 쓸 수 없습니다" ;; esac
+  [ -n "$pz_m" ] && defaults_set "$pz_a@$pz_n" --model "$pz_m" >/dev/null
+  if [ -n "$pz_e" ]; then
+    case "$pz_a" in
+      claude) defaults_set "$pz_a@$pz_n" --effort "$pz_e" >/dev/null ;;
+      codex)  defaults_set "$pz_a@$pz_n" -c "model_reasoning_effort=$pz_e" >/dev/null ;;
+    esac
+  fi
+  pz_s=$(prof_settings "$pz_a" "$pz_n")
+  say "$pz_a 계정 $pz_n 의 기본: $(settings_str "${pz_s%%"$TAB"*}" "${pz_s#*"$TAB"}")   ($(tilde "$AW_DEFAULTS"))"
+  say "  이 계정으로 띄우는 워커(--profile $pz_n, auto 로 골라도)에 일반 기본값 대신 붙습니다. --model 을 직접 주면 그게 먼저."
+  if [ -n "$pz_m" ] && [ "$pz_a" = codex ]; then
+    pz_k=0; model_known codex "$pz_m" >/dev/null 2>&1 || pz_k=$?
+    [ "$pz_k" -eq 1 ] && warn "  (주의: $pz_m 은 codex 의 모델 목록에 없어 띄울 때 빠집니다: aw models codex)"
+  fi
+  return 0
+}
+
 prof_list() { # [claude|codex] [-q] [--json]
   pl_ags='claude codex'; pl_q=0; pl_json=0
   while [ $# -gt 0 ]; do
@@ -5073,9 +5179,10 @@ prof_list() { # [claude|codex] [-q] [--json]
         pl_c=false; [ "$pl_p" = "$pl_cur" ] && pl_c=true
         pl_ip=null
         if [ -n "$pl_pool" ]; then case " $pl_pool " in *" $pl_p "*) pl_ip=true ;; *) pl_ip=false ;; esac; fi
-        printf '\n  {"agent":"%s","name":"%s","dir":"%s","current":%s,"in_pool":%s,"logged_in":%s,"email":"%s","plan":"%s","usage_score":%s,"usage":"%s","usage_at":%s}' \
+        pl_ps=$(prof_settings "$pl_a" "$pl_p")
+        printf '\n  {"agent":"%s","name":"%s","dir":"%s","current":%s,"in_pool":%s,"logged_in":%s,"email":"%s","plan":"%s","model":"%s","effort":"%s","usage_score":%s,"usage":"%s","usage_at":%s}' \
           "$pl_a" "$pl_p" "$(json_escape "$pl_d")" "$pl_c" "$pl_ip" "$pl_li" "$(json_escape "$pl_em")" "$(json_escape "$pl_pl")" \
-          "$pl_sc" "$(json_escape "$pl_us")" "$pl_at"
+          "$(json_escape "${pl_ps%%"$TAB"*}")" "$(json_escape "${pl_ps#*"$TAB"}")" "$pl_sc" "$(json_escape "$pl_us")" "$pl_at"
         continue
       fi
       pl_mark=' '; [ "$pl_p" = "$pl_cur" ] && pl_mark='*'
@@ -5083,6 +5190,8 @@ prof_list() { # [claude|codex] [-q] [--json]
       [ -n "$pl_us" ] && pl_ut="$pl_us  ($(elapsed_str $((pl_now - pl_at))) 전 워커)"
       say "  $pl_mark $(padw 18 "$pl_p") $(padw 40 "$pl_acct") $pl_ut"
       [ "$pl_li" = false ] && say "      로그인: aw profile login $pl_a $pl_p"
+      pl_ps=$(prof_settings "$pl_a" "$pl_p")
+      [ -n "$(printf '%s' "$pl_ps" | tr -d '\t')" ] && say "      기본 모델·수준: $(settings_str "${pl_ps%%"$TAB"*}" "${pl_ps#*"$TAB"}")   (aw profile set)"
     done
     if [ "$pl_json" -eq 0 ]; then
       case "$pl_cur" in '('*) say "  * 지금 셸의 $(prof_var "$pl_a") $pl_cur 는 프로필 폴더가 아닙니다 (aw run 은 그대로 물려받음)" ;; esac
@@ -5216,6 +5325,10 @@ prof_rm() { # <claude|codex> <이름> [--yes]
       if [ -n "$pr_np" ]; then prof_conf_set "$pr_a" pool "$pr_np"; else prof_conf_set "$pr_a" pool; fi
       say "  auto 후보에서도 뺌: ${pr_np:-(풀 없음, 로그인된 계정 모두)}" ;;
   esac
+  if [ -n "$(defaults_for "$pr_a@$pr_n")" ]; then
+    defaults_unset "$pr_a@$pr_n" >/dev/null
+    say "  계정별 모델·수준(aw profile set)도 지움"
+  fi
   if [ "$(prof_conf_get "$pr_a" use)" = "$pr_n" ]; then
     prof_conf_set "$pr_a" use
     say "  --profile 없이 쓰던 계정이라 그 설정도 지움 (이제 $(prof_current "$pr_a"))"
@@ -5234,6 +5347,7 @@ cmd_profile() {
     rm | remove) shift; prof_rm "$@" ;;
     pool)  shift; prof_pool "$@" ;;
     use)   shift; prof_use "$@" ;;
+    set)   shift; prof_set "$@" ;;
     -h | --help | help) prof_usage ;;
     *) prof_list "$@" ;;
   esac
@@ -5981,6 +6095,7 @@ aw rm review
   필요해 사용자가 터미널에서 합니다 (`aw profile add <claude|codex> <이름>`). 대신 하지 않습니다.
   사용자가 워커에 쓰지 않을 계정(오케스트레이션용 등)을 말하면 `aw profile pool`·`aw profile use <에이전트> auto` 로
   정해 두자고 권합니다. 정해져 있으면 `--profile` 을 따로 주지 않습니다 (aw 가 풀에서 고름).
+  계정마다 모델·수준을 정해 두었으면(`aw profile set`, 목록의 "기본 모델·수준") `--model` 도 주지 않습니다.
 - **한도에 걸렸다고 `aw wait`·`aw status` 가 알리면** 사용자에게 전하고, 다른 계정으로 이을지 묻습니다(사용자가 미리
   허락했으면 바로). 잇는 법: `aw resume <이름> --profile auto -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
   캐시는 계정마다 따로라 앞 대화를 다시 읽습니다.

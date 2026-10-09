@@ -2347,6 +2347,7 @@ if [ "$1 $2" = "auth status" ]; then
   printf '{"loggedIn":false}\n'; exit 1
 fi
 [ "$1 $2" = "auth login" ] && { printf '{}\n' > "$cfg/.credentials.json"; exit 0; }
+printf '%s\n' "$@" >&2
 n=$(date +%s)
 printf '{"type":"rate_limit_event","rate_limit_info":{"status":"%s","resetsAt":%s,"rateLimitType":"five_hour","unifiedWindows":{"five_hour":{"utilization":%s,"resetsAt":%s},"seven_day":{"utilization":0.1,"resetsAt":%s}}}}\n' \
   "${STUB_STATUS:-allowed}" $((n + 3600)) "${STUB_UTIL:-0.5}" $((n + 3600)) $((n + 86400))
@@ -2524,12 +2525,52 @@ has "--json: 풀에 든 계정" "$(awq "$AW" profile codex -q --json 2>&1)" '"na
 has "--json: 풀에 안 든 계정" "$(awq "$AW" profile codex -q --json 2>&1)" '"name":"default","dir":"'"$PH"'/.codex","current":true,"in_pool":false'
 awq "$AW" profile pool codex default work >/dev/null 2>&1; awq "$AW" profile use codex work >/dev/null 2>&1
 
+# 계정마다 기본 모델·수준 (aw profile set → 기본 옵션 파일의 '명령@계정' 줄)
+awd() { awq env AW_DEFAULTS="$PH/defaults" "$@"; }
+printf 'claude --model cg\nclaude --effort xhigh\ncodex --model gpt-g\n' > "$PH/defaults"
+out=$(awd "$AW" profile set claude sub --model cs --effort high 2>&1)
+has "set: 계정의 기본을 알림" "$out" "claude 계정 sub 의 기본: cs · high"
+check "set: 기본 옵션 파일에 계정 줄" "$(printf 'claude@sub --model cs\nclaude@sub --effort high')" "$(grep '^claude@sub' "$PH/defaults")"
+has "set 보기" "$(awd "$AW" profile set claude sub 2>&1)" "cs · high"
+awd "$AW" run -n s1 --profile sub -- claude -p --output-format json 일 >/dev/null 2>&1; awd "$AW" wait s1 >/dev/null 2>&1
+has "그 계정의 워커에 계정의 모델·수준" "$(awd "$AW" errs s1 | tr '\n' ' ')" "--model cs --effort high"
+hasnt "일반 기본값은 안 붙음" "$(awd "$AW" errs s1 | tr '\n' ' ')" "cg"
+awd "$AW" run -n s2 -- claude -p --output-format json 일 >/dev/null 2>&1; awd "$AW" wait s2 >/dev/null 2>&1
+has "다른 계정(기본)은 일반 기본값" "$(awd "$AW" errs s2 | tr '\n' ' ')" "--model cg --effort xhigh"
+awd "$AW" run -n s3 --profile sub -- claude -p --output-format json --model cx 일 >/dev/null 2>&1; awd "$AW" wait s3 >/dev/null 2>&1
+has "--model 을 직접 주면 그게 먼저, 수준은 계정의 것" "$(awd "$AW" errs s3 | tr '\n' ' ')" "--model cx 일 --effort high"
+awd "$AW" profile pool claude sub >/dev/null 2>&1
+awd "$AW" run -n s4 --profile auto -- claude -p --output-format json 일 >/dev/null 2>&1; awd "$AW" wait s4 >/dev/null 2>&1
+has "auto 로 고른 계정의 모델" "$(awd "$AW" errs s4 | tr '\n' ' ')" "--model cs --effort high"
+awd "$AW" profile pool claude --clear >/dev/null 2>&1
+awd "$AW" profile set claude sub --model cz >/dev/null 2>&1
+check "모델만 바꾸면 그 줄만" "$(printf 'claude@sub --model cz\nclaude@sub --effort high')" "$(grep '^claude@sub' "$PH/defaults")"
+out=$(awd "$AW" resume s1 -n s1r -- 다음 2>&1); awd "$AW" wait s1r >/dev/null 2>&1
+has "이어하기는 원래 워커의 모델 (계정 기본이 바뀌어도)" "$(awd "$AW" errs s1r | tr '\n' ' ')" "--model cs --effort high 다음"
+has "이어할 때 지금 계정 기본과 다르면 알림" "$out" "지금 기본값은 cz · high"
+has "목록에 계정별 모델·수준" "$(awd "$AW" profile claude -q 2>&1)" "기본 모델·수준: cz · high"
+has "--json 에 계정별 모델·수준" "$(awd "$AW" profile claude -q --json 2>&1)" '"name":"sub"'
+has "--json 의 model·effort" "$(awd "$AW" profile claude -q --json 2>&1)" '"model":"cz","effort":"high"'
+awd "$AW" profile set codex work --model gx --effort low >/dev/null 2>&1
+check "codex 의 수준은 -c model_reasoning_effort=" "$(printf 'codex@work --model gx\ncodex@work -c model_reasoning_effort=low')" "$(grep '^codex@work' "$PH/defaults")"
+awd "$AW" run -n s5 --profile work -- codex exec --json 일 >/dev/null 2>&1; awd "$AW" wait s5 >/dev/null 2>&1
+has "codex 계정의 모델·수준" "$(awd "$AW" errs s5 | tr '\n' ' ')" "--model gx -c model_reasoning_effort=low"
+hasnt "codex 일반 기본 모델은 안 붙음" "$(awd "$AW" errs s5 | tr '\n' ' ')" "gpt-g"
+awd "$AW" run -n s6 --profile work -- codex exec --json -c other=1 일 >/dev/null 2>&1; awd "$AW" wait s6 >/dev/null 2>&1
+has "다른 키의 -c 가 있어도 수준 줄은 붙음" "$(awd "$AW" errs s6 | tr '\n' ' ')" "model_reasoning_effort=low"
+awd "$AW" run -n s7 --profile work -- codex exec --json -c model_reasoning_effort=high 일 >/dev/null 2>&1; awd "$AW" wait s7 >/dev/null 2>&1
+hasnt "같은 키를 직접 주면 수준 줄은 빠짐" "$(awd "$AW" errs s7 | tr '\n' ' ')" "model_reasoning_effort=low"
+if awd "$AW" profile set claude nosuch --model x >/dev/null 2>&1; then ng "없는 계정에 set"; else ok "없는 계정은 set 거절"; fi
+awd "$AW" profile set claude sub --clear >/dev/null 2>&1
+check "--clear 로 계정 줄을 지움" "" "$(grep '^claude@sub' "$PH/defaults")"
+
 # 지우기
 out=$(awq "$AW" profile rm codex work </dev/null 2>&1); rc=$?
 check "터미널이 아니면 --yes 없이 안 지움" 1 "$rc"
 has "--yes 를 안내" "$out" "--yes"
-out=$(awq "$AW" profile rm codex work --yes 2>&1)
+out=$(awd "$AW" profile rm codex work --yes 2>&1)
 check "지우면 풀과 use 에서도 뺌" "codex pool default" "$(grep -v '^#' "$PH/profiles")"
+check "지우면 계정별 모델·수준 줄도 뺌" "" "$(grep '^codex@work' "$PH/defaults")"
 has "뺐다고 알림" "$out" "auto 후보에서도 뺌: default"
 check "지우면 계정 폴더가 사라짐" 1 "$([ -d "$PH/.codex-profiles/work" ]; printf '%s' "$?")"
 check "같이 쓰던 원본은 그대로 (config.toml, 세션)" 0 "$([ -f "$PH/.codex/config.toml" ] && [ -f "$PH/.codex/sessions/2026/10/08/rollout-2026-10-08T00-00-00-TT1.jsonl" ]; printf '%s' "$?")"
