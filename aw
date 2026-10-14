@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.25.0
+AW_VERSION=0.25.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -165,8 +165,10 @@ devin
 codex — OpenAI Codex CLI
   aw run -n x1 -- codex exec --json "작업"
   aw run -n x2 -f spec.md -- codex exec --json -    # stdin 을 - 로 받습니다
-  이어하기: codex exec resume <thread_id>. 이 서브명령은 프롬프트 뒤 옵션과 --sandbox 를
-            안 받아서, aw resume 은 기본 옵션을 resume 앞(exec 의 옵션 자리)에 붙이고, 원래 워커의
+  auto 모드: aw run -n x3 -- codex exec --json --approve-for-me "작업"
+            (--sandbox 와 같이 못 써서 기본 옵션의 --sandbox 줄은 빠지고 모델 줄은 붙습니다)
+  이어하기: codex exec resume <thread_id>. 이 서브명령은 프롬프트 뒤 옵션과 --sandbox·--approve-for-me 를
+            안 받아서, aw resume 은 이것들과 기본 옵션을 resume 앞(exec 의 옵션 자리)에 붙이고, 원래 워커의
             모델·수준은 resume 뒤에 --model·-c model_reasoning_effort= 로 붙입니다 (aw help resume).
   계정 분리: aw run --profile work -- codex exec --json "작업"   (CODEX_HOME=~/.codex-profiles/work)
             늘 그 계정으로: export AW_CODEX_PROFILE=work. 만들기: aw profile add codex work (aw help profile)
@@ -938,12 +940,17 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트> [모델·�
       shift
       # --profile 은 exec 의 옵션이라 resume 앞에 둡니다 (resume 뒤에 두면 codex 가 거절, 실측).
       # aw gateway 로 만든 프로필로 띄운 워커도 같은 게이트웨이·모델로 이어집니다.
-      rprof=''; rpskip=0; rn0=$#
+      # 샌드박스·승인 방식(--sandbox, --approve-for-me 등)도 resume 이 받지 않아 앞으로 옮깁니다
+      # (codex exec resume --help 에 없음, 0.159). --dangerously-bypass-… 는 resume 도 받아 그대로 둡니다.
+      rprof=''; rpskip=0; rsb=''; rsskip=0; rn0=$#
       for ra in "$@"; do
         if [ "$rpskip" -eq 1 ]; then rprof=$ra; rpskip=0; continue; fi
+        if [ "$rsskip" -eq 1 ]; then rsb="$rsb $(shquote "$ra")"; rsskip=0; continue; fi
         case "$ra" in
           --profile | -p) rpskip=1; continue ;;
           --profile=*) rprof=${ra#--profile=}; continue ;;
+          --sandbox | -s) rsb="$rsb $(shquote "$ra")"; rsskip=1; continue ;;
+          --sandbox=* | --approve-for-me | --full-auto) rsb="$rsb $(shquote "$ra")"; continue ;;
         esac
         set -- "$@" "$ra"
       done
@@ -952,6 +959,7 @@ resume_argv() { # <워커디렉터리> <세션ID> <새 프롬프트> [모델·�
       case "${1:-}" in resume | fork) shift; [ $# -gt 0 ] && case "$1" in -*) ;; *) shift ;; esac ;; esac
       qwords "$rprog" exec
       [ -n "$rprof" ] && qwords --profile "$rprof"
+      printf '%s' "$rsb"
       if [ "$rfork" -eq 1 ]; then qwords fork "$rsid"; else qwords resume "$rsid"; fi
       resume_rest codex "$rhas" "$rold" "$@"
       printf '%s' "$rpin"
@@ -1646,6 +1654,10 @@ flag_family() { # <명령 이름(명령@계정 도)> <옵션>
     kiro-cli:--agent-engine | kiro-cli:--v[123]) printf '%s\n' --agent-engine --v1 --v2 --v3 ;;
     kiro-cli:--trust-all-tools | kiro-cli:-a)    printf '%s\n' --trust-all-tools -a ;;
     codex:--model | codex:-m)                     printf '%s\n' --model -m ;;
+    # 샌드박스·승인 방식. --approve-for-me(auto 모드)는 --sandbox 와 같이 주면 codex 가 인자 충돌로
+    # 끝납니다 (실측: 코드 2, codex-cli 0.159). 기본 줄 --sandbox workspace-write 가 빠져야 합니다.
+    codex:--sandbox | codex:-s | codex:--approve-for-me | codex:--full-auto | codex:--dangerously-bypass-approvals-and-sandbox)
+      printf '%s\n' --sandbox -s --approve-for-me --full-auto --dangerously-bypass-approvals-and-sandbox ;;
     *) printf '%s\n' "$2" ;;
   esac
 }
@@ -2181,13 +2193,21 @@ DG
   # codex exec resume(과 fork)은 프롬프트 뒤의 옵션도, resume 뒤의 --sandbox 도 받지 않습니다 (실측).
   # 그래서 이어하기면 붙인 기본 옵션을 resume 앞, exec 의 옵션 자리로 옮깁니다. 붙이지 않으면
   # 샌드박스는 세션에서 물려받지만 모델은 config.toml 의 것으로 바뀝니다 (실측: luna 로 시작한 대화가 astra 로).
+  # resume 앞에는 --profile, 샌드박스·승인 옵션이 올 수 있어(resume_argv) exec 의 옵션을 건너뛰며 찾습니다.
   rw_res=0
   if [ "${1##*/}" = codex ] && [ "${2:-}" = exec ] && [ "${rw_nadd:-0}" -gt 0 ] && [ "${no_defaults:-0}" -ne 1 ]; then
-    case "${3:-}:${5:-}:${4:-}" in
-      resume:* | fork:*) rw_res=3 ;;
-      --profile:resume:* | -p:resume:* | --profile:fork:* | -p:fork:*) rw_res=5 ;;
-      --profile=*:*:resume | --profile=*:*:fork) rw_res=4 ;;
-    esac
+    rw_i=0; rw_v=0
+    for a in "$@"; do
+      rw_i=$((rw_i + 1))
+      [ "$rw_i" -le 2 ] && continue
+      if [ "$rw_v" -eq 1 ]; then rw_v=0; continue; fi
+      case "$a" in
+        resume | fork) rw_res=$rw_i; break ;;
+        --profile | -p | --sandbox | -s | --model | -m | -c | --config | -C | --cd) rw_v=1 ;;
+        -*) ;;
+        *) break ;;
+      esac
+    done
   fi
   if [ "$rw_res" -gt 0 ]; then
     rw_keep=$(($# - rw_nadd)); rw_i=0; rw_add=''

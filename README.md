@@ -480,6 +480,13 @@ aw run -n x2 -f spec.md -- codex exec --json -     # 큰 프롬프트도 문제�
 
 출력은 JSONL(줄마다 JSON 이벤트)입니다. `aw result x1 --field text` 가 마지막 메시지(최종 답)를 꺼냅니다.
 
+승인 요청을 codex 의 자동 검토에 맡기는 auto 모드(`--approve-for-me`, codex-cli 0.159)도 그대로 주면 됩니다.
+기본 옵션의 `--sandbox workspace-write` 줄만 빠지고 모델 줄은 붙습니다. 이어하기도 이 옵션을 `resume` 앞에 둡니다.
+
+```sh
+aw run -n x3 --profile auto -- codex exec --json --approve-for-me "작업"
+```
+
 계정이 여러 개면 `aw run --profile <이름> -- codex …` 로 고릅니다(`CODEX_HOME` 을 그 계정 폴더로,
 [여러 계정](#여러-계정-aw-profile)). codex 자신의 `--profile`(`--` 뒤, 설정 묶음 `<이름>.config.toml`)과는 다른 것입니다.
 
@@ -577,7 +584,7 @@ codex(`codex exec fork`)만 됩니다. claude 갈래는 첫 요청에서 앞 문
 | --- | --- | --- | --- |
 | `claude` | `--resume <session_id>` | `--fork-session` | |
 | `agy` | `--conversation <conversation_id>` | 없음 | |
-| `codex` | `codex exec resume <thread_id>` | `codex exec fork <thread_id>` | 이 서브명령은 프롬프트 뒤 옵션과 `--sandbox` 를 안 받아, 기본 옵션을 `resume`·`fork` 앞(`exec` 의 옵션 자리)에 붙입니다. 모델·수준은 그 뒤 `--model`·`-c` 로 |
+| `codex` | `codex exec resume <thread_id>` | `codex exec fork <thread_id>` | 이 서브명령은 프롬프트 뒤 옵션과 `--sandbox`·`--approve-for-me` 를 안 받아, 기본 옵션과 원래 워커의 샌드박스·승인 옵션을 `resume`·`fork` 앞(`exec` 의 옵션 자리)에 붙입니다. 모델·수준은 그 뒤 `--model`·`-c` 로 |
 | `devin` | `-c` | 없음 | 텍스트만 내놓아 세션 ID 를 못 뽑습니다. 아래 참고 |
 | `kiro-cli` | `kiro-cli chat --resume-id <sessionId>` | 없음 | `chat` 으로 시작한 워커만 |
 
@@ -1143,6 +1150,10 @@ $ aw run -n a1 -- agy -p='리팩터링'
   그 줄 전체를 건너뜁니다. 그래서 `--model` 이나 `--effort` 를 직접 주면 agy 의 모델 줄만 빠지고
   권한 줄은 붙습니다. `--effort low` 만 주면 모델도 같이 빠져 agy 자체 기본 모델로 돌므로, 그때는
   `--model gemini-3.8-flash --effort low` 로 둘 다 줍니다. 같은 옵션이 여러 줄에 있으면 앞 줄만 붙습니다
+- 이름은 달라도 같은 설정을 고르는 옵션은 같은 것으로 칩니다. codex 는 `--sandbox`·`-s`·`--approve-for-me`·
+  `--full-auto`·`--dangerously-bypass-approvals-and-sandbox` 중 하나를 직접 주면 `--sandbox workspace-write` 줄이
+  빠집니다(`--approve-for-me` 는 `--sandbox` 와 같이 주면 codex 가 인자 충돌로 끝남). kiro-cli 는 `-a`·`--trust-all-tools`,
+  `--v1`~`--v3`·`--agent-engine`, codex 는 `-m`·`--model` 입니다
 - 그 대신 한 줄 안의 옵션은 같이 붙고 같이 빠집니다. `devin` 에 `--permission-mode` 를 직접 주면
   `--respect-workspace-trust false` 도 함께 빠져 worktree 에서 실패합니다. 그때는 둘 다 직접 넘기거나
   줄을 나누세요

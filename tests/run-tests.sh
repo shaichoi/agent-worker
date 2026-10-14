@@ -599,6 +599,23 @@ check "codex 이어하기: 원래 모델(-m mine)을 그대로, 기본 모델은
 check "codex 이어하기: --no-defaults 면 안 붙음" \
   "$(printf -- 'exec\nresume\nTID1\n--json\n새프롬프트')" \
   "$("$AW" errs r-codex-nd)"
+# --approve-for-me(auto 모드)는 --sandbox 와 같이 주면 codex 가 인자 충돌로 끝납니다 (실측). 샌드박스 줄만 빠지고
+# 모델 줄은 남습니다. 이어하기는 resume 이 받지 않는 이 옵션들을 resume 앞으로 옮깁니다.
+"$AW" run -n r-cxa -- codex exec --json --approve-for-me 원래 >/dev/null 2>&1
+"$AW" wait r-cxa >/dev/null 2>&1
+check "codex: --approve-for-me 면 --sandbox 줄만 빠짐" \
+  "$(printf -- 'exec\n--json\n--approve-for-me\n원래\n--model\ngpt-d')" "$("$AW" errs r-cxa)"
+"$AW" resume r-cxa -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-cxa-r1 >/dev/null 2>&1
+has "codex 이어하기: --approve-for-me 를 resume 앞으로" \
+  "$("$AW" errs r-cxa-r1 | tr '\n' ' ')" "exec --approve-for-me resume TID1 --json"
+case "$("$AW" errs r-cxa-r1 | tr '\n' ' ')" in *--sandbox*) ng "이어하기에 --sandbox 가 같이 붙음" ;; *) ok "이어하기에도 --sandbox 는 안 붙음" ;; esac
+"$AW" run -n r-cxs -- codex exec --json -s read-only 원래 >/dev/null 2>&1
+"$AW" wait r-cxs >/dev/null 2>&1
+"$AW" resume r-cxs -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-cxs-r1 >/dev/null 2>&1
+has "codex 이어하기: 직접 준 -s 값도 resume 앞으로" \
+  "$("$AW" errs r-cxs-r1 | tr '\n' ' ')" "exec -s read-only resume TID1 --json"
 printf 'claude --permission-mode bypassPermissions\ncodex --sandbox workspace-write\n' > "$AW_DEFAULTS"
 
 # -f 로 돌린 워커는 인자에 프롬프트가 없으니 걷어낼 것도 없습니다
