@@ -2349,7 +2349,7 @@ has "aw help resume: 언제 이을지와 근거" "$("$AW" help resume)" "언제 
 has "aw resume --help: --fork·--list" "$("$AW" resume --help)" "--list"
 awp clean --all >/dev/null 2>&1; awl clean --all >/dev/null 2>&1
 
-head_ "28. 여러 계정 (aw profile, codex 의 --profile, auto, 한도)"
+head_ "28. 여러 계정 (aw profile, codex 의 --profile, 계정 풀, 한도)"
 # 가짜 HOME 에 기본 계정 폴더(~/.claude, ~/.codex)를 두고 가짜 claude·codex 로 시험합니다.
 PH="$TMPROOT/ph"; mkdir -p "$PH/bin" "$PH/.claude/skills" "$PH/.codex/skills"
 printf '{}\n' > "$PH/.claude/settings.json"; printf '{}\n' > "$PH/.claude/.credentials.json"
@@ -2397,7 +2397,10 @@ check "설정 묶음(<이름>.config.toml)도 링크" "$PH/.codex/og.config.toml
 check "auth.json 은 따로 (링크 안 함)" "" "$(ls -A "$PH/.codex-profiles/work" | grep -x auth.json)"
 has "터미널이 아니면 로그인 명령을 안내" "$out" "로그인: aw profile login codex work"
 has "다시 만들면 빠진 링크만 채움" "$(awq "$AW" profile add codex work --no-login 2>&1)" "이미 있음"
-if awq "$AW" profile add codex default --no-login >/dev/null 2>&1; then ng "default 를 계정 이름으로 받음"; else ok "default·auto 는 계정 이름으로 못 씀"; fi
+if awq "$AW" profile add codex default --no-login >/dev/null 2>&1; then ng "default 를 계정 이름으로 받음"; else ok "default 는 계정 이름으로 못 씀"; fi
+for rn in pool auto; do
+  if awq "$AW" profile add codex $rn --no-login >/dev/null 2>&1; then ng "$rn 을 계정 이름으로 받음"; else ok "$rn 은 계정 이름으로 못 씀"; fi
+done
 if awq "$AW" profile add codex '../x' --no-login >/dev/null 2>&1; then ng "잘못된 이름을 받음"; else ok "잘못된 계정 이름은 거절"; fi
 if awq "$AW" profile add gemini x --no-login >/dev/null 2>&1; then ng "claude·codex 가 아닌 것을 받음"; else ok "계정은 claude·codex 만"; fi
 awq "$AW" profile add claude sub --no-login >/dev/null 2>&1
@@ -2453,6 +2456,12 @@ out=$(awq "$AW" resume q1 -n q1d --profile default -- 다음 2>&1)
 check "--profile 로 다른 계정에서 같은 대화 (세션을 같이 써서 보임)" "CH=" "$(r28 q1d | grep '^CH=')"
 has "계정이 바뀌었다고 알림 (캐시 따로)" "$out" "계정: work → default"
 has "같은 세션으로" "$(awq "$AW" errs q1d | tr '\n' ' ')" "resume TT1"
+out=$(awq "$AW" resume q1 -n q1p --profile pool -- 다음 2>&1)
+has "이어하기 --profile pool: 계정 풀에서 고름" "$out" "계정 풀에서 고름:"
+has "이어하기 --profile pool: 같은 세션으로" "$(awq "$AW" errs q1p | tr '\n' ' ')" "resume TT1"
+out=$(awq "$AW" resume q1 -n q1a --profile auto -- 다음 2>&1)
+has "이어하기 --profile auto(옛 이름)도 받음" "$out" "계정 풀에서 고름:"
+has "이어하기 --profile auto 면 바뀌었다고 알림" "$out" "--profile auto 는 이름이 pool 로 바뀌었습니다"
 mkdir -p "$PH/.codex-profiles/lone"; printf '{}\n' > "$PH/.codex-profiles/lone/auth.json"
 out=$(awq "$AW" resume q1 -n q1l --profile lone -- 다음 2>&1); rc=$?
 check "세션을 같이 쓰지 않는 계정이면 거절" 1 "$rc"
@@ -2465,7 +2474,7 @@ mkdir -p "$PH/.claude/projects/-x"; printf '{}\n' > "$PH/.claude/projects/-x/CS1
 out=$(awq "$AW" resume q8 -n q8d --profile default -- 다음 2>&1)
 check "claude: 다른 계정에서 같은 대화 (projects 를 같이 씀)" "CFG=" "$(r28 q8d | grep '^CFG=')"
 
-# 사용량과 auto
+# 사용량과 계정 풀 (--profile pool)
 F=$(( $(date +%s) + 86400 )); P=$(( $(date +%s) - 60 ))
 awq env STUB_TID=UA "$AW" run -n u1 --profile default -- codex exec --json 일 >/dev/null 2>&1
 awq env STUB_TID=UB "$AW" run -n u2 --profile work -- codex exec --json 일 >/dev/null 2>&1
@@ -2478,9 +2487,16 @@ out=$(awq "$AW" profile codex -q 2>&1)
 has "사용량: codex 주간 사용률" "$(printf '%s\n' "$out" | grep ' default ')" "7일 90%"
 has "사용량: 초기화 시각이 지난 창은 0%" "$(printf '%s\n' "$out" | grep ' work ')" "5시간 0%(초기화됨)"
 has "사용량: 창이 둘이면 둘 다" "$(printf '%s\n' "$out" | grep ' work ')" "7일 20%"
-out=$(awq "$AW" run -n u3 --profile auto -- codex exec --json 일 2>&1)
-has "auto: 사용량이 가장 적은 계정" "$out" "계정 자동 고름: work"
-check "auto: meta 에 고른 계정" "$(printf 'profile=work\nprofile_auto=1')" "$(grep -E '^profile(_auto)?=' "$QW/u3/meta")"
+out=$(awq "$AW" run -n u3 --profile pool -- codex exec --json 일 2>&1)
+has "pool: 사용량이 가장 적은 계정" "$out" "계정 풀에서 고름: work"
+check "pool: meta 에 고른 계정" "$(printf 'profile=work\nprofile_pool=1')" "$(grep -E '^profile(_pool)?=' "$QW/u3/meta")"
+# 0.25 까지의 이름 auto 도 받고, 이름이 바뀌었다고 알립니다 (claude·codex 의 auto 모드와 헷갈려 바꿈)
+out=$(awq "$AW" run -n u3a --profile auto -- codex exec --json 일 2>&1)
+has "옛 이름 --profile auto 도 계정 풀에서 고름" "$out" "계정 풀에서 고름: work"
+has "옛 이름이면 바뀌었다고 알림" "$out" "--profile auto 는 이름이 pool 로 바뀌었습니다"
+out=$(awq env AW_CODEX_PROFILE=auto "$AW" run -n u3e -- codex exec --json 일 2>&1)
+has "AW_CODEX_PROFILE=auto 도 받음" "$out" "계정 풀에서 고름: work"
+has "AW_CODEX_PROFILE=auto 면 그 변수를 짚어 알림" "$out" "AW_CODEX_PROFILE auto 는 이름이 pool 로 바뀌었습니다"
 has "후보 목록에 계정 (u2 는 work 계정의 세션 UB)" "$(awq "$AW" resume --list --agent codex 2>&1 | grep '^u2 ')" "· 계정 work"
 printf '{}\n' > "$PH/.claude-profiles/sub/.credentials.json"
 awq env STUB_UTIL=0.8 "$AW" run -n c1 -- claude -p --output-format json 일 >/dev/null 2>&1
@@ -2489,13 +2505,13 @@ awq "$AW" wait c1 c2 >/dev/null 2>&1
 out=$(awq "$AW" profile claude -q 2>&1)
 has "사용량: claude 5시간·7일 (rate_limit_event)" "$(printf '%s\n' "$out" | grep ' default ')" "5시간 80% · 7일 10%"
 has "사용량: 다른 계정" "$(printf '%s\n' "$out" | grep ' sub ')" "5시간 30%"
-has "auto: claude 도" "$(awq "$AW" run -n c4 --profile auto -- claude -p --output-format json 일 2>&1)" "계정 자동 고름: sub"
+has "pool: claude 도" "$(awq "$AW" run -n c4 --profile pool -- claude -p --output-format json 일 2>&1)" "계정 풀에서 고름: sub"
 
 # 한도에 걸리면 알리고 다른 계정으로 잇는 법을 안내
 awq env STUB_FAIL=1 STUB_STATUS=rejected STUB_SID=CS3 "$AW" run -n c3 -- claude -p --output-format json 일 >/dev/null 2>&1
 out=$(awq "$AW" wait c3 2>&1)
 has "한도에 걸리면 wait 이 알림" "$out" "한도: claude 계정 default 이 한도에 걸린 것 같습니다"
-has "다른 계정으로 잇는 법" "$out" "aw resume c3 --profile auto"
+has "다른 계정으로 잇는 법" "$out" "aw resume c3 --profile pool"
 has "aw status 에도" "$(awq "$AW" status c3 2>&1)" "한도에 걸린 것 같습니다"
 has "거절된 계정은 사용량에 한도로" "$(awq "$AW" profile claude -q 2>&1 | grep ' default ')" "한도에 걸림"
 awq env STUB_FAIL=1 STUB_TID=UC "$AW" run -n x3 --profile work -- codex exec --json 일 >/dev/null 2>&1
@@ -2503,22 +2519,31 @@ has "codex: 출력의 한도 문구로 알림" "$(awq "$AW" wait x3 2>&1)" "한�
 awq "$AW" run -n x4 -- sh -c 'echo 그냥 실패 >&2; exit 3' >/dev/null 2>&1
 hasnt "한도와 상관없는 실패는 알리지 않음" "$(awq "$AW" wait x4 2>&1)" "한도:"
 
-# auto 후보(풀)와 --profile 없이 쓸 계정 (aw profile pool, use)
+# 계정 풀과 --profile 없이 쓸 계정 (aw profile pool, use)
 awq "$AW" profile pool claude default >/dev/null 2>&1
 check "pool: 설정 파일에 저장" "claude pool default" "$(grep -v '^#' "$PH/profiles")"
-out=$(awq "$AW" run -n p1 --profile auto -- claude -p --output-format json 일 2>&1)
-has "auto: 풀 안에서만 고름 (사용량이 더 많아도)" "$out" "계정 자동 고름: default"
-has "auto: 후보가 모두 한도에 걸려 있었으면 경고" "$out" "후보 계정이 모두 한도에 걸려 있었습니다"
+out=$(awq "$AW" run -n p1 --profile pool -- claude -p --output-format json 일 2>&1)
+has "pool: 풀 안에서만 고름 (사용량이 더 많아도)" "$out" "계정 풀에서 고름: default"
+has "pool: 후보가 모두 한도에 걸려 있었으면 경고" "$out" "후보 계정이 모두 한도에 걸려 있었습니다"
 awq "$AW" profile pool claude sub >/dev/null 2>&1
 check "pool 을 다시 정하면 그 줄을 바꿈" "claude pool sub" "$(grep -v '^#' "$PH/profiles")"
-has "pool 보기" "$(awq "$AW" profile pool claude 2>&1)" "claude auto 후보: sub"
-has "pool 을 정하면 use 를 안내" "$(awq "$AW" profile pool claude sub 2>&1)" "aw profile use claude auto"
-has "use auto" "$(awq "$AW" profile use claude auto 2>&1)" "--profile 없이 띄우는 claude 워커: auto"
+has "pool 보기" "$(awq "$AW" profile pool claude 2>&1)" "claude 계정 풀: sub"
+has "pool 을 정하면 use 를 안내" "$(awq "$AW" profile pool claude sub 2>&1)" "aw profile use claude pool"
+has "use pool" "$(awq "$AW" profile use claude pool 2>&1)" "--profile 없이 띄우는 claude 워커: pool"
 out=$(awq "$AW" run -n p2 -- claude -p --output-format json 일 2>&1)
-has "use auto: --profile 없이도 풀에서 고름" "$out" "계정 자동 고름: sub"
-check "use auto: meta 에 고른 계정" "$(printf 'profile=sub\nprofile_auto=1')" "$(grep -E '^profile(_auto)?=' "$QW/p2/meta")"
-has "목록 머리: --profile 없이 띄우면" "$(awq "$AW" profile claude -q 2>&1)" "--profile 없이 띄우면: auto   (aw profile use)"
-has "목록 머리: auto 후보" "$(awq "$AW" profile claude -q 2>&1)" "auto 후보: sub   (aw profile pool claude)"
+has "use pool: --profile 없이도 풀에서 고름" "$out" "계정 풀에서 고름: sub"
+hasnt "use pool: 이름이 바뀌었다는 알림 없음" "$out" "이름이 pool 로 바뀌었습니다"
+check "use pool: meta 에 고른 계정" "$(printf 'profile=sub\nprofile_pool=1')" "$(grep -E '^profile(_pool)?=' "$QW/p2/meta")"
+has "목록 머리: --profile 없이 띄우면" "$(awq "$AW" profile claude -q 2>&1)" "--profile 없이 띄우면: pool   (aw profile use)"
+has "목록 머리: 계정 풀" "$(awq "$AW" profile claude -q 2>&1)" "계정 풀: sub   (aw profile pool claude)"
+# 옛 aw 가 적어 둔 'use auto' 는 조용히 pool 로 봅니다. aw profile use claude auto 는 pool 로 적습니다.
+sed 's/^claude use pool$/claude use auto/' "$PH/profiles" > "$PH/profiles.t" && mv "$PH/profiles.t" "$PH/profiles"
+out=$(awq "$AW" run -n p2o -- claude -p --output-format json 일 2>&1)
+has "설정 파일의 옛 값 use auto 도 풀에서 고름" "$out" "계정 풀에서 고름: sub"
+hasnt "설정 파일의 옛 값은 알리지 않음" "$out" "이름이 pool 로 바뀌었습니다"
+has "옛 값도 목록에는 pool 로" "$(awq "$AW" profile claude -q 2>&1)" "--profile 없이 띄우면: pool"
+has "use auto 는 바뀌었다고 알림" "$(awq "$AW" profile use claude auto 2>&1)" "auto 는 이름이 pool 로 바뀌었습니다"
+check "use auto 는 pool 로 적음" "claude use pool" "$(grep '^claude use' "$PH/profiles")"
 awq "$AW" profile use claude default >/dev/null 2>&1
 awq env CLAUDE_CONFIG_DIR="$PH/.claude-profiles/sub" "$AW" run -n p3 -- claude -p --output-format json 일 >/dev/null 2>&1
 check "use 는 셸의 CLAUDE_CONFIG_DIR(claude-use)보다 먼저" "CFG=" "$(r28 p3 | grep '^CFG=')"
@@ -2527,10 +2552,12 @@ check "AW_CLAUDE_PROFILE 은 use 보다 먼저" "CFG=$PH/.claude-profiles/sub" "
 has "AW_CLAUDE_PROFILE 이 있으면 use 를 정할 때 알림" "$(awq env AW_CLAUDE_PROFILE=sub "$AW" profile use claude default 2>&1)" "AW_CLAUDE_PROFILE=sub 가 이것보다 먼저"
 has "use 보기와 출처" "$(awq "$AW" profile use claude 2>&1)" "default   (aw profile use)"
 if awq "$AW" profile pool claude nosuch >/dev/null 2>&1; then ng "없는 계정을 풀에 넣음"; else ok "없는 계정은 풀에 못 넣음"; fi
-if awq "$AW" profile pool claude auto >/dev/null 2>&1; then ng "auto 를 풀에 넣음"; else ok "auto 는 풀에 못 넣음"; fi
+for rn in pool auto; do
+  if awq "$AW" profile pool claude $rn >/dev/null 2>&1; then ng "$rn 을 풀에 넣음"; else ok "$rn 은 풀에 못 넣음"; fi
+done
 if awq "$AW" profile use claude nosuch >/dev/null 2>&1; then ng "없는 계정을 use 로 둠"; else ok "없는 계정은 use 로 못 둠"; fi
 rm -f "$PH/.claude-profiles/sub/.credentials.json"
-awq "$AW" profile use claude auto >/dev/null 2>&1
+awq "$AW" profile use claude pool >/dev/null 2>&1
 out=$(awq "$AW" run -n p5 -- claude -p --output-format json 일 2>&1); rc=$?
 check "풀에 로그인된 계정이 없으면 거절" 1 "$rc"
 has "거절하며 풀을 알림" "$out" "풀: sub"
@@ -2557,8 +2584,8 @@ has "다른 계정(기본)은 일반 기본값" "$(awd "$AW" errs s2 | tr '\n' '
 awd "$AW" run -n s3 --profile sub -- claude -p --output-format json --model cx 일 >/dev/null 2>&1; awd "$AW" wait s3 >/dev/null 2>&1
 has "--model 을 직접 주면 그게 먼저, 수준은 계정의 것" "$(awd "$AW" errs s3 | tr '\n' ' ')" "--model cx 일 --effort high"
 awd "$AW" profile pool claude sub >/dev/null 2>&1
-awd "$AW" run -n s4 --profile auto -- claude -p --output-format json 일 >/dev/null 2>&1; awd "$AW" wait s4 >/dev/null 2>&1
-has "auto 로 고른 계정의 모델" "$(awd "$AW" errs s4 | tr '\n' ' ')" "--model cs --effort high"
+awd "$AW" run -n s4 --profile pool -- claude -p --output-format json 일 >/dev/null 2>&1; awd "$AW" wait s4 >/dev/null 2>&1
+has "pool 로 고른 계정의 모델" "$(awd "$AW" errs s4 | tr '\n' ' ')" "--model cs --effort high"
 awd "$AW" profile pool claude --clear >/dev/null 2>&1
 awd "$AW" profile set claude sub --model cz >/dev/null 2>&1
 check "모델만 바꾸면 그 줄만" "$(printf 'claude@sub --model cz\nclaude@sub --effort high')" "$(grep '^claude@sub' "$PH/defaults")"
@@ -2588,7 +2615,7 @@ has "--yes 를 안내" "$out" "--yes"
 out=$(awd "$AW" profile rm codex work --yes 2>&1)
 check "지우면 풀과 use 에서도 뺌" "codex pool default" "$(grep -v '^#' "$PH/profiles")"
 check "지우면 계정별 모델·수준 줄도 뺌" "" "$(grep '^codex@work' "$PH/defaults")"
-has "뺐다고 알림" "$out" "auto 후보에서도 뺌: default"
+has "뺐다고 알림" "$out" "계정 풀에서도 뺌: default"
 check "지우면 계정 폴더가 사라짐" 1 "$([ -d "$PH/.codex-profiles/work" ]; printf '%s' "$?")"
 check "같이 쓰던 원본은 그대로 (config.toml, 세션)" 0 "$([ -f "$PH/.codex/config.toml" ] && [ -f "$PH/.codex/sessions/2026/10/08/rollout-2026-10-08T00-00-00-TT1.jsonl" ]; printf '%s' "$?")"
 if awq "$AW" profile rm codex default --yes >/dev/null 2>&1; then ng "기본 계정을 지움"; else ok "기본 계정은 안 지움"; fi

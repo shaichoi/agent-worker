@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.25.1
+AW_VERSION=0.26.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -53,7 +53,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
   aw pick [on|off|key] / -- '작업'     (실험용) Jev 가 작업에 맞는 에이전트·모델을 골라 워커를 띄움
   aw skill [install|remove] [이름]     에이전트용 스킬 상태 / 넣기 / 빼기
   aw gateway [add|key|models|rm] [이름] OpenGateway 등 게이트웨이 모델을 codex·claude 프로필로
-  aw profile [add|login|rm|pool|use|set] [claude|codex] [이름]   여러 계정: 목록·사용량, auto 후보, 계정별 모델
+  aw profile [add|login|rm|pool|use|set] [claude|codex] [이름]   여러 계정: 목록·사용량, 계정 풀, 계정별 모델
   aw setup                             설치 점검 (터미널에서는 빠진 것마다 물어봄)
   aw uninstall [--yes] [--dry-run]     기록·설정·스킬·실행 파일을 모두 지움 (터미널이면 한 번 물음)
   aw version | aw help [주제]
@@ -67,7 +67,7 @@ aw — 아무 CLI 명령이나 백그라운드 워커로 돌리고 추적합니�
 run 옵션
   -n 이름     -d 디렉터리     -w 브랜치(worktree 격리)
   -f 파일     표준 입력으로 물림 (기본 /dev/null 이라 멈추지 않음)
-  -e K=V      환경변수        --profile 이름   claude·codex 의 계정 (auto: 여유 가장 많은 계정.
+  -e K=V      환경변수        --profile 이름   claude·codex 의 계정 (pool: 계정 풀에서 여유 가장 많은 계정.
                               늘: AW_CLAUDE_PROFILE, AW_CODEX_PROFILE. aw help profile)
   --tag 문자열                --max-input-tokens N
   --no-defaults / --no-brief / --no-say  권한 옵션 / 지시문 / 도는 중 메시지 받기를 이번만 끔
@@ -321,7 +321,7 @@ T
     files) printf '워커 기록: %s/<이름>/\n\n' "$AW_WORKERS"; cat <<'T'
 
   meta      이름, 디렉터리, 시작 시각, 부팅 ID, claude 프로필, worktree, 꼬리표, 토큰 추정치, 세션 ID,
-            이어한 출처 (resumed_from, 갈래면 fork_of), codex 의 CODEX_HOME (codex_home), 자동 고른 계정 (profile_auto),
+            이어한 출처 (resumed_from, 갈래면 fork_of), codex 의 CODEX_HOME (codex_home), 계정 풀에서 고른 계정 (profile_pool),
             aw 가 코드를 바꿨으면 원래 코드와 사유 (agent_exit, fail_reason: kiro-cli 의 거절·권한 거부)
   cmd       실행한 인자 (한 줄에 하나). aw say 모드면 프롬프트가 든 명령이고, 실제 실행은 launch.sh
   args      cmd 와 같은 인자를 따옴표로 감싼 그대로 (aw resume 이 원래 모델·수준을 여기서 읽음)
@@ -529,7 +529,8 @@ T
 
 워커를 그 계정으로
   aw run --profile work -- codex exec --json "작업"
-  aw run --profile auto -- claude -p ...   후보 중 최근 사용량이 가장 적은 계정 (모르는 계정은 0 으로 봐서 먼저)
+  aw run --profile pool -- claude -p ...   계정 풀에서 최근 사용량이 가장 적은 계정 (모르는 계정은 0 으로 봐서 먼저)
+                                           (0.25 까지의 이름 auto 도 받음. claude·codex 의 auto 모드와 헷갈려 바꿈)
   --profile 없을 때 고르는 순서:
     1. 셸의 AW_CLAUDE_PROFILE·AW_CODEX_PROFILE
     2. aw profile use 로 정해 둔 계정 ($AW_PROFILES, 이 컴퓨터에 저장)
@@ -540,23 +541,23 @@ T
   aw profile set claude work-a --model claude-sonnet-5 --effort high
   aw profile set codex work --model gpt-6-astra --effort xhigh     (codex 는 -c model_reasoning_effort=)
   aw profile set claude work-a                보기       aw profile set claude work-a --clear   지우기
-  기본 옵션 파일(aw defaults)에 '명령@계정' 줄로 들어가, 그 계정으로 띄우는 워커(--profile, auto 로 골라도)에
+  기본 옵션 파일(aw defaults)에 '명령@계정' 줄로 들어가, 그 계정으로 띄우는 워커(--profile, pool 로 골라도)에
   일반 기본값 대신 붙습니다. 모델만 정하면 수준은 일반 기본값을 씁니다. --model 을 직접 주면 그게 먼저입니다.
   이어하기는 원래 워커의 모델·수준을 그대로 씁니다 (계정을 바꿔 이어도).
 
-auto 후보(풀)와 워커에 쓰지 않을 계정
-  aw profile pool claude work-a work-b     --profile auto 가 이 계정들 중에서만 고름 (같으면 적은 순서대로)
-  aw profile use claude auto               --profile 없이 띄워도 auto (늘 풀에서 고름)
-  aw profile pool claude --clear           풀을 지움 (로그인된 계정 모두가 후보)
+계정 풀과 워커에 쓰지 않을 계정
+  aw profile pool claude work-a work-b     --profile pool 이 이 계정들 중에서만 고름 (같으면 적은 순서대로)
+  aw profile use claude pool               --profile 없이 띄워도 pool (늘 계정 풀에서 고름)
+  aw profile pool claude --clear           정해 둔 풀을 지움 (로그인된 계정 모두가 후보)
   aw profile use claude --clear            use 를 지움
-  오케스트레이션을 맡은 계정처럼 워커에 쓰지 않을 계정은 풀에서 빼고 use 를 auto 로 둡니다. 그러면 셸이 그 계정
+  오케스트레이션을 맡은 계정처럼 워커에 쓰지 않을 계정은 풀에서 빼고 use 를 pool 로 둡니다. 그러면 셸이 그 계정
   (claude-use 등)이어도 워커는 풀의 계정으로 갑니다. 직접 --profile <그 계정> 을 주면 그대로 씁니다.
   peek·이어하기·후보 목록·모델 고정이 워커의 계정 폴더에서 찾습니다 (meta 의 profile, codex_home).
 
 한도에 걸리면 다른 계정으로 같은 대화를
   aw wait·aw status 가 한도에 걸린 것 같으면 알립니다 (claude 의 rate_limit_event rejected, codex 사용률 100%,
   출력의 한도 문구). 그러면:
-    aw resume <워커> --profile auto -- '이어서 해줘'      또는 --profile <다른 계정>
+    aw resume <워커> --profile pool -- '이어서 해줘'      또는 --profile <다른 계정>
   같은 세션을 다른 계정에서 잇습니다. 계정마다 캐시가 따로라 앞 대화를 다시 읽습니다.
   이어하기는 원래 계정으로 하는 것이 기본입니다 (지금 셸의 AW_*_PROFILE 을 따르지 않음).
 
@@ -1309,9 +1310,9 @@ prompt_head() { # <워커디렉터리>
 # 계정과 상관없는 것(설정, 스킬, 대화 기록·세션)은 기본 폴더로 링크해 같이 씁니다. 세션을 같이 써서 계정을
 # 바꿔도 같은 대화를 이을 수 있습니다 (실측: 다른 CODEX_HOME 에서도 sessions 에 있는 세션을 찾음).
 # 계정 설정 파일 ($AW_PROFILES). 한 줄에 '에이전트 키 값...' 이고 aw profile pool·use 가 씁니다.
-#   claude pool swchoi1-60hertz work2   --profile auto 의 후보 (없으면 로그인된 계정 모두)
-#   claude use auto                     --profile 없이 띄울 때 쓸 계정 (AW_CLAUDE_PROFILE 이 먼저)
-# 오케스트레이션을 맡은 계정처럼 워커에 쓰지 않을 계정은 풀에서 빼고 use 를 auto 로 둡니다.
+#   claude pool swchoi1-60hertz work2   계정 풀: --profile pool 의 후보 (없으면 로그인된 계정 모두)
+#   claude use pool                     --profile 없이 띄울 때 쓸 계정 (AW_CLAUDE_PROFILE 이 먼저)
+# 오케스트레이션을 맡은 계정처럼 워커에 쓰지 않을 계정은 풀에서 빼고 use 를 pool 로 둡니다.
 prof_conf_get() { # <에이전트> <키>  → 값 (공백으로 구분)
   [ -f "$AW_PROFILES" ] || return 0
   sed 's/#.*//' "$AW_PROFILES" | awk -v a="$1" -v k="$2" '$1 == a && $2 == k { $1 = ""; $2 = ""; sub(/^ +/, ""); print; exit }'
@@ -1325,7 +1326,7 @@ prof_conf_set() { # <에이전트> <키> [값...]  (값이 없으면 그 줄을 
       awk -v a="$pcs_a" -v k="$pcs_k" '!($1 == a && $2 == k)' "$AW_PROFILES"
     else
       printf '%s\n' "# aw 계정 설정 (aw profile pool, aw profile use 가 씁니다). 한 줄에 '에이전트 키 값...'." \
-        "#   pool  --profile auto 의 후보 계정들   use  --profile 없이 띄울 때 쓸 계정 (auto 면 풀에서 고름)"
+        "#   pool  계정 풀 (--profile pool 의 후보)   use  --profile 없이 띄울 때 쓸 계정 (pool 이면 계정 풀에서 고름)"
     fi
     if [ $# -gt 0 ]; then printf '%s %s %s\n' "$pcs_a" "$pcs_k" "$*"; fi
   } > "$pcs_t" && mv "$pcs_t" "$AW_PROFILES"
@@ -1362,7 +1363,7 @@ prof_names() { # <에이전트>  → 계정 이름들 (default 먼저, 게이트
     [ -d "$pn_d" ] || continue
     pn_n=${pn_d##*/}
     valid_name "$pn_n" || continue
-    case "$pn_n" in default | auto) continue ;; esac
+    case "$pn_n" in default | pool | auto) continue ;; esac
     prof_gateway "$1" "$pn_n" && continue
     printf '%s\n' "$pn_n"
   done
@@ -1522,10 +1523,10 @@ usage_scan() { # <에이전트>
   }
 }
 
-# 최근 사용량이 가장 적은 계정 → "이름<TAB>후보들의 사용량<TAB>고른 계정의 점수" (후보가 없으면 1).
-# 후보는 풀(aw profile pool)이 있으면 그 계정들, 없으면 모든 계정이고, 로그인 안 된 계정은 뺍니다.
+# --profile pool: 계정 풀에서 최근 사용량이 가장 적은 계정 → "이름<TAB>후보들의 사용량<TAB>고른 계정의 점수"
+# (후보가 없으면 1). 계정 풀은 aw profile pool 로 정한 계정들, 없으면 모든 계정이고, 로그인 안 된 계정은 뺍니다.
 # 사용량을 모르는 계정(aw 로 아직 안 써 본 것)은 0 으로 봐서 먼저 씁니다. 같으면 풀 순서 (풀이 없으면 default 먼저).
-profile_auto() { # <에이전트>
+profile_pool_pick() { # <에이전트>
   pa_scan=$(usage_scan "$1")
   pa_pool=$(prof_conf_get "$1" pool)
   pa_best=''; pa_bs=1000; pa_all=''
@@ -1547,12 +1548,16 @@ profile_auto() { # <에이전트>
   printf '%s\t%s\t%s' "$pa_best" "$pa_all" "$pa_bs"
 }
 
+# 0.25 까지 --profile pool 의 이름은 auto 였습니다. claude·codex 의 auto 모드(권한·승인)와 헷갈려 바꿨고,
+# 옛 이름도 받습니다: --profile auto, AW_*_PROFILE=auto, 계정 설정 파일의 'use auto'.
+prof_pool_word() { case "$1" in auto) printf pool ;; *) printf '%s' "$1" ;; esac; }
+
 # 한도에 걸린 것 같으면 다른 계정으로 잇는 법을 알립니다 (aw wait, aw status).
 limit_note() { # <워커디렉터리> [들여쓰기]
   ln_r=$(limit_hit "$1"); [ -n "$ln_r" ] || return 0
   ln_a=$(agent_of "$1"); ln_p=$(worker_profile "$1" "$ln_a")
   warn "${2:-}  한도: $ln_a 계정 ${ln_p:-?} 이 한도에 걸린 것 같습니다 ($ln_r)."
-  warn "${2:-}        다른 계정으로 같은 대화를 이으려면: aw resume $(basename "$1") --profile auto -- '이어서 해줘'   (계정: aw profile)"
+  warn "${2:-}        다른 계정으로 같은 대화를 이으려면: aw resume $(basename "$1") --profile pool -- '이어서 해줘'   (계정: aw profile)"
 }
 
 # 한도에 걸려 실패한 것 같으면 사유 (아니면 빈 값). claude 는 rate_limit_event 의 status rejected,
@@ -2380,7 +2385,7 @@ cmd_run() {
   # CLAUDE_CONFIG_DIR·CODEX_HOME 이 계정 폴더면 (claude-use 로 바꾼 셸 등) 그대로 물려받되 이름을 기록합니다.
   # 이름을 알아야 peek 이 대화 기록·세션 파일을, resume 이 세션을 그 계정에서 찾습니다.
   # default 는 기본 계정입니다. claude 는 변수를 지웁니다 (같은 경로라도 변수가 있으면 계정 정보가 비어 보임).
-  # auto 는 최근 사용량이 가장 적은 계정입니다 (profile_auto).
+  # pool 은 계정 풀에서 최근 사용량이 가장 적은 계정입니다 (profile_pool_pick, 옛 이름 auto 도 받음).
   profile_from=''; profile_why=''; pf_ag=${1##*/}; pf_var=''
   case "$pf_ag" in
     claude) pf_var=CLAUDE_CONFIG_DIR; pf_def=${AW_CLAUDE_PROFILE:-}; pf_cur=${CLAUDE_CONFIG_DIR:-} ;;
@@ -2405,9 +2410,14 @@ cmd_run() {
       fi
     fi
     if [ "$profile" = auto ]; then
-      pf_pick=$(profile_auto "$pf_ag") || die "$pf_ag 에 auto 로 고를 계정이 없습니다 (로그인된 계정$( [ -n "$(prof_conf_get "$pf_ag" pool)" ] && printf ' 중 풀: %s' "$(prof_conf_get "$pf_ag" pool)")). aw profile $pf_ag"
+      [ "$profile_from" = 'aw profile use' ] \
+        || warn "  (${profile_from:---profile} auto 는 이름이 pool 로 바뀌었습니다. 그대로 계정 풀에서 고릅니다)"
+      profile=pool
+    fi
+    if [ "$profile" = pool ]; then
+      pf_pick=$(profile_pool_pick "$pf_ag") || die "$pf_ag 계정 풀에 고를 계정이 없습니다 (로그인된 계정$( [ -n "$(prof_conf_get "$pf_ag" pool)" ] && printf ' 중 풀: %s' "$(prof_conf_get "$pf_ag" pool)")). aw profile $pf_ag"
       profile=${pf_pick%%"$TAB"*}; profile_why=${pf_pick#*"$TAB"}; pf_score=${profile_why##*"$TAB"}
-      profile_why=${profile_why%"$TAB"*}; profile_from=auto
+      profile_why=${profile_why%"$TAB"*}; profile_from=pool
       [ "$pf_score" -ge 100 ] && warn "  (주의: 후보 계정이 모두 한도에 걸려 있었습니다. 고른 $profile 도 초기화 전이면 실패합니다. aw profile $pf_ag)"
     fi
   fi
@@ -2576,7 +2586,7 @@ KIRO
     printf 'stdin=%s\n' "$stdin_file"
     [ -n "$tag" ]      && printf 'tag=%s\n' "$tag"
     [ -n "$profile" ]  && printf 'profile=%s\n' "$profile"
-    [ "$profile_from" = auto ] && printf 'profile_auto=1\n'
+    [ "$profile_from" = pool ] && printf 'profile_pool=1\n'
     [ -n "$cx_home" ]  && printf 'codex_home=%s\n' "$cx_home"
     [ "$briefed" -eq 1 ] && printf 'brief=1\n'
     [ -n "$mdropped" ] && printf 'default_model_dropped=%s\n' "$mdropped"
@@ -2624,8 +2634,8 @@ KIRO
   say "  디렉터리: $dir"
   [ -n "$wt" ] && say "  worktree: $wt  (브랜치 $worktree)"
   say "  명령: $(meta_get "$wd" cmdline)"
-  if [ "$profile_from" = auto ]; then
-    say "  (계정 자동 고름: $profile — 최근 사용량이 가장 적음. 후보: $profile_why)"
+  if [ "$profile_from" = pool ]; then
+    say "  (계정 풀에서 고름: $profile — 최근 사용량이 가장 적음. 후보: $profile_why)"
   elif [ -n "$profile_from" ]; then
     say "  ($pf_ag 계정: $profile — $profile_from 에서. 이번만 다르게: --profile 이름, 기본 계정: --profile default)"
   fi
@@ -3050,7 +3060,7 @@ resume_usage() {
                   같은 세션을 다른 워커가 쓰는 중일 때나, 한 바탕에서 여러 작업을 나란히 돌릴 때 씁니다
   --model 모델    다른 모델로 잇습니다 (모델이 바뀌면 앞 대화를 캐시 없이 다시 읽음)
   --effort 수준   다른 추론 수준으로 잇습니다 (claude·agy 는 --effort, codex 는 model_reasoning_effort)
-  --profile 이름  다른 계정에서 같은 대화를 잇습니다 (한도에 걸렸을 때 등, auto 는 여유가 가장 많은 계정).
+  --profile 이름  다른 계정에서 같은 대화를 잇습니다 (한도에 걸렸을 때 등, pool 은 계정 풀에서 여유가 가장 많은 계정).
                   claude·codex 만. 계정마다 캐시는 따로라 앞 대화를 다시 읽습니다 (aw help profile)
   -n 이름, -d 경로, --tag 문자열, -e K=V, --max-input-tokens N, --no-defaults, --no-brief, --no-say   aw run 과 같음
 
@@ -3169,9 +3179,13 @@ cmd_resume() {
   if [ -n "$set_prof" ]; then
     case "$sagent" in claude | codex) ;; *) die "--profile 은 claude·codex 의 계정입니다." ;; esac
     if [ "$set_prof" = auto ]; then
-      rs_pick=$(profile_auto "$sagent") || die "$sagent 에 auto 로 고를 계정이 없습니다 (로그인된 계정$( [ -n "$(prof_conf_get "$sagent" pool)" ] && printf ' 중 풀: %s' "$(prof_conf_get "$sagent" pool)")). aw profile $sagent"
+      warn "  (--profile auto 는 이름이 pool 로 바뀌었습니다. 그대로 계정 풀에서 고릅니다)"
+      set_prof=pool
+    fi
+    if [ "$set_prof" = pool ]; then
+      rs_pick=$(profile_pool_pick "$sagent") || die "$sagent 계정 풀에 고를 계정이 없습니다 (로그인된 계정$( [ -n "$(prof_conf_get "$sagent" pool)" ] && printf ' 중 풀: %s' "$(prof_conf_get "$sagent" pool)")). aw profile $sagent"
       set_prof=${rs_pick%%"$TAB"*}; rs_why=${rs_pick#*"$TAB"}; rs_score=${rs_why##*"$TAB"}; rs_why=${rs_why%"$TAB"*}
-      prof_note="  (계정 자동 고름: $set_prof — 최근 사용량이 가장 적음. 후보: $rs_why)"
+      prof_note="  (계정 풀에서 고름: $set_prof — 최근 사용량이 가장 적음. 후보: $rs_why)"
       [ "$rs_score" -ge 100 ] && warn "  (주의: 후보 계정이 모두 한도에 걸려 있었습니다. 초기화 전이면 이 계정도 실패합니다. aw profile $sagent)"
     fi
     valid_name "$set_prof" || die "프로필 이름은 영문/숫자/. _ - 만 쓸 수 있습니다: $set_prof"
@@ -4981,13 +4995,14 @@ prof_usage() {
         aw profile add <claude|codex> <이름> [--no-login]  계정 폴더를 만들고 (터미널이면) 로그인
         aw profile login <claude|codex> <이름> [codex login 옵션]   그 계정으로 로그인 (예: --device-auth)
         aw profile rm <claude|codex> <이름> [--yes]        계정 폴더를 지움 (그 계정의 로그인 정보도)
-        aw profile pool <claude|codex> [이름... | --clear]  --profile auto 가 고를 후보 (없으면 로그인된 계정 모두)
-        aw profile use <claude|codex> [이름|auto|default | --clear]   --profile 없이 띄울 때 쓸 계정
+        aw profile pool <claude|codex> [이름... | --clear]  계정 풀: --profile pool 이 고를 후보 (없으면 로그인된 계정 모두)
+        aw profile use <claude|codex> [이름|pool|default | --clear]   --profile 없이 띄울 때 쓸 계정
         aw profile set <claude|codex> <이름> [--model 모델] [--effort 수준] | --clear   그 계정 워커의 기본 모델·수준
 
-워커는 aw run --profile <이름> 으로 그 계정에서 띄웁니다. --profile auto 는 후보 중 최근 사용량이 가장 적은
-계정을 고릅니다. 워커에 쓰지 않을 계정(오케스트레이션용 등)이 있으면 풀에서 빼고 use 를 auto 로 둡니다:
-  aw profile pool claude work-a work-b && aw profile use claude auto
+워커는 aw run --profile <이름> 으로 그 계정에서 띄웁니다. --profile pool 은 계정 풀에서 최근 사용량이 가장 적은
+계정을 고릅니다 (0.25 까지의 이름 auto 도 받음). 워커에 쓰지 않을 계정(오케스트레이션용 등)이 있으면 풀에서 빼고
+use 를 pool 로 둡니다:
+  aw profile pool claude work-a work-b && aw profile use claude pool
 --profile 없을 때 고르는 순서: AW_CLAUDE_PROFILE·AW_CODEX_PROFILE → aw profile use → 셸의 CLAUDE_CONFIG_DIR·CODEX_HOME
 → default. 자세히: aw help profile
 U
@@ -5001,9 +5016,9 @@ prof_current() { # <에이전트>
     claude) pcu_e=${AW_CLAUDE_PROFILE:-}; pcu_v=${CLAUDE_CONFIG_DIR:-} ;;
     codex)  pcu_e=${AW_CODEX_PROFILE:-};  pcu_v=${CODEX_HOME:-} ;;
   esac
-  [ -n "$pcu_e" ] && { printf '%s' "$pcu_e"; return 0; }
+  [ -n "$pcu_e" ] && { prof_pool_word "$pcu_e"; return 0; }
   pcu_u=$(prof_conf_get "$1" use)
-  [ -n "$pcu_u" ] && { printf '%s' "$pcu_u"; return 0; }
+  [ -n "$pcu_u" ] && { prof_pool_word "$pcu_u"; return 0; }
   pcu_v=${pcu_v%/}; pcu_r=$(prof_root "$1")
   case "$pcu_v" in
     '' | "$(prof_base "$1")") printf default ;;
@@ -5038,33 +5053,33 @@ prof_pool() { # <claude|codex> [이름... | --clear]
   shift
   if [ $# -eq 0 ]; then
     pp_v=$(prof_conf_get "$pp_a" pool)
-    if [ -n "$pp_v" ]; then say "$pp_a auto 후보: $pp_v"; else say "$pp_a auto 후보: 로그인된 계정 모두 (풀 없음)"; fi
+    if [ -n "$pp_v" ]; then say "$pp_a 계정 풀: $pp_v"; else say "$pp_a 계정 풀: 로그인된 계정 모두 (정해 두지 않음)"; fi
     return 0
   fi
   if [ "$1" = --clear ]; then
     prof_conf_set "$pp_a" pool || die "쓸 수 없습니다: $AW_PROFILES"
-    say "$pp_a auto 후보: 로그인된 계정 모두 (풀을 지움)"
+    say "$pp_a 계정 풀: 로그인된 계정 모두 (정해 둔 풀을 지움)"
     return 0
   fi
   pp_l=''
   for pp_n in "$@"; do
-    case "$pp_n" in auto) die "auto 는 풀에 넣을 수 없습니다 (계정 이름을 주세요)" ;; -*) die "aw profile pool 이 모르는 옵션입니다: $pp_n" ;; esac
+    case "$pp_n" in pool | auto) die "$pp_n 은 계정 풀에 넣을 수 없습니다 (계정 이름을 주세요)" ;; -*) die "aw profile pool 이 모르는 옵션입니다: $pp_n" ;; esac
     prof_exists "$pp_a" "$pp_n" || die "그런 $pp_a 계정이 없습니다: $pp_n   (목록: aw profile $pp_a, 만들기: aw profile add $pp_a $pp_n)"
     case " $pp_l " in *" $pp_n "*) continue ;; esac
     pp_l="$pp_l${pp_l:+ }$pp_n"
     pp_cr=0; prof_cred "$pp_a" "$pp_n" || pp_cr=$?
-    [ "$pp_cr" -eq 1 ] && warn "  ($pp_n 은 아직 로그인돼 있지 않아 auto 가 고르지 않습니다: aw profile login $pp_a $pp_n)"
+    [ "$pp_cr" -eq 1 ] && warn "  ($pp_n 은 아직 로그인돼 있지 않아 --profile pool 이 고르지 않습니다: aw profile login $pp_a $pp_n)"
   done
   prof_conf_set "$pp_a" pool "$pp_l" || die "쓸 수 없습니다: $AW_PROFILES"
-  say "$pp_a auto 후보: $pp_l   ($(tilde "$AW_PROFILES"))"
+  say "$pp_a 계정 풀: $pp_l   ($(tilde "$AW_PROFILES"))"
   pp_u=$(prof_current "$pp_a")
-  [ "$pp_u" = auto ] || say "  --profile 없이 띄우는 워커는 지금 $pp_u 입니다. 늘 이 풀에서 고르게 하려면: aw profile use $pp_a auto"
+  [ "$pp_u" = pool ] || say "  --profile 없이 띄우는 워커는 지금 $pp_u 입니다. 늘 이 풀에서 고르게 하려면: aw profile use $pp_a pool"
   return 0
 }
 
-prof_use() { # <claude|codex> [이름|auto|default | --clear]
+prof_use() { # <claude|codex> [이름|pool|default | --clear]
   pu_a=${1:-}
-  prof_agent_ok "$pu_a" || die "사용법: aw profile use <claude|codex> [이름|auto|default | --clear]"
+  prof_agent_ok "$pu_a" || die "사용법: aw profile use <claude|codex> [이름|pool|default | --clear]"
   shift
   pu_env=''; case "$pu_a" in claude) pu_env=${AW_CLAUDE_PROFILE:-} ;; codex) pu_env=${AW_CODEX_PROFILE:-} ;; esac
   pu_envn="AW_$(printf '%s' "$pu_a" | tr 'a-z' 'A-Z')_PROFILE"
@@ -5072,15 +5087,16 @@ prof_use() { # <claude|codex> [이름|auto|default | --clear]
     say "--profile 없이 띄우는 $pu_a 워커: $(prof_current "$pu_a")   ($(prof_current_src "$pu_a"))"
     return 0
   fi
-  [ $# -eq 1 ] || die "사용법: aw profile use <claude|codex> [이름|auto|default | --clear]"
+  [ $# -eq 1 ] || die "사용법: aw profile use <claude|codex> [이름|pool|default | --clear]"
   case "$1" in
     --clear)
       prof_conf_set "$pu_a" use || die "쓸 수 없습니다: $AW_PROFILES"
       say "--profile 없이 띄우는 $pu_a 워커: $(prof_current "$pu_a")   ($(prof_current_src "$pu_a"))" ;;
-    auto)
-      prof_conf_set "$pu_a" use auto || die "쓸 수 없습니다: $AW_PROFILES"
+    pool | auto)
+      [ "$1" = auto ] && warn "  (auto 는 이름이 pool 로 바뀌었습니다. pool 로 적어 둡니다)"
+      prof_conf_set "$pu_a" use pool || die "쓸 수 없습니다: $AW_PROFILES"
       pu_p=$(prof_conf_get "$pu_a" pool)
-      say "--profile 없이 띄우는 $pu_a 워커: auto — ${pu_p:+풀($pu_p) 중 }최근 사용량이 가장 적은 계정"
+      say "--profile 없이 띄우는 $pu_a 워커: pool — 계정 풀${pu_p:+($pu_p)}에서 최근 사용량이 가장 적은 계정"
       [ -n "$pu_p" ] || say "  풀이 없어 로그인된 계정 모두가 후보입니다. 워커에 쓰지 않을 계정이 있으면: aw profile pool $pu_a <쓸 계정...>" ;;
     -*) die "aw profile use 가 모르는 옵션입니다: $1" ;;
     *)
@@ -5143,7 +5159,7 @@ prof_set() { # <claude|codex> <이름> [--model 모델] [--effort 수준] | --cl
   fi
   pz_s=$(prof_settings "$pz_a" "$pz_n")
   say "$pz_a 계정 $pz_n 의 기본: $(settings_str "${pz_s%%"$TAB"*}" "${pz_s#*"$TAB"}")   ($(tilde "$AW_DEFAULTS"))"
-  say "  이 계정으로 띄우는 워커(--profile $pz_n, auto 로 골라도)에 일반 기본값 대신 붙습니다. --model 을 직접 주면 그게 먼저."
+  say "  이 계정으로 띄우는 워커(--profile $pz_n, pool 로 골라도)에 일반 기본값 대신 붙습니다. --model 을 직접 주면 그게 먼저."
   if [ -n "$pz_m" ] && [ "$pz_a" = codex ]; then
     pz_k=0; model_known codex "$pz_m" >/dev/null 2>&1 || pz_k=$?
     [ "$pz_k" -eq 1 ] && warn "  (주의: $pz_m 은 codex 의 모델 목록에 없어 띄울 때 빠집니다: aw models codex)"
@@ -5173,8 +5189,8 @@ prof_list() { # [claude|codex] [-q] [--json]
       [ "$pl_a" = codex ] && say ""
       say "$pl_a 계정   (aw run --profile <이름> -- $pl_a …)"
       say "  --profile 없이 띄우면: $pl_cur   ($(prof_current_src "$pl_a"))"
-      if [ -n "$pl_pool" ]; then say "  auto 후보: $pl_pool   (aw profile pool $pl_a)"
-      else say "  auto 후보: 로그인된 계정 모두   (정하려면 aw profile pool $pl_a <이름...>)"; fi
+      if [ -n "$pl_pool" ]; then say "  계정 풀: $pl_pool   (aw profile pool $pl_a)"
+      else say "  계정 풀: 로그인된 계정 모두   (정하려면 aw profile pool $pl_a <이름...>)"; fi
     fi
     for pl_p in $(prof_names "$pl_a"); do
       pl_d=$(prof_dir "$pl_a" "$pl_p")
@@ -5227,8 +5243,8 @@ prof_list() { # [claude|codex] [-q] [--json]
   if [ "$pl_json" -eq 1 ]; then printf '\n]\n'; return 0; fi
   say ""
   say "* 는 --profile 없이 띄울 때 쓰는 계정. 사용량은 그 계정으로 돈 가장 최근 aw 워커의 출력에서 읽은 것입니다."
-  say "만들기: aw profile add <claude|codex> <이름>    여유 있는 계정으로: aw run --profile auto -- …"
-  say "워커에 쓰지 않을 계정이 있으면: aw profile pool <에이전트> <쓸 계정...> && aw profile use <에이전트> auto"
+  say "만들기: aw profile add <claude|codex> <이름>    여유 있는 계정으로: aw run --profile pool -- …"
+  say "워커에 쓰지 않을 계정이 있으면: aw profile pool <에이전트> <쓸 계정...> && aw profile use <에이전트> pool"
 }
 
 # 계정 폴더를 만들고 기본 폴더의 공유할 것을 링크합니다. 이미 있으면 빠진 링크만 채웁니다.
@@ -5266,7 +5282,7 @@ prof_add() { # <claude|codex> <이름> [--no-login | --login]
     shift
   done
   valid_name "$pd_n" || die "프로필 이름은 영문/숫자/. _ - 만 쓸 수 있습니다: $pd_n"
-  case "$pd_n" in default | auto) die "$pd_n 은 정해진 이름이라 쓸 수 없습니다 (default 는 기본 계정 $(tilde "$(prof_base "$pd_a")"))" ;; esac
+  case "$pd_n" in default | pool | auto) die "$pd_n 은 정해진 이름이라 쓸 수 없습니다 (default 는 기본 계정 $(tilde "$(prof_base "$pd_a")"))" ;; esac
   pd_d=$(prof_dir "$pd_a" "$pd_n")
   prof_gateway "$pd_a" "$pd_n" && die "$pd_n 은 aw gateway 가 만든 게이트웨이 프로필입니다. 다른 이름을 쓰세요."
   pd_new=1; [ -d "$pd_d" ] && pd_new=0
@@ -5343,7 +5359,7 @@ prof_rm() { # <claude|codex> <이름> [--yes]
     *" $pr_n "*)
       pr_np=$(printf '%s' "$pr_pool" | tr ' ' '\n' | grep -vx "$pr_n" | tr '\n' ' ' | sed 's/ $//')
       if [ -n "$pr_np" ]; then prof_conf_set "$pr_a" pool "$pr_np"; else prof_conf_set "$pr_a" pool; fi
-      say "  auto 후보에서도 뺌: ${pr_np:-(풀 없음, 로그인된 계정 모두)}" ;;
+      say "  계정 풀에서도 뺌: ${pr_np:-(로그인된 계정 모두)}" ;;
   esac
   if [ -n "$(defaults_for "$pr_a@$pr_n")" ]; then
     defaults_unset "$pr_a@$pr_n" >/dev/null
@@ -6111,13 +6127,13 @@ aw rm review
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
 - **계정(프로필)**: 사용자가 claude·codex 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- …` 입니다
   (계정 목록과 최근 사용량: `aw profile`, 기본 계정은 `default`). 셸에 `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` 이 있으면
-  그 계정이 기본입니다. 여유 있는 계정으로 돌려 달라고 하면 `--profile auto`. 계정 만들기·로그인은 브라우저 확인이
+  그 계정이 기본입니다. 여유 있는 계정으로 돌려 달라고 하면 `--profile pool`(계정 풀에서 사용량이 가장 적은 계정). 계정 만들기·로그인은 브라우저 확인이
   필요해 사용자가 터미널에서 합니다 (`aw profile add <claude|codex> <이름>`). 대신 하지 않습니다.
-  사용자가 워커에 쓰지 않을 계정(오케스트레이션용 등)을 말하면 `aw profile pool`·`aw profile use <에이전트> auto` 로
+  사용자가 워커에 쓰지 않을 계정(오케스트레이션용 등)을 말하면 `aw profile pool`·`aw profile use <에이전트> pool` 로
   정해 두자고 권합니다. 정해져 있으면 `--profile` 을 따로 주지 않습니다 (aw 가 풀에서 고름).
   계정마다 모델·수준을 정해 두었으면(`aw profile set`, 목록의 "기본 모델·수준") `--model` 도 주지 않습니다.
 - **한도에 걸렸다고 `aw wait`·`aw status` 가 알리면** 사용자에게 전하고, 다른 계정으로 이을지 묻습니다(사용자가 미리
-  허락했으면 바로). 잇는 법: `aw resume <이름> --profile auto -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
+  허락했으면 바로). 잇는 법: `aw resume <이름> --profile pool -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
   캐시는 계정마다 따로라 앞 대화를 다시 읽습니다.
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은

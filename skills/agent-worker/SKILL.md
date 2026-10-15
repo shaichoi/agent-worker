@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.25.1"
+  version: "0.26.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -140,13 +140,13 @@ aw rm review
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
 - **계정(프로필)**: 사용자가 claude·codex 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- …` 입니다
   (계정 목록과 최근 사용량: `aw profile`, 기본 계정은 `default`). 셸에 `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` 이 있으면
-  그 계정이 기본입니다. 여유 있는 계정으로 돌려 달라고 하면 `--profile auto`. 계정 만들기·로그인은 브라우저 확인이
+  그 계정이 기본입니다. 여유 있는 계정으로 돌려 달라고 하면 `--profile pool`(계정 풀에서 사용량이 가장 적은 계정). 계정 만들기·로그인은 브라우저 확인이
   필요해 사용자가 터미널에서 합니다 (`aw profile add <claude|codex> <이름>`). 대신 하지 않습니다.
-  사용자가 워커에 쓰지 않을 계정(오케스트레이션용 등)을 말하면 `aw profile pool`·`aw profile use <에이전트> auto` 로
+  사용자가 워커에 쓰지 않을 계정(오케스트레이션용 등)을 말하면 `aw profile pool`·`aw profile use <에이전트> pool` 로
   정해 두자고 권합니다. 정해져 있으면 `--profile` 을 따로 주지 않습니다 (aw 가 풀에서 고름).
   계정마다 모델·수준을 정해 두었으면(`aw profile set`, 목록의 "기본 모델·수준") `--model` 도 주지 않습니다.
 - **한도에 걸렸다고 `aw wait`·`aw status` 가 알리면** 사용자에게 전하고, 다른 계정으로 이을지 묻습니다(사용자가 미리
-  허락했으면 바로). 잇는 법: `aw resume <이름> --profile auto -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
+  허락했으면 바로). 잇는 법: `aw resume <이름> --profile pool -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
   캐시는 계정마다 따로라 앞 대화를 다시 읽습니다.
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
