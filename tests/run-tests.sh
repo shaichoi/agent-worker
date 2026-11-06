@@ -106,9 +106,23 @@ if command -v setsid >/dev/null 2>&1; then
   check "stop 이 새 세션으로 빠져나간 하위 프로세스도 끊음" 0 "$alive"
   for k in $sp; do kill -KILL "$k" 2>/dev/null; done
 fi
-if command -v setsid >/dev/null 2>&1; then
+# 워커는 새 세션의 리더로 뜹니다 (setsid, 없으면 perl 의 POSIX::setsid). 터미널에서도 떨어져야 tuios 같은
+# 멀티플렉서가 터미널로 워커를 pane 과 잇지 못합니다.
+if command -v setsid >/dev/null 2>&1 || command -v perl >/dev/null 2>&1; then
   gpid=$(cat "$AW_HOME/workers/withkids/pgid" 2>/dev/null || printf '')
-  if [ -n "$gpid" ]; then ok "setsid 로 띄우면 pgid 를 남김"; else ng "pgid 파일이 없음"; fi
+  if [ -n "$gpid" ]; then ok "새 세션으로 띄우면 pgid 를 남김"; else ng "pgid 파일이 없음"; fi
+  "$AW" run -n sess -- sh -c 'ps -o pgid= -p $$; ps -o tty= -p $$' >/dev/null 2>&1
+  "$AW" wait sess >/dev/null 2>&1
+  sg=$(tr -d ' ' < "$AW_HOME/workers/sess/pgid" 2>/dev/null)
+  check "워커 명령은 run.sh 가 이끄는 새 그룹 안" "$sg" "$("$AW" result sess | sed -n 1p | tr -d ' ')"
+  if tty -s 2>/dev/null; then
+    case "$("$AW" result sess | sed -n 2p | tr -d ' ')" in
+      '?' | '??' | '') ok "터미널에서 돌려도 워커는 터미널에서 떨어져 뜸" ;;
+      *) ng "워커가 터미널을 물려받음: $("$AW" result sess | sed -n 2p)" ;;
+    esac
+  fi
+fi
+if command -v setsid >/dev/null 2>&1; then
 
   # 명령이 스스로 새 그룹으로 빠져나가면 워커 그룹은 비어 버립니다.
   # 그룹만 보고 "끝났다" 판정하면 명령이 살아남은 채 stopped 로 기록됩니다.
@@ -155,6 +169,15 @@ check "--env 를 여러 번 줘도 각각 온전함" '[첫 값][둘째 값]' "$(
 AW_WORKER='' "$AW" run -n env-worker -- sh -c 'echo "$AW_WORKER"' >/dev/null 2>&1
 "$AW" wait env-worker >/dev/null 2>&1
 check "워커 안에서 AW_WORKER 가 워커 이름" env-worker "$("$AW" result env-worker)"
+# 터미널 멀티플렉서(tuios, herdr)가 pane 의 셸에 붙이는 이름표는 워커에 넘기지 않습니다. 물려받으면 워커 안
+# claude 의 훅이 워커 대화를 그 pane 의 대화로 보고해, 재부팅 뒤 pane 이 워커 대화로 되살아났습니다 (실측).
+TUIOS_PANE_ID=p1 TUIOS_SESSION=s1 TUIOS_PANE_TOKEN=t1 HERDR_ENV=1 HERDR_PANE_ID=h1 TUIOSX=keep AW_TEST_VAR=keep \
+  "$AW" run -n env-pane -- sh -c 'env | grep -E "^(TUIOS|HERDR)_" | sort; echo "[$AW_WORKER][$TUIOSX][$AW_TEST_VAR]"' >/dev/null 2>&1
+"$AW" wait env-pane >/dev/null 2>&1
+check "pane 이름표(TUIOS_*, HERDR_*)는 워커에 안 넘기고 나머지는 그대로" "[env-pane][keep][keep]" "$("$AW" result env-pane)"
+TUIOS_PANE_ID=p1 "$AW" run -n env-pane-e -e TUIOS_PANE_ID=mine -- sh -c 'echo "$TUIOS_PANE_ID"' >/dev/null 2>&1
+"$AW" wait env-pane-e >/dev/null 2>&1
+check "-e 로 직접 준 이름표는 넘김" mine "$("$AW" result env-pane-e)"
 # --profile 도 같은 자리에 쌓이므로 경로에 공백이 있으면 함께 깨졌습니다.
 mkdir -p "$TMPROOT/공백 있는 경로/work" "$TMPROOT/spbin"
 printf '#!/bin/sh\necho "$CLAUDE_CONFIG_DIR"\n' > "$TMPROOT/spbin/claude"; chmod +x "$TMPROOT/spbin/claude"
@@ -569,6 +592,10 @@ check "agy: --conversation 을 붙이고 -p= 를 갈아 끼움" \
 check "codex: exec resume 으로 바꾸고 기본 옵션은 resume 앞에" \
   "$(printf -- 'exec\n--sandbox\nworkspace-write\nresume\nTID1\n--json\n새프롬프트')" \
   "$("$AW" errs r-codex-r1)"
+TUIOS_PANE_ID=p1 HERDR_PANE_ID=h1 "$AW" resume r-codex -n r-codex-pane -- 새프롬프트 >/dev/null 2>&1
+"$AW" wait r-codex-pane >/dev/null 2>&1
+has "이어하기도 pane 이름표를 지우고 띄움" "$(cat "$AW_HOME/workers/r-codex-pane/launch.sh")" "unset TUIOS_PANE_ID"
+has "이어하기도 herdr 이름표를 지움" "$(cat "$AW_HOME/workers/r-codex-pane/launch.sh")" "unset HERDR_PANE_ID"
 
 # codex 의 stdin 표식 '-' 는 새 프롬프트와 같이 있으면 안 됩니다
 printf '사양\n' > "$TMPROOT/rspec.md"

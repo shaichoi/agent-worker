@@ -764,6 +764,14 @@ $ aw setup
 **워커가 워커를 낳지 않게** 워커 안에는 환경변수 `AW_WORKER`(그 워커 이름)가 들어 있습니다. 스킬은 이게 있으면
 프롬프트가 분명히 요구하지 않는 한 워커를 더 띄우지 않도록 합니다.
 
+**워커는 띄운 pane 과 끊고 띄웁니다.** tuios·herdr 같은 터미널 멀티플렉서는 pane 안의 셸에 이름표 환경변수
+(`TUIOS_*`, `HERDR_*`)를 붙이고, claude·codex 에 설치한 훅이 이것을 보고 "이 pane 에서 도는 대화"를 알립니다.
+워커가 이름표를 물려받으면 워커 대화가 그 pane 의 대화로 기록돼, 재부팅 뒤 tuios 가 그 pane 을 원래 대화 대신
+워커 대화로 되살렸습니다(실측). 그래서 aw 는 이 변수들을 지우고(`-e` 로 직접 준 값은 넘김), 워커를 터미널에서도
+떼어 띄웁니다(`setsid`, 없는 macOS 는 perl 의 `POSIX::setsid`). tuios 훅은 이름표가 없으면 터미널로 pane 을
+찾기 때문입니다. 실측: 고치기 전에는 tuios pane 에서 띄운 `claude -p` 워커의 세션이 그 pane 에 기록됐고(Linux,
+macOS), 고친 뒤에는 기록되지 않았습니다. pane 의 자격 증명(`TUIOS_PANE_TOKEN` 등)도 워커에 넘어가지 않습니다.
+
 ## 워커 지시문 (brief)
 
 워커 프롬프트 **앞에** 붙는 지시문입니다. 권장값은 두 가지를 부탁합니다.
@@ -1261,7 +1269,7 @@ aw 가 1 로 남김, [위](#kiro-cli--kiro-cli) 참고), `stopped`(`aw stop`),
 | `AW_DEFAULTS` | `~/.config/agent-worker/defaults` | 에이전트별 기본 옵션(권한, 모델) 파일 |
 | `AW_NO_DEFAULTS` | (없음) | `1` 이면 기본 옵션을 붙이지 않음 |
 | `AW_PREFIX` | `~/.local/bin` | `install.sh` / `aw uninstall` 의 설치 위치 |
-| `AW_WORKER` | (워커 안에서만) | `aw` 가 워커에 넣어 주는 그 워커 이름. 중첩 확인용 |
+| `AW_WORKER` | (워커 안에서만) | `aw` 가 워커에 넣어 주는 그 워커 이름. 중첩 확인용. 반대로 `TUIOS_*`·`HERDR_*` 는 워커에서 지움 |
 | `AW_QUIET` | `300` | `aw peek` 이 조용함을 알리는 기준(초) |
 | `AW_CLAUDE_PROFILE` | (없음) | `--profile` 을 주지 않은 claude 워커가 쓸 계정 (`~/.claude-profiles/<이름>`, `default` 는 기본 계정, `pool`) |
 | `AW_CODEX_PROFILE` | (없음) | `--profile` 을 주지 않은 codex 워커가 쓸 계정 (`~/.codex-profiles/<이름>`, `default`, `pool`) |
@@ -1302,7 +1310,8 @@ AW_HOME=/tmp/aw-test aw run -- echo 시험
 
 **`stop`은 하위 프로세스까지 끊습니다.** 프로세스 그룹째 끊고, 부모-자식 관계로 찾은 하위 프로세스도
 전부 끊습니다. 에이전트는 도구 명령(테스트 러너, 빌드 등)을 새 세션으로 떼어 띄워서 그룹째 끊어도
-남기 때문입니다(실측: claude, codex). `setsid`가 없는 macOS 도 이렇게 정리됩니다(실측). 다만 하위 프로세스가
+남기 때문입니다(실측: claude, codex). `setsid`가 없는 macOS 는 perl(기본으로 있음)의 `POSIX::setsid` 로 같은
+방식으로 떼어 띄웁니다. 다만 하위 프로세스가
 스스로 부모와 연을 끊고 떠나 버린(데몬이 된) 경우는 찾을 수 없습니다.
 
 **출력은 파일에 그대로 쌓입니다.** 매우 긴 작업이면 `out` 파일이 커질 수 있으니

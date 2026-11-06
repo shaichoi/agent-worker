@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.26.0
+AW_VERSION=0.26.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -331,7 +331,7 @@ T
   out / err 표준 출력 / 표준 오류
   exit      종료 코드 (이 파일이 생기면 끝난 것)
   pid       실행 중인 명령의 pid
-  pgid      프로세스 그룹 (aw stop 이 이 그룹째 종료. setsid 가 있을 때만)
+  pgid      프로세스 그룹 (aw stop 이 이 그룹째 종료. setsid 나 perl 로 떼어 띄웠을 때만)
   run.sh    실제로 돌린 스크립트 (그대로 다시 실행 가능)
   inbox     (aw say) claude 의 표준 입력. 첫 줄이 프롬프트, aw say 가 한 줄씩 덧붙임 (stream-json)
   say.sh, tailpid, inbox.closed   (aw say) 일을 마치면 입력을 닫는 감시, inbox 를 따라가는 tail, 닫았다는 표시
@@ -345,6 +345,8 @@ T
           AW_PICK, AW_PICK_KEYFILE, AW_PICK_MIN_CONFIDENCE, AW_PICK_FALLBACK, AW_PICK_WITHOUT,
           TYPESAFE_API_KEY (aw help pick)
 워커 안에서는 AW_WORKER 에 그 워커 이름이 들어 있습니다 (중첩 확인용).
+tuios·herdr 의 pane 이름표(TUIOS_*, HERDR_*)는 워커에 넘기지 않고, 워커는 터미널에서도 떼어 띄웁니다
+(워커 대화가 그 pane 의 대화로 기록되지 않게. -e 로 직접 준 값은 넘김).
 T
       ;;
     limits) cat <<'T'
@@ -592,6 +594,14 @@ add_env() { # <KEY=VAL>
 "
 }
 
+# 터미널 멀티플렉서가 pane 안의 셸에 붙이는 이름표(tuios 의 TUIOS_*, herdr 의 HERDR_*)는 워커에 넘기지 않습니다.
+# 물려받으면 워커 안 claude·codex 의 훅이 워커 대화를 그 pane 의 대화로 보고해, 재부팅 뒤 tuios 가 그 pane 을
+# 원래 대화 대신 워커 대화로 되살렸습니다 (실측). pane 의 자격 증명(TUIOS_PANE_TOKEN 등)도 함께 빠집니다.
+# 지금 환경에 있는 이름만 냅니다. -e 로 직접 준 값은 run.sh 에서 그 뒤에 다시 넣습니다.
+pane_env_names() {
+  env | sed -n 's/^\(TUIOS_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(HERDR_[A-Za-z0-9_]*\)=.*/\1/p' | LC_ALL=C sort -u
+}
+
 valid_name() {
   case "$1" in
     '' | . | .. | .* | *[!A-Za-z0-9._-]*) return 1 ;;
@@ -652,6 +662,10 @@ from_old_boot() { # <워커디렉터리>  재부팅 전에 띄운 워커면 0 (�
   ob_now=$(boot_id); [ -n "$ob_now" ] && [ "$ob_b" != "$ob_now" ]
 }
 
+# setsid 가 없을 때(macOS) 워커를 새 세션으로 띄우는 perl. setsid(1) 처럼, 이미 그룹 리더라 setsid() 가
+# 실패하면 한 번 갈라져서 다시 합니다. 새 세션에는 제어 터미널이 없습니다.
+PERL_SETSID='defined(POSIX::setsid()) or do { exit 0 if fork; POSIX::setsid() }; exec @ARGV; exit 127'
+
 # 워커는 setsid 로 띄우면 자기 프로세스 그룹을 가집니다. 그때는 그룹째 다뤄야
 # 에이전트가 띄운 하위 프로세스(테스트 러너 등)가 고아로 남지 않습니다.
 sig_worker() { # <시그널> <pgid(빈값 가능)> <pid>
@@ -667,7 +681,7 @@ worker_alive() { # <pgid(빈값 가능)> <pid>
 }
 
 # 하위 프로세스 전부 (자기 자신은 뺌). 에이전트는 도구 명령을 새 세션으로 떼어 띄워서
-# 프로세스 그룹째 끊어도 남습니다 (실측: claude, codex). setsid 가 없는 macOS 는 그룹
+# 프로세스 그룹째 끊어도 남습니다 (실측: claude, codex). setsid·perl 이 둘 다 없으면 그룹
 # 자체가 없습니다. 그래서 stop 은 그룹과 함께 이것도 끊습니다.
 proc_descendants() { # <pid>
   ps -eo pid=,ppid= 2>/dev/null | awk -v root="$1" '
@@ -2237,6 +2251,8 @@ write_launch() { # <파일> <따옴표로 감싼 인자들> [say]
     printf 'cd %s || { printf "127\\n" > %s/exit; exit 127; }\n' "$(shquote "$dir")" "$(shquote "$wd")"
     # 워커 안의 에이전트가 자기가 워커인지 알 수 있게 합니다 (중첩 확인용).
     printf 'export AW_WORKER=%s\n' "$(shquote "$name")"
+    # pane 이름표는 지웁니다 (pane_env_names).
+    pane_env_names | while IFS= read -r we_n; do printf 'unset %s\n' "$we_n"; done
     printf '%s' "$envs"
     if [ "${3:-}" = say ]; then
       # aw say: 표준 입력은 inbox 를 tail -f 로 따라가는 파이프입니다. 첫 줄이 프롬프트이고 aw say 가 줄을 덧붙입니다.
@@ -2489,9 +2505,13 @@ cmd_run() {
     fb_words=$(stdin_file=$stdin_orig; added=''; mdropped=''; pdropped=''; eval "set -- $run_fallback"; run_argv "$@"; printf '%s' "$rw_words")
   fi
 
-  # setsid 가 있으면 워커를 새 프로세스 그룹의 리더로 띄울 수 있습니다.
-  leader=0
-  command -v setsid >/dev/null 2>&1 && leader=1
+  # 워커는 새 세션(프로세스 그룹)의 리더로, 터미널에서 떼어 띄웁니다. 그래야 aw stop 이 그룹째 끊고, tuios 같은
+  # 멀티플렉서가 터미널로 워커를 pane 과 잇지 못합니다 (pane_env_names). setsid 가 없는 macOS 는 perl 의
+  # POSIX::setsid 로 같은 일을 합니다 (macOS 에 기본으로 있음). 둘 다 없으면 nohup 이고 그룹은 남기지 않습니다.
+  leader=0; detach=nohup
+  if command -v setsid >/dev/null 2>&1; then leader=1; detach=setsid
+  elif command -v perl >/dev/null 2>&1; then leader=1; detach=perl
+  fi
 
   # aw say: claude -p --output-format stream-json 이면 실행 중에도 메시지를 넣을 수 있게 띄웁니다.
   # 프롬프트는 사용자가 준 마지막 인자(기본 옵션은 그 뒤에 붙음)나 -f 의 파일입니다. 둘 다 있으면(파일 + 인자
@@ -2530,7 +2550,7 @@ cmd_run() {
   # exec 는 종료 코드를 남길 수 없으므로 한 겹 더 감쌉니다.
   {
     printf '%s\n' '#!/bin/sh'
-    # setsid 로 띄우면 이 스크립트가 세션/그룹 리더라 $$ 가 곧 PGID 입니다.
+    # setsid(또는 perl 의 POSIX::setsid)로 띄우면 이 스크립트가 세션/그룹 리더라 $$ 가 곧 PGID 입니다.
     # nohup 폴백은 새 그룹을 만들지 않으므로(= aw 자신의 그룹) 남기지 않습니다.
     [ "$leader" -eq 1 ] && printf 'printf "%%s\\n" "$$" > %s/pgid\n' "$(shquote "$wd")"
     printf 'st=$(date +%%s)\n'
@@ -2617,11 +2637,11 @@ KIRO
   gw_key_for_run "$@"
 
   # 셸에서 떼어내 실행 (대화형 셸의 작업 목록에 남지 않게)
-  if [ "$leader" -eq 1 ]; then
-    ( setsid sh "$wd/run.sh" </dev/null >/dev/null 2>&1 & )
-  else
-    ( nohup sh "$wd/run.sh" </dev/null >/dev/null 2>&1 & )
-  fi
+  case "$detach" in
+    setsid) ( setsid sh "$wd/run.sh" </dev/null >/dev/null 2>&1 & ) ;;
+    perl)   ( perl -MPOSIX -e "$PERL_SETSID" sh "$wd/run.sh" </dev/null >/dev/null 2>&1 & ) ;;
+    *)      ( nohup sh "$wd/run.sh" </dev/null >/dev/null 2>&1 & ) ;;
+  esac
 
   # pid 파일이 생길 때까지 잠깐 기다립니다 (바로 list 를 봐도 보이도록)
   i=0
