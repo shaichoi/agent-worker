@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.26.1
+AW_VERSION=0.26.2
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
@@ -105,7 +105,7 @@ claude/codex/kiro-cli 는 프롬프트를 맨 끝 인자로 둬야 이어할 때
 aw peek / aw logs -f 로 보이고, 끝난 뒤 --field 는 json 과 똑같이 됩니다.
 
 모델을 안 고르면 기본 옵션(aw defaults)이 claude 에 claude-opus-5-5 와 --effort xhigh, codex 에 gpt-6.1-sol,
-agy 에 gemini-3.8-flash, devin 에 swe-2-max, kiro-cli 에 claude-opus-5.5 를 붙입니다.
+agy 에 gemini-4-hydrogen(high), devin 에 swe-2-max, kiro-cli 에 claude-opus-5.5 를 붙입니다.
 바꾸려면 aw defaults set <명령> --model ...   (그 CLI 의 목록에 없는 모델이면 빼고 CLI 기본으로: aw models)
 
 claude — Claude Code
@@ -125,15 +125,15 @@ claude — Claude Code
 agy — Antigravity CLI (Gemini)
   aw run -n a1 -- agy --output-format stream-json -p='작업'
   aw run -n a2 -f spec.md -- agy --output-format stream-json   # -p 를 빼야 함
-  aw run -n a3 -- agy --output-format stream-json --model gemini-3.1-pro-high -p='작업'
+  aw run -n a3 -- agy --output-format stream-json --model gemini-4-argon-high -p='작업'
   aw result a1 --field response      # 상태: --field status (SUCCESS)
   --output-format json 이면 끝날 때까지 출력이 없고 aw peek 은 지금 도는 명령만 보여 줍니다.
   이어하기: --conversation <conversation_id>
   주의: -p 는 바로 다음 토큰을 프롬프트로 먹습니다.
         -p='작업' 형태로 붙이면 플래그 순서와 무관합니다.
         -p 와 stdin 을 같이 주면 -p 가 이기고 stdin 은 무시됩니다.
-        --model gemini-3.8-flash 처럼 수준을 뺀 이름은 --effort 가 있어야 합니다.
-        gemini-3.8-flash-high 에 --effort low 를 같이 주면 부딪쳐 실패합니다.
+        --model gemini-4-hydrogen 처럼 수준을 뺀 이름은 --effort 가 있어야 합니다 (low, medium, high, xhigh).
+        gemini-4-hydrogen-high 에 --effort low 를 같이 주면 부딪쳐 실패합니다.
   모델 목록: agy models
 
 devin
@@ -1643,8 +1643,9 @@ claude --effort xhigh
 # 따르고, 설정이 없으면 이 모델의 기본(low)으로 돕니다. codex 0.158 은 이 모델을 거절하니
 # 목록(aw models codex)에 없으면 codex update 를 하세요 (0.159.2 에서 확인).
 codex --model gpt-6.1-sol
-# agy 의 gemini-3.8-flash 는 --effort(low, medium, high)가 있어야 해서 한 줄로 둡니다.
-agy --model gemini-3.8-flash --effort high
+# agy 는 Gemini 4 Hydrogen(2026-11, 3.8 Flash 의 후속, Google AI Pro 이상)을 기본으로 둡니다. 수준을 뗀 이름은
+# --effort(low, medium, high, xhigh)가 있어야 해서 한 줄로 둡니다. Google 의 기본 수준인 high 입니다.
+agy --model gemini-4-hydrogen --effort high
 # devin 의 SWE-2 는 swe-2-medium, swe-2-high, swe-2-max 가 있습니다 (swe-2 만 주면 high).
 devin --model swe-2-max
 kiro-cli --model claude-opus-5.5
@@ -1742,7 +1743,7 @@ defaults_init() { # [--force]
   recommended_defaults > "$AW_DEFAULTS" || return 1
   say "기본 옵션을 켰습니다: $AW_DEFAULTS"
   say "  이제 워커가 에이전트의 승인 절차를 건너뜁니다."
-  say "  모델을 안 고르면 claude 는 claude-opus-5-5@xhigh, codex 는 gpt-6.1-sol, agy 는 gemini-3.8-flash,"
+  say "  모델을 안 고르면 claude 는 claude-opus-5-5@xhigh, codex 는 gpt-6.1-sol, agy 는 gemini-4-hydrogen@high,"
   say "  devin 은 swe-2-max, kiro-cli 는 claude-opus-5.5 로 돕니다."
   say "  끄려면 그 파일을 지우거나 해당 줄을 주석 처리하세요."
   return 0
@@ -1755,9 +1756,9 @@ defaults_usage() {
   aw defaults get [명령] [옵션]       적용될 줄만. 명령을 주면 그 명령의 옵션 묶음을 한 줄에 하나씩,
                                      옵션까지 주면 그 옵션이 든 묶음만   예) aw defaults get agy --model
   aw defaults set <명령> <옵션...>    옵션이 겹치는 줄을 이 줄로 바꿈 (없으면 넣음)
-                                     예) aw defaults set agy --model gemini-3.1-pro-high
+                                     예) aw defaults set agy --model gemini-4-argon-high
                                      한 줄이 통째로 바뀌니 수준만 바꿀 때도 모델을 같이 적음
-                                         aw defaults set agy --model gemini-3.8-flash --effort medium
+                                         aw defaults set agy --model gemini-4-hydrogen --effort xhigh
   aw defaults unset <명령> [옵션...]  그 옵션이 든 줄을 뺌 (옵션을 빼면 그 명령의 줄 전부)
   명령 자리에 claude@work 처럼 계정을 붙이면 그 계정의 워커에만 먼저 붙는 줄입니다 (aw profile set 이 씀)
   aw defaults --init [--force]       권장값으로 켜기 (있으면 그대로 두고, --force 면 되돌림)
@@ -1802,7 +1803,7 @@ defaults_get() { # [명령] [옵션]
 }
 
 defaults_set() { # <명령> <옵션...>
-  [ $# -ge 2 ] || die "사용법: aw defaults set <명령> <옵션...>   예) aw defaults set agy --model gemini-3.1-pro-high"
+  [ $# -ge 2 ] || die "사용법: aw defaults set <명령> <옵션...>   예) aw defaults set agy --model gemini-4-argon-high"
   ds_c=${1##*/}; shift
   case "$ds_c" in '' | -* | *[[:space:]#]*) die "명령 이름이 잘못됐습니다: $ds_c" ;; esac
   case "$1" in -?*) ;; *) die "첫 옵션은 - 로 시작해야 합니다: $1" ;; esac
@@ -1936,7 +1937,7 @@ models_discover() { # <에이전트>
         | sed 's/.*"\([^"]*\)"$/\1/' | awk -v d="$md_d" '{ print ($0 == d ? "* " : "") $0 }') ;;
     agy)
       command -v agy >/dev/null 2>&1 || return 1
-      # 'gemini-3.8-flash-high<TAB>Gemini 3.8 Flash (High)'
+      # 'gemini-4-hydrogen-high<TAB>Gemini 4 Hydrogen (High)'
       md_o=$(agy models </dev/null 2>/dev/null | LC_ALL=C awk -F '\t' 'NF >= 2 && $1 ~ /^[A-Za-z0-9]/ { print $1 }') ;;
     devin)
       command -v devin >/dev/null 2>&1 || return 1
@@ -1975,7 +1976,7 @@ models_list() { # <에이전트>  → 알고 있는 목록 (codex 는 파일에�
   cat "$(models_file "$1")"
 }
 
-# 목록에 그 모델이 있나. agy 는 수준을 뗀 이름(gemini-3.8-flash, --effort 와 함께)도 받습니다.
+# 목록에 그 모델이 있나. agy 는 수준을 뗀 이름(gemini-4-hydrogen, --effort 와 함께)도 받습니다.
 models_has() { # <에이전트> <모델> <목록>
   printf '%s\n' "$3" | sed 's/^\* //' | LC_ALL=C awk -v a="$1" -v m="$2" '
     $0 == m { f = 1 }
@@ -6143,7 +6144,7 @@ aw rm review
 | kiro-cli | `aw run -n k -- kiro-cli chat --output-format stream-json "작업"` | `aw result k --field finalText` |
 
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
-  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
+  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-4-hydrogen`·`--effort high`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
 - **계정(프로필)**: 사용자가 claude·codex 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- …` 입니다
   (계정 목록과 최근 사용량: `aw profile`, 기본 계정은 `default`). 셸에 `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` 이 있으면

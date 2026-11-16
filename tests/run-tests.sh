@@ -360,7 +360,7 @@ out=$("$AW" run -n def-agy -- agy -p=질문 2>&1)
 case "$out" in *"기본 옵션이 붙었습니다"*) ok "기본 옵션을 붙였다고 알려 줌" ;; *) ng "알림 없음" ;; esac
 "$AW" wait def-agy >/dev/null 2>&1
 check "agy 에 권한 우회와 기본 모델이 붙음 (줄마다 한 묶음)" \
-  "$(printf -- '-p=질문\n--dangerously-skip-permissions\n--model\ngemini-3.8-flash\n--effort\nhigh')" "$("$AW" result def-agy)"
+  "$(printf -- '-p=질문\n--dangerously-skip-permissions\n--model\ngemini-4-hydrogen\n--effort\nhigh')" "$("$AW" result def-agy)"
 # 모델을 직접 고르면 모델 줄만 빠지고 권한 줄은 남습니다
 "$AW" run -n def-agy-model -- agy -p=질문 --model gemini-3.1-pro-high >/dev/null 2>&1
 "$AW" wait def-agy-model >/dev/null 2>&1
@@ -375,7 +375,7 @@ check "줄의 둘째 옵션(--effort=값)을 직접 줘도 그 줄이 빠짐" \
 "$AW" run -n def-agy-prompt -- agy '-p=--model 을 설명해줘' '--model 뒤에 공백' >/dev/null 2>&1
 "$AW" wait def-agy-prompt >/dev/null 2>&1
 check "프롬프트 속 옵션 이름은 옵션으로 치지 않음" \
-  "$(printf -- '-p=--model 을 설명해줘\n--model 뒤에 공백\n--dangerously-skip-permissions\n--model\ngemini-3.8-flash\n--effort\nhigh')" \
+  "$(printf -- '-p=--model 을 설명해줘\n--model 뒤에 공백\n--dangerously-skip-permissions\n--model\ngemini-4-hydrogen\n--effort\nhigh')" \
   "$("$AW" result def-agy-prompt)"
 
 # kiro-cli: 권한, 모델, 엔진이 따로 붙습니다. 기본 엔진(v2)은 --model 을 무시해서 v3 가 필요합니다 (실측).
@@ -439,7 +439,7 @@ check "같은 옵션이 여러 줄이면 앞 줄만" "$(printf '작업\n--yolo\n
 # 읽기: aw defaults get
 "$AW" defaults --init --force >/dev/null 2>&1
 check "get <명령>: 묶음을 한 줄에 하나씩" \
-  "$(printf -- '--dangerously-skip-permissions\n--model gemini-3.8-flash --effort high')" "$("$AW" defaults get agy)"
+  "$(printf -- '--dangerously-skip-permissions\n--model gemini-4-hydrogen --effort high')" "$("$AW" defaults get agy)"
 check "get <명령> <옵션>: 그 옵션이 든 묶음만" "--model claude-opus-5.5" "$("$AW" defaults get kiro-cli --model)"
 check "get <명령> <별칭>: kiro-cli 의 --v3 는 --agent-engine 과 같은 것" "--agent-engine v3" "$("$AW" defaults get kiro-cli --v3)"
 case "$("$AW" defaults get)" in "agy --dangerously-skip-permissions"*) ok "get: 주석 없이 적용될 줄 전부" ;; *) ng "get 출력 이상" ;; esac
@@ -447,7 +447,7 @@ check "get: 없는 명령은 빈 출력" "" "$("$AW" defaults get nobody)"
 
 # 바꾸기: aw defaults set / unset
 out=$("$AW" defaults set agy --model gemini-3.1-pro-high)
-has "set: 바꾼 줄을 보여 줌" "$out" "- agy --model gemini-3.8-flash --effort high"
+has "set: 바꾼 줄을 보여 줌" "$out" "- agy --model gemini-4-hydrogen --effort high"
 check "set: 옵션이 겹치는 줄을 제자리에서 바꿈" \
   "$(printf -- '--dangerously-skip-permissions\n--model gemini-3.1-pro-high')" "$("$AW" defaults get agy)"
 if grep -q '^# 모델:' "$AW_DEFAULTS"; then ok "set: 주석은 그대로"; else ng "set 이 주석을 지움"; fi

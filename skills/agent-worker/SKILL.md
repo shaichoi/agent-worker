@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.26.1"
+  version: "0.26.2"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -136,7 +136,7 @@ aw rm review
 | kiro-cli | `aw run -n k -- kiro-cli chat --output-format stream-json "작업"` | `aw result k --field finalText` |
 
 - **모델은 사용자가 정한 게 아니면 `--model` 을 붙이지 않습니다.** 기본 옵션이 정합니다 (권장값: claude
-  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
+  `claude-opus-5-5`·`--effort xhigh`, codex `gpt-6.1-sol`, agy `gemini-4-hydrogen`·`--effort high`, devin `swe-2-max`, kiro-cli `claude-opus-5.5`). 지금 값은 `aw defaults get agy --model`, 사용자가
   바꾸라고 하면 `aw defaults set agy --model <모델> [--effort <수준>]`. 이번 워커만 다르게 하려면 `--model` 을 줍니다.
 - **계정(프로필)**: 사용자가 claude·codex 를 특정 계정으로 돌려 달라고 하면 `aw run --profile <이름> -- …` 입니다
   (계정 목록과 최근 사용량: `aw profile`, 기본 계정은 `default`). 셸에 `AW_CLAUDE_PROFILE`·`AW_CODEX_PROFILE` 이 있으면

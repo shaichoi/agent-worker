@@ -298,7 +298,7 @@ lv-d  running  6m12s  devin
 | **codex** | `npm i -g @openai/codex` | ChatGPT 계정 또는 `CODEX_API_KEY` | `codex exec "..."` 또는 stdin `-` | JSONL(`--json`) |
 | **kiro-cli** (Kiro) | Kiro 공식 설치 안내 (kiro.dev) | `kiro-cli login` | `kiro-cli chat "..."` (맨 끝) 또는 stdin | `finalText`, `status` (`stream-json`) |
 
-무인 실행에 필요한 권한 옵션과 기본 모델(claude `claude-opus-5-5`@xhigh, codex `gpt-6.1-sol`, agy `gemini-3.8-flash`,
+무인 실행에 필요한 권한 옵션과 기본 모델(claude `claude-opus-5-5`@xhigh, codex `gpt-6.1-sol`, agy `gemini-4-hydrogen`@high,
 devin `swe-2-max`, kiro-cli `claude-opus-5.5`)은
 `aw`가 **자동으로 붙입니다** ([기본 옵션](#기본-옵션-권한-우회-모델) 참고).
 
@@ -307,7 +307,7 @@ devin `swe-2-max`, kiro-cli `claude-opus-5.5`)은
 ```sh
 curl -fsSL https://antigravity.google/cli/install.sh | bash   # ~/.local/bin/agy
 agy                                                            # 최초 1회: 브라우저로 Google 로그인
-agy models                                                     # gemini-3.8-flash-high 등 확인
+agy models                                                     # gemini-4-hydrogen-high 등 확인
 ```
 
 설치 프로그램이 `~/.bashrc`와 `~/.bash_profile`에 PATH 줄을 덧붙입니다(zsh는 건드리지 않음).
@@ -317,11 +317,13 @@ aw run -n a1 -- agy --output-format stream-json -p='테스트를 추가해줘'
 aw wait a1 && aw result a1 --field response
 ```
 
-**모델**: `--model` 을 안 주면 기본 옵션이 `--model gemini-3.8-flash --effort high` 를 붙입니다.
-수준을 뺀 이름(`gemini-3.8-flash`)은 `--effort` 가 있어야 하고, `gemini-3.8-flash-high` 에
+**모델**: `--model` 을 안 주면 기본 옵션이 `--model gemini-4-hydrogen --effort high` 를 붙입니다. Gemini 4
+Hydrogen 은 3.8 Flash 의 후속으로, Antigravity 에서는 Google AI Pro 이상 유료 구독에 들어 있습니다(2026-11, 실측:
+aw 워커로 셸 명령·파일 작성·이어하기). 수준은 low, medium, high, xhigh 입니다.
+수준을 뺀 이름(`gemini-4-hydrogen`)은 `--effort` 가 있어야 하고, `gemini-4-hydrogen-high` 에
 `--effort low` 를 같이 주면 부딪쳐 실패합니다(실측). 그래서 `--model` 이나 `--effort` 중 하나라도
 직접 주면 aw 는 모델 줄을 통째로 붙이지 않습니다. 기본값을 바꾸려면
-`aw defaults set agy --model gemini-3.1-pro-high` 처럼 합니다.
+`aw defaults set agy --model gemini-4-argon-high` 처럼 합니다.
 
 **`-p` 를 쓸 때 주의할 점**: `-p` 뒤에 오는 토큰이 무조건 프롬프트가 됩니다.
 `agy -p --output-format json` 처럼 쓰면 `--output-format` 이 프롬프트가 되고 이렇게 실패합니다.
@@ -920,8 +922,8 @@ aw models --refresh         # CLI 에게 다시 물어 캐시를 새로 씀
 에이전트  모델  CLI 기본            목록
 claude    -     -                   목록 명령이 없어 확인하지 않음
 codex     9     gpt-6-astra         ~/.codex/models_cache.json (codex 가 관리)
-agy       14    -                   캐시 2m 전
-            기본 옵션 --model gemini-3.8-flash: 목록에 있음
+agy       17    -                   캐시 2m 전
+            기본 옵션 --model gemini-4-hydrogen: 목록에 있음
 devin     704   -                   캐시 2m 전
             기본 옵션 --model swe-2-max: 목록에 있음
 kiro-cli  20    auto                캐시 2m 전
@@ -936,7 +938,7 @@ kiro-cli  20    auto                캐시 2m 전
 - `aw pick` 은 목록에 없는 모델 줄을 Jev 에 보내지 않습니다. `aw pick` 상태에는 `(목록에 없음)` 으로 보입니다.
 - 목록을 얻는 곳: codex 는 `~/.codex/models_cache.json` 과 `config.toml` 의 `model`(기본), agy 는 `agy models`, devin 은
   `devin models list`(모델 ID·계열·별칭 모두, `--model` 이 셋 다 받음), kiro-cli 는 `kiro-cli chat --list-models`(`*` 가 기본).
-  agy 는 `gemini-3.8-flash` 처럼 수준을 뗀 이름도 목록의 `gemini-3.8-flash-high` 와 맞는 것으로 봅니다(`--effort` 와 함께 씀).
+  agy 는 `gemini-4-hydrogen` 처럼 수준을 뗀 이름도 목록의 `gemini-4-hydrogen-high` 와 맞는 것으로 봅니다(`--effort` 와 함께 씀).
 - 목록 명령이 느려서(실측: kiro-cli 1.4초, agy 4.7초, devin 5.5초) `~/.local/share/agent-worker/models/` 에 캐시합니다.
   `aw run` 은 캐시만 읽고, **찾는 모델이 캐시에 없을 때만** 한 번 새로 물어본 뒤 정합니다. 낡은 캐시 때문에 멀쩡한 기본을
   빼지 않고, 새로 받지 못하면 빼지 않습니다. codex 는 스스로 관리하는 파일을 그때그때 읽습니다.
@@ -1123,9 +1125,9 @@ c3: failed (종료 코드 1)
 ```sh
 aw defaults                            # 지금 적용 중인 것 (파일 내용과, 파일에 없는 권장값)
 aw defaults get agy                    # agy 에 붙는 묶음을 한 줄에 하나씩
-aw defaults get agy --model            # 그중 --model 이 든 묶음만 → --model gemini-3.8-flash --effort high
-aw defaults set agy --model gemini-3.1-pro-high    # 옵션이 겹치는 줄을 바꿈 (없으면 넣음)
-aw defaults set agy --model gemini-3.8-flash --effort medium   # 줄이 통째로 바뀌니 수준만 바꿀 때도 모델을 같이
+aw defaults get agy --model            # 그중 --model 이 든 묶음만 → --model gemini-4-hydrogen --effort high
+aw defaults set agy --model gemini-4-argon-high    # 옵션이 겹치는 줄을 바꿈 (없으면 넣음)
+aw defaults set agy --model gemini-4-hydrogen --effort xhigh    # 줄이 통째로 바뀌니 수준만 바꿀 때도 모델을 같이
 aw defaults unset agy --model          # 그 줄을 뺌 (옵션을 빼면 그 명령의 줄 전부)
 aw defaults --init                     # 권장값으로 켜기 (--force 면 되돌리기)
 rm ~/.config/agent-worker/defaults     # 끄기
@@ -1134,14 +1136,14 @@ rm ~/.config/agent-worker/defaults     # 끄기
 ```sh
 $ aw run -n a1 -- agy -p='리팩터링'
 워커 시작: a1
-  명령: agy -p=리팩터링 --dangerously-skip-permissions --model gemini-3.8-flash --effort high
-  (기본 옵션이 붙었습니다: --dangerously-skip-permissions --model gemini-3.8-flash --effort high — 끄려면 --no-defaults)
+  명령: agy -p=리팩터링 --dangerously-skip-permissions --model gemini-4-hydrogen --effort high
+  (기본 옵션이 붙었습니다: --dangerously-skip-permissions --model gemini-4-hydrogen --effort high — 끄려면 --no-defaults)
 ```
 
 | 명령 | 붙는 옵션 (한 줄이 한 묶음) |
 | --- | --- |
 | `agy` | `--dangerously-skip-permissions` |
-| | `--model gemini-3.8-flash --effort high` |
+| | `--model gemini-4-hydrogen --effort high` |
 | `claude` | `--permission-mode bypassPermissions` |
 | | `--model claude-opus-5-5` |
 | | `--effort xhigh` (모델과 따로 두어, 모델만 바꿔도 xhigh 가 남음) |
@@ -1160,7 +1162,7 @@ $ aw run -n a1 -- agy -p='리팩터링'
 - **한 줄이 한 묶음입니다.** 한 명령의 줄을 모두 붙이되, 그 줄의 옵션 중 **하나라도** 이미 있으면
   그 줄 전체를 건너뜁니다. 그래서 `--model` 이나 `--effort` 를 직접 주면 agy 의 모델 줄만 빠지고
   권한 줄은 붙습니다. `--effort low` 만 주면 모델도 같이 빠져 agy 자체 기본 모델로 돌므로, 그때는
-  `--model gemini-3.8-flash --effort low` 로 둘 다 줍니다. 같은 옵션이 여러 줄에 있으면 앞 줄만 붙습니다
+  `--model gemini-4-hydrogen --effort low` 로 둘 다 줍니다. 같은 옵션이 여러 줄에 있으면 앞 줄만 붙습니다
 - 이름은 달라도 같은 설정을 고르는 옵션은 같은 것으로 칩니다. codex 는 `--sandbox`·`-s`·`--approve-for-me`·
   `--full-auto`·`--dangerously-bypass-approvals-and-sandbox` 중 하나를 직접 주면 `--sandbox workspace-write` 줄이
   빠집니다(`--approve-for-me` 는 `--sandbox` 와 같이 주면 codex 가 인자 충돌로 끝남). kiro-cli 는 `-a`·`--trust-all-tools`,
@@ -1177,7 +1179,7 @@ $ aw run -n a1 -- agy -p='리팩터링'
 
 ```
 myagent --yolo --quiet
-agy --model gemini-3.1-pro-high
+agy --model gemini-4-argon-high
 kiro-cli --model claude-sonnet-5
 ```
 
