@@ -325,6 +325,27 @@ aw 워커로 셸 명령·파일 작성·이어하기). 수준은 low, medium, hi
 직접 주면 aw 는 모델 줄을 통째로 붙이지 않습니다. 기본값을 바꾸려면
 `aw defaults set agy --model gemini-4-argon-high` 처럼 합니다.
 
+**사용량과 한도**: agy 는 구독 한도를 출력에 남기지 않아서 `aw profile agy` 가 `agy -p /usage` 로 직접 묻습니다
+(6초쯤, `-q` 면 마지막으로 물은 것). Google 로그인은 컴퓨터(OS 사용자)마다 하나뿐이라 계정 줄도 하나이고, 여러 계정·
+계정 풀은 없습니다. 같은 계정을 쓰는 다른 컴퓨터·IDE 에서 쓴 양도 들어 있습니다.
+
+```
+$ aw profile agy
+agy 계정   (Google 로그인 하나뿐: 여러 계정·계정 풀은 없음. 사용량은 agy -p /usage 로 물음)
+  * default            로그인 됨                                Gemini 5시간 100%(2h57m 뒤 초기화) · 7일 31%, Claude·GPT 5시간 0% · 7일 0%, Argon 7일 1%  (방금 물음)
+```
+
+한도에 걸려 끝난 워커는 `aw wait`·`aw status` 가 알리고, 그 자리에서 사용량을 한 번 물어 언제 풀리는지 보입니다.
+agy 는 이때 오류 출력에 `AGY_ERROR` 줄(`RESOURCE_EXHAUSTED`, 429)을 남기고 코드 3 으로 끝납니다(실측). 서버 용량
+부족(`MODEL_CAPACITY_EXHAUSTED`)은 계정 한도가 아니라 알리지 않습니다.
+
+```
+quota-real: failed (종료 코드 3)
+  한도: agy 가 한도에 걸린 것 같습니다 (오류 출력에 한도 문구).
+        지금 사용량: Gemini 5시간 100%(2h56m 뒤 초기화) · 7일 31%, Claude·GPT 5시간 0% · 7일 0%, Argon 7일 1%
+        풀린 뒤 같은 대화를 이으려면: aw resume quota-real -- '이어서 해줘'   (사용량: aw profile agy)
+```
+
 **`-p` 를 쓸 때 주의할 점**: `-p` 뒤에 오는 토큰이 무조건 프롬프트가 됩니다.
 `agy -p --output-format json` 처럼 쓰면 `--output-format` 이 프롬프트가 되고 이렇게 실패합니다.
 
@@ -1089,7 +1110,8 @@ claude 계정   (aw run --profile <이름> -- claude …)
 ### 한도에 걸리면 다른 계정으로
 
 `aw wait`·`aw status` 가 한도에 걸린 것 같으면 알립니다. claude 의 `rate_limit_event` 가 `rejected` 이거나, codex 사용률이
-100% 이거나, 출력 끝에 한도 문구가 있을 때입니다.
+100% 이거나, 출력 끝에 한도 문구가 있을 때입니다. agy 도 알리지만 계정이 하나라 다른 계정으로 잇지는 않고, 언제
+풀리는지 보입니다([agy](#agy--antigravity-cli-gemini)).
 
 ```
 c3: failed (종료 코드 1)

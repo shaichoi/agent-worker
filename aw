@@ -11,9 +11,10 @@
 
 set -eu
 
-AW_VERSION=0.26.2
+AW_VERSION=0.27.0
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
+AW_USAGE="$AW_HOME/usage"
 AW_CONFIG="${AW_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/contexts}"
 AW_DEFAULTS="${AW_DEFAULTS:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/defaults}"
 AW_BRIEF="${AW_BRIEF:-${XDG_CONFIG_HOME:-$HOME/.config}/agent-worker/brief}"
@@ -338,6 +339,7 @@ T
   fallback.sh, out.model, err.model   aw pick 이 고른 모델이 거부될 때 대신 돌리는 스크립트와 첫 시도의 출력
 
 모델 목록 캐시: $AW_HOME/models/<에이전트>   (aw models, codex 는 ~/.codex 의 파일을 바로 읽음)
+agy 사용량: $AW_HOME/usage/agy   (aw profile 이 agy -p /usage 로 물은 것, 한도 알림도 씀)
 기계로 읽으려면: aw list --json
 환경변수: AW_HOME, AW_CONFIG, AW_DEFAULTS, AW_NO_DEFAULTS, AW_BRIEF, AW_NO_BRIEF, AW_NO_SAY, AW_QUIET,
           AW_CLAUDE_PROFILE, AW_CODEX_PROFILE, AW_PROFILES, CLAUDE_PROFILE_ROOT, CODEX_PROFILE_ROOT,
@@ -520,7 +522,7 @@ T
   로그인은 컴퓨터마다 따로 합니다. 토큰 파일을 복사하면 갱신할 때 서로 어긋납니다.
 
 목록
-  aw profile [claude|codex] [-q] [--json]
+  aw profile [claude|codex|agy] [-q] [--json]
   계정마다 로그인한 이메일·요금제와 최근 사용량을 보입니다. * 는 --profile 없이 띄울 때 쓰는 계정.
   claude 는 claude auth status 로 묻고(계정마다 1초쯤, -q 면 자격 증명 파일만 봄), codex 는 auth.json 의
   id_token 에서 이메일·요금제를 읽습니다 (토큰은 꺼내지 않음).
@@ -528,6 +530,9 @@ T
     claude  stream-json 의 rate_limit_event: 5시간·7일 창의 사용률과 초기화 시각
     codex   세션 파일 token_count 의 rate_limits: 주간(7일) 등 창의 사용률과 초기화 시각
   초기화 시각이 지난 창은 0% 로 봅니다. aw 밖에서 쓴 양은 모릅니다.
+  agy 는 출력에 한도가 없어서 agy -p /usage 로 직접 묻습니다 (몇 초, -q 면 마지막으로 물은 것). 계정은 Google
+  로그인 하나뿐이고(여러 계정·계정 풀 없음), 묶음(Gemini, Claude·GPT, Argon)마다 5시간·7일 창의 사용률입니다.
+  aw 밖(다른 컴퓨터, IDE)에서 쓴 양도 들어 있습니다. 한도에 걸려 끝난 agy 워커는 aw wait·aw status 가 알립니다.
 
 워커를 그 계정으로
   aw run --profile work -- codex exec --json "작업"
@@ -1494,6 +1499,69 @@ worker_limits() { # <워커디렉터리> <에이전트>
   return 0
 }
 
+# agy 는 출력에 한도가 없어서 agy -p /usage 로 묻습니다 (몇 초, 실측 1.5.10 에서 6.5초). 계정은 Google 로그인
+# 하나뿐입니다 (여러 계정·계정 풀 없음). 줄마다 창 하나, 남은 비율과 초기화 시각(UTC)입니다:
+#   Gemini Models<TAB>Five Hour Limit Remaining<TAB>61%<TAB>2026-11-18T10:03:47Z
+#   Gemini 4 Argon<TAB>Gemini 4 Argon Weekly Limit<TAB>100%<TAB>2026-11-25T05:59:07Z
+# → $AW_USAGE/agy 에 "묶음<TAB>창<TAB>사용률<TAB>초기화 시각(epoch)" 줄들로 둡니다 (첫 줄은 "at<TAB>물은 시각").
+# 0 적음, 1 로그인 안 됨, 2 agy 없음, 3 읽지 못함
+agy_usage_fetch() {
+  command -v agy >/dev/null 2>&1 || return 2
+  af_o=$(cd "$AW_HOME" 2>/dev/null; agy --print-timeout 60s -p /usage </dev/null 2>&1)
+  case "$af_o" in *'Please sign in'*) return 1 ;; esac
+  af_l=$(printf '%s\n' "$af_o" | LC_ALL=C awk -F '\t' '
+    function leap(y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) }
+    function epoch(s,   y, m, i, days, ml) {
+      if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) return ""
+      y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; days = 0
+      for (i = 1970; i < y; i++) days += leap(i) ? 366 : 365
+      split("31 28 31 30 31 30 31 31 30 31 30 31", ml, " "); if (leap(y)) ml[2] = 29
+      for (i = 1; i < m; i++) days += ml[i]
+      days += substr(s, 9, 2) - 1
+      return days * 86400 + substr(s, 12, 2) * 3600 + substr(s, 15, 2) * 60 + substr(s, 18, 2)
+    }
+    NF >= 3 && $3 ~ /^[0-9]+%$/ {
+      g = $1
+      if (g == "Gemini Models") g = "Gemini"
+      else if (g ~ /^Claude and GPT/) g = "Claude·GPT"
+      else if (g ~ /^Gemini [0-9.]+ /) sub(/^Gemini [0-9.]+ /, "", g)
+      w = $2
+      if (w ~ /Five Hour/) w = "5시간"; else if (w ~ /Weekly/) w = "7일"
+      printf "%s\t%s\t%d\t%s\n", g, w, 100 - $3, epoch($4)
+    }')
+  [ -n "$af_l" ] || return 3
+  mkdir -p "$AW_USAGE" 2>/dev/null || return 3
+  { printf 'at\t%s\n' "$(now)"; printf '%s\n' "$af_l"; } > "$AW_USAGE/agy.$$" && mv "$AW_USAGE/agy.$$" "$AW_USAGE/agy"
+}
+
+# 마지막으로 물은 agy 사용량 → "점수<TAB>요약<TAB>물은 시각" (모르면 빈 값). 점수는 창들 중 가장 높은 사용률이고,
+# 초기화 시각이 지난 창은 0 입니다. 다 쓴 창에는 초기화까지 남은 시간을 붙입니다.
+agy_usage_summary() {
+  [ -f "$AW_USAGE/agy" ] || return 0
+  LC_ALL=C awk -F '\t' -v now="$(now)" '
+    function left(s) {
+      if (s < 3600) return int(s / 60) "m"
+      return int(s / 3600) "h" int((s % 3600) / 60) "m"
+    }
+    $1 == "at" { at = $2; next }
+    NF >= 3 {
+      p = $3 + 0; t = ""
+      if ($4 != "" && $4 + 0 <= now) { p = 0; t = "(초기화됨)" }
+      else if (p >= 100 && $4 != "") t = "(" left($4 - now) " 뒤 초기화)"
+      if (p > m) m = p
+      if (!($1 in part)) order[++n] = $1
+      e = $2 " " p "%" t
+      # claude·codex 처럼 5시간 창을 앞에 둡니다 (agy 는 7일 창을 먼저 냄).
+      if ($2 == "5시간") part[$1] = e (part[$1] == "" ? "" : " · ") part[$1]
+      else part[$1] = part[$1] (part[$1] == "" ? "" : " · ") e
+    }
+    END {
+      if (at == "" || n == 0) exit
+      for (i = 1; i <= n; i++) s = s (s == "" ? "" : ", ") order[i] " " part[order[i]]
+      printf "%d\t%s\t%s\n", m, s, at
+    }' "$AW_USAGE/agy"
+}
+
 # 계정마다 가장 최근 워커의 사용량 → "이름<TAB>점수<TAB>요약<TAB>기준 시각" 줄들.
 # 점수는 창들 중 가장 높은 사용률(%)이고, 초기화 시각이 지난 창은 0, 거절이면 100 입니다.
 usage_scan() { # <에이전트>
@@ -1567,20 +1635,42 @@ profile_pool_pick() { # <에이전트>
 prof_pool_word() { case "$1" in auto) printf pool ;; *) printf '%s' "$1" ;; esac; }
 
 # 한도에 걸린 것 같으면 다른 계정으로 잇는 법을 알립니다 (aw wait, aw status).
+# agy 는 계정이 하나라, 그 자리에서 사용량을 한 번 물어(그 워커가 끝난 뒤 아직 안 물었으면) 언제 풀리는지 알립니다.
 limit_note() { # <워커디렉터리> [들여쓰기]
   ln_r=$(limit_hit "$1"); [ -n "$ln_r" ] || return 0
   ln_a=$(agent_of "$1"); ln_p=$(worker_profile "$1" "$ln_a")
+  if [ "$ln_a" = agy ]; then
+    ln_e=$(mtime_of "$1/exit"); ln_s=$(agy_usage_summary)
+    if [ -z "$ln_s" ] || [ "${ln_s##*"$TAB"}" -lt "${ln_e:-0}" ]; then agy_usage_fetch; ln_s=$(agy_usage_summary); fi
+    warn "${2:-}  한도: agy 가 한도에 걸린 것 같습니다 ($ln_r)."
+    [ -n "$ln_s" ] && warn "${2:-}        지금 사용량: $(printf '%s' "$ln_s" | cut -f2)"
+    warn "${2:-}        풀린 뒤 같은 대화를 이으려면: aw resume $(basename "$1") -- '이어서 해줘'   (사용량: aw profile agy)"
+    return 0
+  fi
   warn "${2:-}  한도: $ln_a 계정 ${ln_p:-?} 이 한도에 걸린 것 같습니다 ($ln_r)."
   warn "${2:-}        다른 계정으로 같은 대화를 이으려면: aw resume $(basename "$1") --profile pool -- '이어서 해줘'   (계정: aw profile)"
 }
 
 # 한도에 걸려 실패한 것 같으면 사유 (아니면 빈 값). claude 는 rate_limit_event 의 status rejected,
 # codex 는 사용률 100%, 그리고 출력·오류 끝의 한도 문구입니다 (문구는 버전마다 달라 넉넉히 봄).
+# agy 는 실패하면 오류 출력에 AGY_ERROR: {…} 줄(정식 상태, HTTP 코드)을 남기고 코드 3 으로 끝납니다. 실측
+# (1.5.10, Gemini 5시간 창을 다 썼을 때):
+#   error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h56m50s.
+#   AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): …","status":"RESOURCE_EXHAUSTED","error_code":429,…}
+# "You have exhausted your quota on this model." 같은 다른 문구도 봅니다 (실행 파일에 든 문구). 출력(out)에는 모델이 쓴 글이 섞여 작업 내용의 낱말에 걸리므로 오류 출력만 보고, 서버 용량 부족
+# (MODEL_CAPACITY_EXHAUSTED)은 계정 한도가 아니라 뺍니다.
 limit_hit() { # <워커디렉터리>
   lh_c=$(cat "$1/exit" 2>/dev/null)
   [ -n "$lh_c" ] && [ "$lh_c" != 0 ] || return 0
   lh_a=$(agent_of "$1")
-  case "$lh_a" in claude | codex) ;; *) return 0 ;; esac
+  case "$lh_a" in claude | codex | agy) ;; *) return 0 ;; esac
+  if [ "$lh_a" = agy ]; then
+    if tail -c 20000 "$1/err" 2>/dev/null | grep -v 'MODEL_CAPACITY_EXHAUSTED' \
+      | grep -Eiq 'RESOURCE_EXHAUSTED|exhausted your quota|individual quota reached|credits balance is too low|"(code|error_code|http_code|status_code)": *429'; then
+      printf '오류 출력에 한도 문구'
+    fi
+    return 0
+  fi
   lh_l=$(worker_limits "$1" "$lh_a")
   if printf '%s\n' "$lh_l" | grep -q '^status'; then printf '사용 한도에 걸림'; return 0; fi
   if [ "$lh_a" = codex ] && printf '%s\n' "$lh_l" | LC_ALL=C awk -F '\t' '$2 >= 100 { f = 1 } END { exit !f }'; then
@@ -5012,7 +5102,7 @@ cmd_setup() {
 
 prof_usage() {
   cat <<'U'
-사용법: aw profile [claude|codex] [-q] [--json]          계정 목록: 로그인한 계정, 최근 사용량
+사용법: aw profile [claude|codex|agy] [-q] [--json]      계정 목록: 로그인한 계정, 최근 사용량 (agy 는 사용량만)
         aw profile add <claude|codex> <이름> [--no-login]  계정 폴더를 만들고 (터미널이면) 로그인
         aw profile login <claude|codex> <이름> [codex login 옵션]   그 계정으로 로그인 (예: --device-auth)
         aw profile rm <claude|codex> <이름> [--yes]        계정 폴더를 지움 (그 계정의 로그인 정보도)
@@ -5188,11 +5278,12 @@ prof_set() { # <claude|codex> <이름> [--model 모델] [--effort 수준] | --cl
   return 0
 }
 
-prof_list() { # [claude|codex] [-q] [--json]
+prof_list() { # [claude|codex|agy] [-q] [--json]
   pl_ags='claude codex'; pl_q=0; pl_json=0
+  command -v agy >/dev/null 2>&1 && pl_ags="$pl_ags agy"
   while [ $# -gt 0 ]; do
     case "$1" in
-      claude | codex) pl_ags=$1 ;;
+      claude | codex | agy) pl_ags=$1 ;;
       -q | --quick) pl_q=1 ;;
       --json) pl_json=1 ;;
       -h | --help) prof_usage; return 0 ;;
@@ -5203,6 +5294,45 @@ prof_list() { # [claude|codex] [-q] [--json]
   pl_now=$(now); pl_n=0
   [ "$pl_json" -eq 1 ] && printf '['
   for pl_a in $(printf '%s' "$pl_ags"); do
+    if [ "$pl_a" = agy ]; then
+      # agy 는 Google 로그인 하나뿐이라 줄도 하나입니다. 사용량은 agy -p /usage 로 묻고, -q 면 마지막으로 물은 것을
+      # 보입니다 (agy_usage_fetch). 0 물음, 1 로그인 안 됨, 2 설치 안 됨, 3 읽지 못함, 4 묻지 않음(-q)
+      pl_ar=4
+      if ! command -v agy >/dev/null 2>&1; then pl_ar=2
+      elif [ "$pl_q" -eq 0 ]; then pl_ar=0; agy_usage_fetch || pl_ar=$?
+      fi
+      pl_as=''; pl_sc=null; pl_us=''; pl_at=null
+      case $pl_ar in 1 | 2) ;; *) pl_as=$(agy_usage_summary) ;; esac
+      if [ -n "$pl_as" ]; then
+        pl_sc=$(printf '%s' "$pl_as" | cut -f1); pl_us=$(printf '%s' "$pl_as" | cut -f2); pl_at=$(printf '%s' "$pl_as" | cut -f3)
+      fi
+      case $pl_ar in
+        0) pl_li=true; pl_acct='로그인 됨' ;;
+        1) pl_li=false; pl_acct='로그인 안 됨' ;;
+        2) pl_li=null; pl_acct='설치 안 됨' ;;
+        3) pl_li=null; pl_acct='모름' ;;
+        *) pl_li=null; pl_acct='-' ;;
+      esac
+      if [ "$pl_json" -eq 1 ]; then
+        pl_n=$((pl_n + 1)); [ "$pl_n" -gt 1 ] && printf ','
+        printf '\n  {"agent":"agy","name":"default","dir":"%s","current":true,"in_pool":null,"logged_in":%s,"email":"","plan":"","model":"","effort":"","usage_score":%s,"usage":"%s","usage_at":%s}' \
+          "$(json_escape "$HOME/.gemini/antigravity-cli")" "$pl_li" "$pl_sc" "$(json_escape "$pl_us")" "$pl_at"
+        continue
+      fi
+      [ "$pl_n" -gt 0 ] && say ""
+      pl_n=$((pl_n + 1))
+      say "agy 계정   (Google 로그인 하나뿐: 여러 계정·계정 풀은 없음. 사용량은 agy -p /usage 로 물음)"
+      pl_ut='사용량 모름'
+      if [ -n "$pl_us" ]; then
+        pl_ag=$((pl_now - pl_at))
+        if [ "$pl_ag" -lt 60 ]; then pl_ut="$pl_us  (방금 물음)"; else pl_ut="$pl_us  ($(elapsed_str "$pl_ag") 전에 물음)"; fi
+      fi
+      [ "$pl_ar" = 3 ] && pl_ut='사용량을 읽지 못함 (agy -p /usage 로 확인)'
+      [ "$pl_ar" = 4 ] && [ -z "$pl_us" ] && pl_ut='사용량 모름 (aw profile agy 로 물음)'
+      say "  * $(padw 18 default) $(padw 40 "$pl_acct") $pl_ut"
+      [ "$pl_ar" = 1 ] && say "      로그인: 터미널에서 agy 를 한 번 실행"
+      continue
+    fi
     pl_cur=$(prof_current "$pl_a")
     pl_scan=$(usage_scan "$pl_a")
     pl_pool=$(prof_conf_get "$pl_a" pool)
@@ -5264,6 +5394,7 @@ prof_list() { # [claude|codex] [-q] [--json]
   if [ "$pl_json" -eq 1 ]; then printf '\n]\n'; return 0; fi
   say ""
   say "* 는 --profile 없이 띄울 때 쓰는 계정. 사용량은 그 계정으로 돈 가장 최근 aw 워커의 출력에서 읽은 것입니다."
+  case " $pl_ags " in *" agy "*) say "agy 는 agy -p /usage 로 물은 것입니다 (-q 면 마지막으로 물은 것, 묻는 데 몇 초)." ;; esac
   say "만들기: aw profile add <claude|codex> <이름>    여유 있는 계정으로: aw run --profile pool -- …"
   say "워커에 쓰지 않을 계정이 있으면: aw profile pool <에이전트> <쓸 계정...> && aw profile use <에이전트> pool"
 }
@@ -5890,7 +6021,7 @@ cmd_uninstall() {
         say "  worktree: $(tilde "$un_wt")   (브랜치 $(meta_get "$un_d" branch) 는 남고, 커밋하지 않은 변경은 사라짐)"
       fi
     done
-    say "  워커 $(printf '%s' "$un_workers" | wc -w | tr -d ' ')개$([ -d "$AW_HOME/models" ] && printf ', 모델 목록 캐시')"
+    say "  워커 $(printf '%s' "$un_workers" | wc -w | tr -d ' ')개$([ -d "$AW_HOME/models" ] && printf ', 모델 목록 캐시')$([ -d "$AW_USAGE" ] && printf ', agy 사용량 캐시')"
     [ -n "$un_running" ] && say "  실행 중이라 멈출 워커:$un_running"
     un_any=1
   fi
@@ -5974,7 +6105,7 @@ EOF_ROOTS
     # cmd_stop 이 die 해도 제거가 도중에 끝나지 않게 하위 셸에서 돌립니다.
     for un_n in $un_running; do ( cmd_stop "$un_n" ) >/dev/null 2>&1 || warn "  멈추지 못했습니다: $un_n"; done
     for un_n in $un_workers; do remove_worker "$un_n"; done
-    rm -rf "$AW_WORKERS" "$AW_HOME/models"
+    rm -rf "$AW_WORKERS" "$AW_HOME/models" "$AW_USAGE"
     rm -f "$AW_HOME"/.pick.* "$AW_HOME"/.pick-models.*
     if rmdir "$AW_HOME" 2>/dev/null; then
       say "지움: $(tilde "$AW_HOME")"
@@ -6155,7 +6286,9 @@ aw rm review
   계정마다 모델·수준을 정해 두었으면(`aw profile set`, 목록의 "기본 모델·수준") `--model` 도 주지 않습니다.
 - **한도에 걸렸다고 `aw wait`·`aw status` 가 알리면** 사용자에게 전하고, 다른 계정으로 이을지 묻습니다(사용자가 미리
   허락했으면 바로). 잇는 법: `aw resume <이름> --profile pool -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
-  캐시는 계정마다 따로라 앞 대화를 다시 읽습니다.
+  캐시는 계정마다 따로라 앞 대화를 다시 읽습니다. agy 는 계정이 하나라 다른 계정으로 잇지 못합니다. 알림에 나온
+  초기화까지 남은 시간을 전하고, 기다릴지 다른 에이전트(claude·codex)로 넘길지 묻습니다. agy 의 남은 한도는
+  `aw profile agy` (몇 초 걸림).
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
   붙이지 않습니다(프로필이 정함). 키는 사용자가 `aw gateway key <이름>` 으로 넣습니다. 키를 `-e` 로 넘기지

@@ -2649,5 +2649,71 @@ if awq "$AW" profile rm codex default --yes >/dev/null 2>&1; then ng "기본 계
 has "aw help profile" "$(awq "$AW" help profile)" "한도에 걸리면 다른 계정으로 같은 대화를"
 awq "$AW" clean --all >/dev/null 2>&1
 
+head_ "29. agy 사용량과 한도 알림 (agy -p /usage, AGY_ERROR)"
+# agy 출력에는 한도가 없어서 agy -p /usage 로 묻습니다. 줄마다 묶음, 창, 남은 비율, 초기화 시각(UTC) (실측 1.5.10).
+# 가짜 agy: /usage 면 사용량을, 아니면 워커처럼 돌고 STUB_AGY_FAIL 에 따라 한도·용량 오류를 냅니다.
+GB="$TMPROOT/agybin"; mkdir -p "$GB"
+cat > "$GB/agy" <<'FAKE'
+#!/bin/sh
+case "$*" in *'-p /usage'*)
+  [ "${STUB_AGY_LOGIN:-1}" = 0 ] && { echo 'Fetching available models...'; echo 'Error: Please sign in to view available models. Launch the CLI without arguments to sign in.'; exit 1; }
+  [ "${STUB_AGY_GARBLED:-0}" = 1 ] && { echo '알 수 없는 출력'; exit 0; }
+  printf 'Gemini Models\tWeekly Limit Remaining\t90%%\t2099-01-02T00:00:00Z\n'
+  printf 'Gemini Models\tFive Hour Limit Remaining\t%s%%\t%s\n' "${STUB_AGY_REM5:-60}" "${STUB_AGY_RESET5:-2099-01-01T00:00:00Z}"
+  printf 'Claude and GPT models\tWeekly Limit Remaining\t100%%\t2001-01-01T00:00:00Z\n'
+  printf 'Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t100%%\t2099-01-02T00:00:00Z\n'
+  exit 0 ;;
+esac
+case "${STUB_AGY_FAIL:-}" in
+  quota) # 실측 그대로 (1.5.10, Gemini 5시간 창을 다 썼을 때)
+         printf '{"event":"result","result":{"status":"ERROR","response":"","error":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h56m50s.","finished_reason":"error"}}\n'
+         echo 'error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h56m50s.' >&2
+         echo 'AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h56m50s.","status":"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true,"error_id":"x"}' >&2; exit 3 ;;
+  capacity) echo 'AGY_ERROR: {"status":"MODEL_CAPACITY_EXHAUSTED","code":503,"retryable":true}' >&2; exit 3 ;;
+  other) printf '{"event":"step_update","step_update":{"text_delta":"RESOURCE_EXHAUSTED 를 처리하는 코드를 고쳤습니다"}}\n'
+         printf '{"event":"result","result":{"status":"ERROR","response":"테스트가 실패했습니다"}}\n'; exit 1 ;;
+esac
+printf '{"event":"result","result":{"status":"SUCCESS","response":"ok"}}\n'
+FAKE
+chmod +x "$GB/agy"
+awy() { env HOME="$PH" AW_HOME="$PH/awhome-agy" AW_PROFILES="$PH/profiles" PATH="$GB:$PH/bin:/usr/bin:/bin" \
+  AW_DEFAULTS="$NO_DEFAULTS" AW_BRIEF="$PH/no-brief" "$@"; }
+
+out=$(awy "$AW" profile agy 2>&1)
+has "agy 줄: 로그인 됨" "$out" "로그인 됨"
+has "묶음마다 5시간 먼저, 남은 비율을 사용률로" "$out" "Gemini 5시간 40% · 7일 10%"
+has "초기화 시각이 지난 창은 0% (초기화됨)" "$out" "Claude·GPT 7일 0%(초기화됨)"
+has "Gemini 4 Argon 은 Argon 으로" "$out" "Argon 7일 0%"
+has "방금 물었다고 표시" "$out" "(방금 물음)"
+check "물은 결과를 캐시에 둠" "at" "$(cut -f1 "$PH/awhome-agy/usage/agy" | head -1)"
+has "aw profile 기본 목록에도 agy (설치돼 있으면)" "$(awy "$AW" profile -q 2>&1)" "agy 계정"
+hasnt "agy 가 없으면 기본 목록에 없음" "$(awq "$AW" profile -q 2>&1)" "agy 계정"
+has "-q 는 묻지 않고 캐시를 보임" "$(STUB_AGY_REM5=0 awy "$AW" profile agy -q 2>&1)" "Gemini 5시간 40%"
+case "$(awy "$AW" profile agy --json)" in *'"agent":"agy"'*'"logged_in":true'*'"usage_score":40'*) ok "--json: agy 줄과 점수(가장 높은 사용률)" ;; *) ng "--json 이상: $(awy "$AW" profile agy --json | tr '\n' ' ')" ;; esac
+out=$(STUB_AGY_REM5=0 awy "$AW" profile agy 2>&1)
+has "다 쓴 창에는 초기화까지 남은 시간" "$out" "5시간 100%("
+has "...뒤 초기화" "$out" "뒤 초기화)"
+out=$(STUB_AGY_LOGIN=0 awy "$AW" profile agy 2>&1)
+has "로그인 안 됐으면 알림" "$out" "로그인 안 됨"
+has "로그인 방법" "$out" "터미널에서 agy"
+hasnt "로그인 안 됐으면 예전 사용량을 안 보임" "$out" "Gemini 5시간"
+has "읽지 못하면 그렇게 알림" "$(STUB_AGY_GARBLED=1 awy "$AW" profile agy 2>&1)" "사용량을 읽지 못함"
+
+# 한도에 걸려 끝난 워커: 오류 출력의 AGY_ERROR(RESOURCE_EXHAUSTED, 429)로 알아채고 그 자리에서 사용량을 물어 알림
+STUB_AGY_FAIL=quota awy "$AW" run -n gq -- agy --output-format stream-json -p=일 >/dev/null 2>&1
+out=$(STUB_AGY_REM5=0 awy "$AW" wait gq 2>&1); rc=$?
+check "한도로 끝난 워커는 실패" 1 "$rc"
+has "한도에 걸렸다고 알림" "$out" "한도: agy 가 한도에 걸린 것 같습니다"
+has "그 자리에서 물은 사용량 (다 쓴 창과 남은 시간)" "$out" "지금 사용량: Gemini 5시간 100%("
+has "풀린 뒤 잇는 법" "$out" "aw resume gq -- '이어서 해줘'"
+has "aw status 에도" "$(STUB_AGY_REM5=0 awy "$AW" status gq 2>&1)" "한도: agy 가 한도에 걸린 것 같습니다"
+STUB_AGY_FAIL=capacity awy "$AW" run -n gc -- agy --output-format stream-json -p=일 >/dev/null 2>&1
+hasnt "서버 용량 부족(MODEL_CAPACITY_EXHAUSTED)은 계정 한도가 아님" "$(awy "$AW" wait gc 2>&1)" "한도:"
+STUB_AGY_FAIL=other awy "$AW" run -n go -- agy --output-format stream-json -p=일 >/dev/null 2>&1
+hasnt "작업 내용 속 낱말(RESOURCE_EXHAUSTED)로는 알리지 않음" "$(awy "$AW" wait go 2>&1)" "한도:"
+awy "$AW" run -n gs -- agy --output-format stream-json -p=일 >/dev/null 2>&1
+hasnt "성공한 워커는 알리지 않음" "$(awy "$AW" wait gs 2>&1)" "한도:"
+awy "$AW" clean --all >/dev/null 2>&1
+
 printf '\n통과 %d / 실패 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

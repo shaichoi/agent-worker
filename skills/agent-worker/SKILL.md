@@ -5,7 +5,7 @@ license: MIT
 compatibility: PATH 에 aw 가 있어야 합니다 (POSIX 셸). 띄울 에이전트 CLI 는 각각 설치·로그인돼 있어야 합니다.
 metadata:
   author: shaichoi
-  version: "0.26.2"
+  version: "0.27.0"
   homepage: https://github.com/shaichoi/agent-worker
 ---
 
@@ -147,7 +147,9 @@ aw rm review
   계정마다 모델·수준을 정해 두었으면(`aw profile set`, 목록의 "기본 모델·수준") `--model` 도 주지 않습니다.
 - **한도에 걸렸다고 `aw wait`·`aw status` 가 알리면** 사용자에게 전하고, 다른 계정으로 이을지 묻습니다(사용자가 미리
   허락했으면 바로). 잇는 법: `aw resume <이름> --profile pool -- '이어서 해줘'`. 같은 대화를 다른 계정에서 잇고,
-  캐시는 계정마다 따로라 앞 대화를 다시 읽습니다.
+  캐시는 계정마다 따로라 앞 대화를 다시 읽습니다. agy 는 계정이 하나라 다른 계정으로 잇지 못합니다. 알림에 나온
+  초기화까지 남은 시간을 전하고, 기다릴지 다른 에이전트(claude·codex)로 넘길지 묻습니다. agy 의 남은 한도는
+  `aw profile agy` (몇 초 걸림).
 - **게이트웨이 모델**(OpenGateway 의 deepseek 등)은 `aw gateway` 로 만든 프로필로 띄웁니다. 만든 것은 `aw gateway`,
   codex 는 `codex exec --json --profile <이름>`, claude 는 `aw run --profile <이름> -- claude ...` 이고 `--model` 은
   붙이지 않습니다(프로필이 정함). 키는 사용자가 `aw gateway key <이름>` 으로 넣습니다. 키를 `-e` 로 넘기지
