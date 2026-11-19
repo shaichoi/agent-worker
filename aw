@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.27.0
+AW_VERSION=0.27.1
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_USAGE="$AW_HOME/usage"
@@ -1507,7 +1507,8 @@ worker_limits() { # <워커디렉터리> <에이전트>
 # 0 적음, 1 로그인 안 됨, 2 agy 없음, 3 읽지 못함
 agy_usage_fetch() {
   command -v agy >/dev/null 2>&1 || return 2
-  af_o=$(cd "$AW_HOME" 2>/dev/null; agy --print-timeout 60s -p /usage </dev/null 2>&1)
+  # 로그인 안 됨이나 네트워크 오류면 agy 가 0 이 아닌 코드로 끝납니다. set -e 로 aw 가 끝나지 않게 || 로 받습니다.
+  af_o=$(cd "$AW_HOME" 2>/dev/null; agy --print-timeout 60s -p /usage </dev/null 2>&1) || :
   case "$af_o" in *'Please sign in'*) return 1 ;; esac
   af_l=$(printf '%s\n' "$af_o" | LC_ALL=C awk -F '\t' '
     function leap(y) { return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) }
@@ -1568,7 +1569,8 @@ usage_scan() { # <에이전트>
   us_now=$(now)
   for us_d in $(list_dirs); do
     [ "$(agent_of "$us_d")" = "$1" ] || continue
-    us_t=$(cat "$us_d/finished" 2>/dev/null)
+    # 도는 워커는 finished 가 없습니다. || 없이 두면 set -e 로 이 하위 셸이 끝나 목록이 거기서 조용히 끊겼습니다.
+    us_t=$(cat "$us_d/finished" 2>/dev/null || printf '')
     [ -n "$us_t" ] || { [ -f "$us_d/exit" ] && us_t=$(mtime_of "$us_d/exit"); }
     [ -n "$us_t" ] || us_t=$us_now
     printf '%s\t%s\n' "$us_t" "$us_d"
@@ -1641,7 +1643,7 @@ limit_note() { # <워커디렉터리> [들여쓰기]
   ln_a=$(agent_of "$1"); ln_p=$(worker_profile "$1" "$ln_a")
   if [ "$ln_a" = agy ]; then
     ln_e=$(mtime_of "$1/exit"); ln_s=$(agy_usage_summary)
-    if [ -z "$ln_s" ] || [ "${ln_s##*"$TAB"}" -lt "${ln_e:-0}" ]; then agy_usage_fetch; ln_s=$(agy_usage_summary); fi
+    if [ -z "$ln_s" ] || [ "${ln_s##*"$TAB"}" -lt "${ln_e:-0}" ]; then agy_usage_fetch || :; ln_s=$(agy_usage_summary); fi
     warn "${2:-}  한도: agy 가 한도에 걸린 것 같습니다 ($ln_r)."
     [ -n "$ln_s" ] && warn "${2:-}        지금 사용량: $(printf '%s' "$ln_s" | cut -f2)"
     warn "${2:-}        풀린 뒤 같은 대화를 이으려면: aw resume $(basename "$1") -- '이어서 해줘'   (사용량: aw profile agy)"
@@ -1660,7 +1662,9 @@ limit_note() { # <워커디렉터리> [들여쓰기]
 # "You have exhausted your quota on this model." 같은 다른 문구도 봅니다 (실행 파일에 든 문구). 출력(out)에는 모델이 쓴 글이 섞여 작업 내용의 낱말에 걸리므로 오류 출력만 보고, 서버 용량 부족
 # (MODEL_CAPACITY_EXHAUSTED)은 계정 한도가 아니라 뺍니다.
 limit_hit() { # <워커디렉터리>
-  lh_c=$(cat "$1/exit" 2>/dev/null)
+  # 도는 워커는 exit 파일이 없습니다. set -e 라 cat 이 실패하면 대입도 실패해 aw 가 끝나서(aw status 가 꼬리표
+  # 줄까지만 찍고 코드 1, 0.25.0~0.27.0) || printf '' 로 받습니다.
+  lh_c=$(cat "$1/exit" 2>/dev/null || printf '')
   [ -n "$lh_c" ] && [ "$lh_c" != 0 ] || return 0
   lh_a=$(agent_of "$1")
   case "$lh_a" in claude | codex | agy) ;; *) return 0 ;; esac
@@ -2157,7 +2161,7 @@ cmd_models() {
       # 처음이면 한 번 물어봅니다
       models_refresh "$mo_a" && mo_l=$(models_list "$mo_a") || { say "$(padw 10 "$mo_a")$(padw 6 -)$(padw 20 -)목록을 받지 못함"; continue; }
     fi
-    mo_n=$(printf '%s\n' "$mo_l" | grep -c .)
+    mo_n=$(printf '%s\n' "$mo_l" | grep -c .) || :   # 빈 목록이면 grep -c 가 0 을 내며 1 로 끝남
     mo_d=$(printf '%s\n' "$mo_l" | sed -n 's/^\* //p' | head -1)
     if [ "$mo_a" = codex ]; then mo_src="$(tilde "${CODEX_HOME:-$HOME/.codex}")/models_cache.json (codex 가 관리)"
     else mo_src="캐시 $(elapsed_str $(( $(now) - $(mtime_of "$(models_file "$mo_a")") ))) 전"; fi

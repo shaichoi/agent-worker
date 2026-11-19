@@ -68,8 +68,14 @@ check "표준 오류 보존" 나쁨 "$("$AW" errs failing)"
 state=$("$AW" list --json | sed -n 's/.*"name":"failing","state":"\([a-z]*\)".*/\1/p')
 check "상태 failed" failed "$state"
 
-"$AW" run -n longjob -- sleep 300 >/dev/null 2>&1
+"$AW" run -n longjob --tag 꼬리 -- sleep 300 >/dev/null 2>&1
 sleep 1
+# 도는 워커의 aw status: 0.25.0~0.27.0 에서는 exit 파일이 없어 한도 확인(limit_hit)의 cat 이 실패했고, set -e 로
+# 꼬리표 줄까지만 찍고 코드 1 로 끝났습니다 (다른 세션의 제보).
+out=$("$AW" status longjob 2>&1); rc=$?
+check "도는 워커의 aw status 는 0 으로 끝남" 0 "$rc"
+has "도는 워커의 aw status 가 끝까지 (경과 줄)" "$out" "경과"
+has "꼬리표 줄도" "$out" "꼬리표   : 꼬리"
 "$AW" stop longjob >/dev/null 2>&1
 sleep 1
 state=$("$AW" list --json | sed -n 's/.*"name":"longjob","state":"\([a-z]*\)".*/\1/p')
@@ -2397,6 +2403,7 @@ printf '{"type":"rate_limit_event","rate_limit_info":{"status":"%s","resetsAt":%
   "${STUB_STATUS:-allowed}" $((n + 3600)) "${STUB_UTIL:-0.5}" $((n + 3600)) $((n + 86400))
 printf '{"type":"result","session_id":"%s","is_error":false}\n' "${STUB_SID:-CS1}"
 printf 'CFG=%s\n' "${CLAUDE_CONFIG_DIR:-}"
+[ -n "${STUB_SLEEP:-}" ] && sleep "$STUB_SLEEP"
 [ "${STUB_FAIL:-0}" = 1 ] && exit 1
 exit 0
 FAKE
@@ -2532,6 +2539,12 @@ awq "$AW" wait c1 c2 >/dev/null 2>&1
 out=$(awq "$AW" profile claude -q 2>&1)
 has "사용량: claude 5시간·7일 (rate_limit_event)" "$(printf '%s\n' "$out" | grep ' default ')" "5시간 80% · 7일 10%"
 has "사용량: 다른 계정" "$(printf '%s\n' "$out" | grep ' sub ')" "5시간 30%"
+# 도는 워커가 있어도 사용량을 끝까지 읽습니다. 이름순으로 먼저 오는 도는 워커(finished 파일 없음)에서 usage_scan 의
+# 목록이 조용히 끊겨 다른 계정의 사용량이 "사용량 모름" 으로 보였습니다 (0.25.0~0.27.0).
+awq env STUB_SLEEP=30 STUB_UTIL=0.9 "$AW" run -n a-running -- claude -p --output-format json 일 >/dev/null 2>&1
+out=$(awq "$AW" profile claude -q 2>&1)
+has "도는 워커가 있어도 다른 계정의 사용량을 읽음" "$(printf '%s\n' "$out" | grep ' sub ')" "5시간 30%"
+awq "$AW" stop a-running >/dev/null 2>&1; awq "$AW" rm a-running >/dev/null 2>&1
 has "pool: claude 도" "$(awq "$AW" run -n c4 --profile pool -- claude -p --output-format json 일 2>&1)" "계정 풀에서 고름: sub"
 
 # 한도에 걸리면 알리고 다른 계정으로 잇는 법을 안내
@@ -2658,6 +2671,7 @@ cat > "$GB/agy" <<'FAKE'
 case "$*" in *'-p /usage'*)
   [ "${STUB_AGY_LOGIN:-1}" = 0 ] && { echo 'Fetching available models...'; echo 'Error: Please sign in to view available models. Launch the CLI without arguments to sign in.'; exit 1; }
   [ "${STUB_AGY_GARBLED:-0}" = 1 ] && { echo '알 수 없는 출력'; exit 0; }
+  [ "${STUB_AGY_USAGE_FAIL:-0}" = 1 ] && { echo 'Error: network unreachable' >&2; exit 1; }
   printf 'Gemini Models\tWeekly Limit Remaining\t90%%\t2099-01-02T00:00:00Z\n'
   printf 'Gemini Models\tFive Hour Limit Remaining\t%s%%\t%s\n' "${STUB_AGY_REM5:-60}" "${STUB_AGY_RESET5:-2099-01-01T00:00:00Z}"
   printf 'Claude and GPT models\tWeekly Limit Remaining\t100%%\t2001-01-01T00:00:00Z\n'
@@ -2707,6 +2721,13 @@ has "한도에 걸렸다고 알림" "$out" "한도: agy 가 한도에 걸린 것
 has "그 자리에서 물은 사용량 (다 쓴 창과 남은 시간)" "$out" "지금 사용량: Gemini 5시간 100%("
 has "풀린 뒤 잇는 법" "$out" "aw resume gq -- '이어서 해줘'"
 has "aw status 에도" "$(STUB_AGY_REM5=0 awy "$AW" status gq 2>&1)" "한도: agy 가 한도에 걸린 것 같습니다"
+# 사용량을 묻다 실패해도(네트워크 등, agy 가 0 이 아닌 코드) aw wait 이 도중에 끝나지 않고 끝까지 알립니다.
+STUB_AGY_FAIL=quota awy "$AW" run -n gq2 -- agy --output-format stream-json -p=일 >/dev/null 2>&1
+sleep 1; rm -f "$PH/awhome-agy/usage/agy"
+out=$(STUB_AGY_USAGE_FAIL=1 awy "$AW" wait gq2 2>&1); rc=$?
+check "사용량을 못 물어도 aw wait 은 워커의 코드대로 (1)" 1 "$rc"
+has "사용량을 못 물어도 잇는 법까지 알림" "$out" "aw resume gq2 -- '이어서 해줘'"
+has "사용량을 못 물어도 aw profile agy 가 끝까지" "$(STUB_AGY_USAGE_FAIL=1 awy "$AW" profile agy 2>&1)" "사용량을 읽지 못함"
 STUB_AGY_FAIL=capacity awy "$AW" run -n gc -- agy --output-format stream-json -p=일 >/dev/null 2>&1
 hasnt "서버 용량 부족(MODEL_CAPACITY_EXHAUSTED)은 계정 한도가 아님" "$(awy "$AW" wait gc 2>&1)" "한도:"
 STUB_AGY_FAIL=other awy "$AW" run -n go -- agy --output-format stream-json -p=일 >/dev/null 2>&1
