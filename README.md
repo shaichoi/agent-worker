@@ -957,6 +957,9 @@ kiro-cli  20    auto                캐시 2m 전
 - **목록을 모르면 정한 기본 그대로입니다.** claude 는 목록 명령이 없고, 설치 안 된 CLI 나 조회에 실패한 CLI 도
   확인하지 않습니다.
 - `aw pick` 은 목록에 없는 모델 줄을 Jev 에 보내지 않습니다. `aw pick` 상태에는 `(목록에 없음)` 으로 보입니다.
+- codex 의 `models_cache.json` 은 그 파일을 받은 codex 판(`client_version`)에 맞춘 목록이라, 설치된 `codex --version` 과
+  판이 다르면 믿지 않고 목록을 모를 때처럼 정한 기본을 그대로 붙입니다. codex 를 올린 뒤에도 옛 판으로 떠 있는
+  `codex app-server` 가 옛 목록을 다시 받아 쓰면 새 판에서 되는 모델(예: `gpt-6.2-sol`)이 빠지기 때문입니다(실측).
 - 목록을 얻는 곳: codex 는 `~/.codex/models_cache.json` 과 `config.toml` 의 `model`(기본), agy 는 `agy models`, devin 은
   `devin models list`(모델 ID·계열·별칭 모두, `--model` 이 셋 다 받음), kiro-cli 는 `kiro-cli chat --list-models`(`*` 가 기본).
   agy 는 `gemini-4-hydrogen` 처럼 수준을 뗀 이름도 목록의 `gemini-4-hydrogen-high` 와 맞는 것으로 봅니다(`--effort` 와 함께 씀).

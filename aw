@@ -11,7 +11,7 @@
 
 set -eu
 
-AW_VERSION=0.27.1
+AW_VERSION=0.27.2
 AW_HOME="${AW_HOME:-$HOME/.local/share/agent-worker}"
 AW_WORKERS="$AW_HOME/workers"
 AW_USAGE="$AW_HOME/usage"
@@ -2018,6 +2018,25 @@ cmd_defaults() {
 
 models_file() { printf '%s/models/%s\n' "$AW_HOME" "$1"; }
 
+# codex 의 models_cache.json 은 그 파일을 받은 codex 의 버전(client_version)에 맞춘 목록입니다 (서버가 버전에 맞춰
+# 줌). codex 를 올린 뒤에도 옛 프로세스(계속 떠 있는 codex app-server 등)가 옛 버전으로 다시 받아 쓰면 새 모델이
+# 빠진 목록이 남습니다 (실측: 0.172.0 을 깔았는데 0.159.0 의 목록이라 그 판에서 되는 gpt-6.2-sol 이 없음).
+# 그런 목록은 믿지 않고 "모름"으로 봐서, 정해 둔 기본 모델을 빼지 않습니다 (codex --version 은 15ms).
+# 버전이 다르면 "캐시의 버전<TAB>설치된 버전" 을 내고 0, 같거나 알 수 없으면 1.
+codex_cache_stale() {
+  cs_c=$(LC_ALL=C grep -o '"client_version"[[:space:]]*:[[:space:]]*"[^"]*"' "${CODEX_HOME:-$HOME/.codex}/models_cache.json" 2>/dev/null \
+    | head -1 | sed 's/.*"\([^"]*\)"$/\1/') || :
+  cs_i=$(codex --version 2>/dev/null | awk '{ print $NF; exit }') || :
+  [ -n "$cs_c" ] && [ -n "$cs_i" ] && [ "$cs_c" != "$cs_i" ] || return 1
+  printf '%s\t%s\n' "$cs_c" "$cs_i"
+}
+
+# 낡은 codex 목록을 사람에게 설명하는 한 줄
+codex_stale_note() { # <캐시의 버전<TAB>설치된 버전>
+  printf '목록(%s)을 설치된 codex(%s)와 다른 판(%s)이 받아서 믿지 않음. codex 를 한 번 돌리면 새로 받고, 옛 codex app-server 가 떠 있으면 다시 띄우세요' \
+    "$(tilde "${CODEX_HOME:-$HOME/.codex}")/models_cache.json" "${1#*"$TAB"}" "${1%%"$TAB"*}"
+}
+
 # 설치된 CLI 에게 목록을 물어 한 줄에 하나씩. 목록을 못 얻으면 1.
 # 로그인이나 확인을 묻다가 멈추지 않게 표준 입력은 /dev/null 입니다.
 models_discover() { # <에이전트>
@@ -2025,6 +2044,7 @@ models_discover() { # <에이전트>
     codex)
       md_h="${CODEX_HOME:-$HOME/.codex}"
       [ -f "$md_h/models_cache.json" ] || return 1
+      codex_cache_stale >/dev/null && return 1
       # config.toml 의 맨 위(첫 [구역] 앞) model = "..." 이 codex 의 기본입니다.
       md_d=$(sed -n '/^[[:space:]]*\[/q; s/^[[:space:]]*model[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$md_h/config.toml" 2>/dev/null | head -1)
       md_o=$(LC_ALL=C grep -o '"slug"[[:space:]]*:[[:space:]]*"[^"]*"' "$md_h/models_cache.json" \
@@ -2147,6 +2167,7 @@ cmd_models() {
   if [ $# -eq 1 ] && [ "$mo_ref" -eq 0 ]; then
     if ! models_list "$1" 2>/dev/null; then
       models_refresh "$1" 2>/dev/null && models_list "$1" && return 0
+      if [ "$1" = codex ] && mo_st=$(codex_cache_stale); then warn "codex 의 모델 목록을 모릅니다: $(codex_stale_note "$mo_st")"; return 1; fi
       warn "$1 의 모델 목록을 모릅니다: $( [ "$1" = claude ] && printf '목록 명령이 없음' || { command -v "$1" >/dev/null 2>&1 && printf '조회 실패' || printf '설치 안 됨'; } )"
       return 1
     fi
@@ -2159,6 +2180,11 @@ cmd_models() {
     [ "$mo_ref" -eq 1 ] && { models_refresh "$mo_a" || warn "  $mo_a: 목록을 새로 받지 못했습니다 (전 캐시를 그대로 둠)"; }
     if ! mo_l=$(models_list "$mo_a"); then
       # 처음이면 한 번 물어봅니다
+      if [ "$mo_a" = codex ] && mo_st=$(codex_cache_stale); then
+        say "$(padw 10 codex)$(padw 6 -)$(padw 20 -)$(codex_stale_note "$mo_st")"
+        say "            정한 기본 모델은 그대로 붙입니다 (목록을 모를 때처럼)"
+        continue
+      fi
       models_refresh "$mo_a" && mo_l=$(models_list "$mo_a") || { say "$(padw 10 "$mo_a")$(padw 6 -)$(padw 20 -)목록을 받지 못함"; continue; }
     fi
     mo_n=$(printf '%s\n' "$mo_l" | grep -c .) || :   # 빈 목록이면 grep -c 가 0 을 내며 1 로 끝남

@@ -1853,6 +1853,25 @@ has "kiro-cli: 뺀 줄 전체를 알림" "$out" "기본 옵션 '--model gone-mod
 check "meta 에 뺀 줄" "--model gone-model" "$(sed -n 's/^default_model_dropped=//p' "$AW_HOME/workers/md-kiro/meta")"
 has "claude: 목록을 모르면 그대로" "$(awm result md-claude)" "whatever-name"
 has "codex: models_cache.json 의 모델이면 그대로" "$(awm result md-codex)" "gpt-6-luna"
+# codex 의 목록은 그 파일을 받은 codex 의 버전(client_version)에 맞춘 것입니다. 옛 codex(계속 떠 있는 app-server 등)가
+# 받아 쓴 목록이면 새 판에서 되는 모델이 빠져 있어서 믿지 않고, 정한 기본을 그대로 붙입니다 (실측: 0.172.0 을 깔았는데
+# 0.159.0 의 목록이라 gpt-6.2-sol 이 없었음, 다른 세션의 알림).
+MC="$MF/codex-stale"; MCB="$MF/bin-stale"; mkdir -p "$MC" "$MCB"
+printf '#!/bin/sh\n[ "$1" = --version ] && { echo "codex-cli 0.172.0"; exit 0; }\nprintf "%%s\\n" "$0" "$@"\n' > "$MCB/codex"; chmod +x "$MCB/codex"
+printf '{"fetched_at":"2026-11-25T03:04:01Z","etag":"W/\\"x\\"","client_version":"0.159.0","models":[{"slug":"gpt-6.1-sol","visibility":"list"}]}\n' > "$MC/models_cache.json"
+printf 'codex --model gpt-6.2-sol\n' > "$MF/defaults-stale"
+aws_() { env PATH="$MCB:$MB:/usr/bin:/bin" CODEX_HOME="$MC" AW_DEFAULTS="$MF/defaults-stale" "$AW" "$@"; }
+aws_ run -n md-stale -- codex exec 작업 >/dev/null 2>&1; aws_ wait md-stale --timeout 10 >/dev/null 2>&1
+has "낡은 codex 목록(다른 판이 받은 것)이면 정한 기본을 빼지 않음" "$(aws_ result md-stale)" "gpt-6.2-sol"
+out=$(aws_ models 2>&1)
+has "aw models 가 낡은 목록이라고 알림" "$out" "설치된 codex(0.172.0)와 다른 판(0.159.0)이 받아서 믿지 않음"
+out=$(aws_ models codex 2>&1); rc=$?
+check "aw models codex: 낡은 목록이면 모른다고 (코드 1)" 1 "$rc"
+has "aw models codex: 이유" "$out" "codex 를 한 번 돌리면 새로 받고"
+# 같은 판이 받은 목록이면 전처럼 믿고, 목록에 없는 모델 줄은 뺍니다.
+printf '{"client_version":"0.172.0","models":[{"slug":"gpt-6.1-sol","visibility":"list"}]}\n' > "$MC/models_cache.json"
+aws_ run -n md-fresh -- codex exec 작업 >/dev/null 2>&1; aws_ wait md-fresh --timeout 10 >/dev/null 2>&1
+hasnt "같은 판의 목록에 없는 모델 줄은 전처럼 뺌" "$(aws_ result md-fresh)" "gpt-6.2-sol"
 
 # 캐시에 없는 모델은 한 번 새로 물어본 뒤 정함 (목록이 바뀌었을 수 있음)
 printf 'kiro-cli --model claude-new-6\n' > "$MF/defaults"
